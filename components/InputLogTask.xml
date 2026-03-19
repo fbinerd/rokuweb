@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="InputLogTask" extends="Task">
+  <interface>
+    <field id="bridgeHost" type="string" />
+    <field id="keyName" type="string" />
+    <field id="fullscreen" type="boolean" />
+    <field id="selectedIndex" type="integer" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/InputLogTask.brs" />
+</component>

@@ -6,6 +6,8 @@
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
     <BridgeRequestTask id="bridgeRequestTask" />
+    <InputLogTask id="inputLogTask" />
+    <ControlTask id="controlTask" />
     <Rectangle
       id="background"
       width="1280"

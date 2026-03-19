@@ -15,6 +15,8 @@ sub init()
     m.fullscreenPoster = m.top.findNode("fullscreenPoster")
     m.cursorMarker = m.top.findNode("cursorMarker")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
+    m.inputLogTask = m.top.findNode("inputLogTask")
+    m.controlTask = m.top.findNode("controlTask")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -64,6 +66,8 @@ function onKeyEvent(key as string, press as boolean) as boolean
     if not press
         return false
     end if
+
+    reportInputKey(key)
 
     if m.isFullscreen
         if key = "back" or key = "Back"
@@ -129,6 +133,18 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
     return false
 end function
+
+sub reportInputKey(key as string)
+    if m.inputLogTask = invalid
+        return
+    end if
+
+    m.inputLogTask.bridgeHost = m.bridgeHost
+    m.inputLogTask.keyName = key
+    m.inputLogTask.fullscreen = m.isFullscreen
+    m.inputLogTask.selectedIndex = m.selectedIndex
+    m.inputLogTask.control = "RUN"
+end sub
 
 sub loadWindows()
     m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
@@ -281,6 +297,7 @@ sub showFullscreen()
     m.fullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
     m.cursorMarker.visible = true
     updateCursorMarker()
+    m.top.setFocus(true)
 end sub
 
 sub hideFullscreen()
@@ -336,9 +353,16 @@ sub sendRemoteCommand(command as string)
         return
     end if
 
-    transfer = CreateObject("roUrlTransfer")
-    transfer.SetUrl("http://" + m.bridgeHost + "/api/control?windowId=" + entry.id + "&command=" + command)
-    ignored = transfer.GetToString()
+    if m.controlTask = invalid
+        return
+    end if
+
+    m.controlTask.bridgeHost = m.bridgeHost
+    m.controlTask.windowId = entry.id
+    m.controlTask.command = command
+    m.controlTask.cursorX = m.cursorX
+    m.controlTask.cursorY = m.cursorY
+    m.controlTask.control = "RUN"
 end sub
 
 sub sendPointerCommand(command as string)
@@ -351,9 +375,16 @@ sub sendPointerCommand(command as string)
         return
     end if
 
-    transfer = CreateObject("roUrlTransfer")
-    transfer.SetUrl("http://" + m.bridgeHost + "/api/control?windowId=" + entry.id + "&command=" + command + "&x=" + m.cursorX.ToStr() + "&y=" + m.cursorY.ToStr())
-    ignored = transfer.GetToString()
+    if m.controlTask = invalid
+        return
+    end if
+
+    m.controlTask.bridgeHost = m.bridgeHost
+    m.controlTask.windowId = entry.id
+    m.controlTask.command = command
+    m.controlTask.cursorX = m.cursorX
+    m.controlTask.cursorY = m.cursorY
+    m.controlTask.control = "RUN"
 end sub
 
 sub refreshFullscreenPreview()

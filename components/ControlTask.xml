@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ControlTask" extends="Task">
+  <interface>
+    <field id="bridgeHost" type="string" />
+    <field id="windowId" type="string" />
+    <field id="command" type="string" />
+    <field id="cursorX" type="integer" />
+    <field id="cursorY" type="integer" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ControlTask.brs" />
+</component>
