@@ -12,7 +12,10 @@ sub init()
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
-    m.fullscreenPoster = m.top.findNode("fullscreenPoster")
+    m.fullscreenPosterA = m.top.findNode("fullscreenPosterA")
+    m.fullscreenPosterB = m.top.findNode("fullscreenPosterB")
+    m.activeFullscreenPoster = m.fullscreenPosterA
+    m.bufferFullscreenPoster = m.fullscreenPosterB
     m.cursorMarker = m.top.findNode("cursorMarker")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
@@ -57,6 +60,8 @@ sub init()
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
+    m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
+    m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.top.setFocus(true)
 
     m.statusLabel.text = "Canal iniciado"
@@ -79,6 +84,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if key = "OK"
             sendPointerCommand("click")
+            scheduleFullscreenRefresh()
             return true
         end if
 
@@ -293,8 +299,12 @@ sub showFullscreen()
     m.titleLabel.visible = false
     m.statusLabel.visible = false
     m.subtitleLabel.visible = false
-    m.fullscreenPoster.visible = true
-    m.fullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+    m.activeFullscreenPoster = m.fullscreenPosterA
+    m.bufferFullscreenPoster = m.fullscreenPosterB
+    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+    m.activeFullscreenPoster.visible = true
+    m.bufferFullscreenPoster.visible = false
+    m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
     updateCursorMarker()
     m.top.setFocus(true)
@@ -302,7 +312,8 @@ end sub
 
 sub hideFullscreen()
     m.isFullscreen = false
-    m.fullscreenPoster.visible = false
+    m.fullscreenPosterA.visible = false
+    m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
     m.titleLabel.visible = true
     m.statusLabel.visible = true
@@ -394,7 +405,7 @@ sub refreshFullscreenPreview()
 
     entry = m.windowEntries[m.selectedIndex]
     if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
-        m.fullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.bufferFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
     end if
 end sub
 
@@ -410,6 +421,28 @@ end sub
 
 sub onPreviewRefreshTimerFire()
     refreshFullscreenPreview()
+end sub
+
+sub onBufferPosterLoadStatusChanged()
+    if not m.isFullscreen
+        return
+    end if
+
+    if m.bufferFullscreenPoster = invalid or m.activeFullscreenPoster = invalid
+        return
+    end if
+
+    if m.bufferFullscreenPoster.loadStatus <> "ready"
+        return
+    end if
+
+    m.bufferFullscreenPoster.visible = true
+    m.activeFullscreenPoster.visible = false
+
+    previousActive = m.activeFullscreenPoster
+    m.activeFullscreenPoster = m.bufferFullscreenPoster
+    m.bufferFullscreenPoster = previousActive
+    m.bufferFullscreenPoster.visible = false
 end sub
 
 function getString(value as dynamic, fallback as string) as string

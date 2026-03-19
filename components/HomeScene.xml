@@ -8,6 +8,7 @@
     <BridgeRequestTask id="bridgeRequestTask" />
     <InputLogTask id="inputLogTask" />
     <ControlTask id="controlTask" />
+    <Timer id="previewRefreshTimer" repeat="false" duration="0.2" />
     <Rectangle
       id="background"
       width="1280"
@@ -70,7 +71,14 @@
     </Group>
 
     <Poster
-      id="fullscreenPoster"
+      id="fullscreenPosterA"
+      width="1280"
+      height="720"
+      translation="[0, 0]"
+      visible="false"
+      loadDisplayMode="zoomToFill" />
+    <Poster
+      id="fullscreenPosterB"
       width="1280"
       height="720"
       translation="[0, 0]"
