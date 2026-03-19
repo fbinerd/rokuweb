@@ -1,5 +1,5 @@
 sub init()
-    m.bridgeHost = "10.0.0.83:8090"
+    m.bridgeHost = "10.1.0.10:8090"
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
