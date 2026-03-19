@@ -5,6 +5,10 @@
   </interface>
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
+    <Timer
+      id="refreshTimer"
+      duration="5"
+      repeat="true" />
     <Rectangle
       id="background"
       width="1280"
@@ -25,7 +29,7 @@
       translation="[50, 92]"
       color="0x9CC7D8FF"
       font="font:MediumSystemFont"
-      text="Conectando ao app .NET local" />
+      text="Atualizacao automatica a cada 5 segundos" />
     <Label
       id="statusLabel"
       width="1180"

@@ -1,31 +1,82 @@
-# Hello Roku
+# Roku Web Viewer
 
-Base minima de aplicativo Roku usando BrightScript + SceneGraph.
+Aplicativo Roku para consumir dados e streams publicados pelo `superWebRTCStream`.
 
-## Estrutura
+## Estado Atual
 
-- `manifest`
-- `source/main.brs`
-- `components/HomeScene.xml`
-- `components/HomeScene.brs`
-- `package.ps1`
+Hoje o app:
 
-## Empacotar em zip
+- consulta `http://10.1.0.10:8090/api/windows`
+- mostra uma lista textual das janelas publicadas
 
-No PowerShell:
+Hoje o app ainda nao:
 
-```powershell
-.\package.ps1
+- reproduz video
+- consome HLS
+- abre `emei.lovable.app` diretamente
+
+## Objetivo De Integracao
+
+O fluxo desejado e:
+
+1. o `superWebRTCStream` abre `https://emei.lovable.app` no CEF
+2. o `superWebRTCStream` captura essa janela
+3. o `superWebRTCStream` publica um stream HLS
+4. o `rokuweb` toca esse stream
+
+## Endpoint Esperado
+
+O app Roku depende de um servidor HTTP no Windows com este contrato:
+
+`GET http://10.1.0.10:8090/api/windows`
+
+Resposta esperada:
+
+```json
+{
+  "windowCount": 1,
+  "windows": [
+    {
+      "id": "emei-main",
+      "title": "EMEI",
+      "state": "Streaming",
+      "initialUrl": "https://emei.lovable.app",
+      "streamUrl": "http://10.1.0.10:8090/streams/emei-main/index.m3u8"
+    }
+  ]
+}
 ```
 
-Isso gera o arquivo `hello-roku.zip` com caminhos relativos compativeis com o sideload da Roku.
+## Empacotar
 
-## Instalar na TV Roku
+Para gerar o pacote `.zip`, basta dar dois cliques em:
 
-1. Ative o Developer Mode na Roku TV/dispositivo.
-2. Descubra o IP da TV na rede local.
-3. No navegador, abra `http://IP_DA_TV`.
-4. Faça login com a senha de desenvolvedor configurada.
-5. Envie o arquivo `hello-roku.zip`.
+- `Abrir-App.cmd`
 
-Ao abrir, o app mostra a mensagem `Hello`.
+Ou no PowerShell:
+
+```powershell
+.\Abrir-App.ps1
+```
+
+Isso gera `hello-roku.zip`.
+
+## Como testar na TV
+
+1. Abra o `superWebRTCStream` no Windows.
+2. Crie uma janela com `https://emei.lovable.app`.
+3. Confirme que o servidor Windows responde em `http://10.1.0.10:8090/api/windows`.
+4. Gere o pacote com `Abrir-App.cmd`.
+5. Envie `hello-roku.zip` para a Roku em modo desenvolvedor.
+6. Abra o canal na TV.
+
+Resultado esperado:
+
+- o app Roku conecta em `10.1.0.10:8090`
+- a TV mostra a lista de janelas publicadas pelo `superWebRTCStream`
+- o item da `emei.lovable.app` aparece na lista
+
+Observacao:
+
+- nesta etapa o teste e de integracao e descoberta
+- a reproducao de video HLS ainda nao foi implementada

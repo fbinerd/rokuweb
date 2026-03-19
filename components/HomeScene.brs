@@ -2,13 +2,33 @@ sub init()
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
+    m.refreshTimer = m.top.findNode("refreshTimer")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
+    m.refreshTimer.observeField("fire", "onRefreshTimerFired")
+    m.refreshTimer.control = "start"
 
     loadWindows()
 end sub
 
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press
+        return false
+    end if
+
+    if key = "OK" or key = "Play"
+        loadWindows()
+        return true
+    end if
+
+    return false
+end function
+
+sub onRefreshTimerFired()
+    loadWindows()
+end sub
+
 sub loadWindows()
-    bridgeHost = "10.0.0.83:8090"
+    bridgeHost = "10.1.0.10:8090"
     url = "http://" + bridgeHost + "/api/windows"
 
     transfer = CreateObject("roUrlTransfer")
@@ -37,13 +57,23 @@ sub loadWindows()
         state = getString(window.state, "Desconhecido")
         initialUrl = getString(window.initialUrl, "")
         publishedUrl = getString(window.publishedWebRtcUrl, "")
+        streamUrl = getString(window.streamUrl, "")
+        isPublishing = getBoolean(window.isPublishing)
 
         line = title + " | " + state
         if initialUrl <> ""
             line = line + " | " + initialUrl
         end if
         if publishedUrl <> ""
-            line = line + " | LinkRTC: " + publishedUrl
+            line = line + " | Publicado: " + publishedUrl
+        end if
+        if streamUrl <> "" and streamUrl <> publishedUrl
+            line = line + " | Stream: " + streamUrl
+        end if
+        if isPublishing
+            line = line + " | Publicacao ligada"
+        else
+            line = line + " | Publicacao desligada"
         end if
 
         items.Push(line)
@@ -56,7 +86,7 @@ sub loadWindows()
     end if
 
     m.statusLabel.text = "Bridge conectado em " + bridgeHost
-    m.subtitleLabel.text = "Janelas detectadas: " + json.windowCount.ToStr()
+    m.subtitleLabel.text = "Janelas detectadas: " + json.windowCount.ToStr() + " | OK para atualizar"
     setListMessage(items)
 end sub
 
@@ -81,4 +111,16 @@ function getString(value as dynamic, fallback as string) as string
     end if
 
     return fallback
+end function
+
+function getBoolean(value as dynamic) as boolean
+    if value = invalid
+        return false
+    end if
+
+    if type(value) = "roBoolean" or type(value) = "Boolean"
+        return value
+    end if
+
+    return false
 end function
