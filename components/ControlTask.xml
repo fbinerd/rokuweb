@@ -6,6 +6,10 @@
     <field id="command" type="string" />
     <field id="cursorX" type="integer" />
     <field id="cursorY" type="integer" />
+    <field id="textValue" type="string" />
+    <field id="responseCode" type="integer" value="0" />
+    <field id="responseBody" type="string" value="" />
+    <field id="completedToken" type="integer" value="0" />
   </interface>
   <script type="text/brightscript" uri="pkg:/components/ControlTask.brs" />
 </component>

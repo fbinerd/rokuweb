@@ -6,8 +6,12 @@ sub execute()
     bridgeHost = m.top.bridgeHost
     windowId = m.top.windowId
     command = m.top.command
+    textValue = m.top.textValue
 
     if bridgeHost = invalid or bridgeHost = "" or windowId = invalid or windowId = "" or command = invalid or command = ""
+        m.top.responseCode = 0
+        m.top.responseBody = ""
+        m.top.completedToken = m.top.completedToken + 1
         return
     end if
 
@@ -20,9 +24,20 @@ sub execute()
         url = url + "&y=" + m.top.cursorY.ToStr()
     end if
 
+    if command = "set-text"
+        url = url + "&text=" + urlEncode(textValue)
+    end if
+
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)
-    ignored = transfer.GetToString()
+    body = transfer.GetToString()
+    m.top.responseBody = body
+    if body = invalid or body = ""
+        m.top.responseCode = 0
+    else
+        m.top.responseCode = 200
+    end if
+    m.top.completedToken = m.top.completedToken + 1
 end sub
 
 function urlEncode(value as string) as string

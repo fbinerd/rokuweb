@@ -8,6 +8,8 @@
     <BridgeRequestTask id="bridgeRequestTask" />
     <InputLogTask id="inputLogTask" />
     <ControlTask id="controlTask" />
+    <ControlTask id="clickControlTask" />
+    <ControlTask id="textControlTask" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.2" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Rectangle

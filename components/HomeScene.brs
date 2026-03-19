@@ -6,6 +6,8 @@ sub init()
     m.pageSize = 6
     m.gridColumns = 3
     m.isFullscreen = false
+    m.isKeyboardOpen = false
+    m.isClosingKeyboard = false
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
@@ -21,6 +23,8 @@ sub init()
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
+    m.clickControlTask = m.top.findNode("clickControlTask")
+    m.textControlTask = m.top.findNode("textControlTask")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
@@ -65,6 +69,8 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
+    m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
+    m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
 
     m.statusLabel.text = "Canal iniciado"
@@ -73,6 +79,10 @@ sub init()
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
+    if m.isKeyboardOpen
+        return false
+    end if
+
     if m.isFullscreen
         if not press
             if key = m.heldDirectionKey
@@ -91,8 +101,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
 
         if key = "OK"
-            sendPointerCommand("click")
-            scheduleFullscreenRefresh()
+            sendClickCommand()
             return true
         end if
 
@@ -419,6 +428,7 @@ sub sendRemoteCommand(command as string)
     m.controlTask.command = command
     m.controlTask.cursorX = m.cursorX
     m.controlTask.cursorY = m.cursorY
+    m.controlTask.textValue = ""
     m.controlTask.control = "RUN"
 end sub
 
@@ -441,7 +451,50 @@ sub sendPointerCommand(command as string)
     m.controlTask.command = command
     m.controlTask.cursorX = m.cursorX
     m.controlTask.cursorY = m.cursorY
+    m.controlTask.textValue = ""
     m.controlTask.control = "RUN"
+end sub
+
+sub sendClickCommand()
+    if m.windowEntries.Count() = 0 or m.clickControlTask = invalid
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.id = invalid or entry.id = ""
+        return
+    end if
+
+    m.clickControlTask.bridgeHost = m.bridgeHost
+    m.clickControlTask.windowId = entry.id
+    m.clickControlTask.command = "click"
+    m.clickControlTask.cursorX = m.cursorX
+    m.clickControlTask.cursorY = m.cursorY
+    m.clickControlTask.textValue = ""
+    m.clickControlTask.responseCode = 0
+    m.clickControlTask.responseBody = ""
+    m.clickControlTask.control = "RUN"
+end sub
+
+sub sendTextCommand(textValue as string)
+    if m.windowEntries.Count() = 0 or m.textControlTask = invalid
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.id = invalid or entry.id = ""
+        return
+    end if
+
+    m.textControlTask.bridgeHost = m.bridgeHost
+    m.textControlTask.windowId = entry.id
+    m.textControlTask.command = "set-text"
+    m.textControlTask.cursorX = m.cursorX
+    m.textControlTask.cursorY = m.cursorY
+    m.textControlTask.textValue = textValue
+    m.textControlTask.responseCode = 0
+    m.textControlTask.responseBody = ""
+    m.textControlTask.control = "RUN"
 end sub
 
 sub refreshFullscreenPreview()
@@ -467,6 +520,98 @@ end sub
 
 sub onPreviewRefreshTimerFire()
     refreshFullscreenPreview()
+end sub
+
+sub onClickControlTaskCompleted()
+    if m.clickControlTask = invalid
+        return
+    end if
+
+    if m.clickControlTask.responseBody = invalid or m.clickControlTask.responseBody = ""
+        scheduleFullscreenRefresh()
+        return
+    end if
+
+    result = ParseJson(m.clickControlTask.responseBody)
+    scheduleFullscreenRefresh()
+
+    if result = invalid
+        return
+    end if
+
+    if result.editable = true
+        openKeyboardDialog(getString(result.value, ""), result.multiline = true)
+    end if
+end sub
+
+sub onTextControlTaskCompleted()
+    closeKeyboardDialog()
+    scheduleFullscreenRefresh()
+end sub
+
+sub openKeyboardDialog(initialValue as string, multiline as boolean)
+    if m.isKeyboardOpen
+        return
+    end if
+
+    keyboard = CreateObject("roSGNode", "KeyboardDialog")
+    if keyboard = invalid
+        m.statusLabel.text = "Teclado virtual indisponivel nesta Roku"
+        return
+    end if
+
+    keyboard.title = "Digite no campo"
+    keyboard.text = initialValue
+    keyboard.buttons = ["Enviar", "Cancelar"]
+    keyboard.observeField("buttonSelected", "onKeyboardDialogButtonSelected")
+    keyboard.observeField("wasClosed", "onKeyboardDialogWasClosed")
+
+    m.keyboardDialog = keyboard
+    m.isKeyboardOpen = true
+    m.top.dialog = keyboard
+end sub
+
+sub closeKeyboardDialog()
+    if m.isClosingKeyboard
+        return
+    end if
+
+    m.isClosingKeyboard = true
+
+    if m.keyboardDialog <> invalid
+        m.keyboardDialog.unobserveField("buttonSelected")
+        m.keyboardDialog.unobserveField("wasClosed")
+    end if
+
+    m.keyboardDialog = invalid
+    m.isKeyboardOpen = false
+    m.top.dialog = invalid
+    if m.isFullscreen
+        m.top.setFocus(true)
+    end if
+    m.isClosingKeyboard = false
+end sub
+
+sub onKeyboardDialogButtonSelected()
+    if m.keyboardDialog = invalid
+        return
+    end if
+
+    selectedButton = m.keyboardDialog.buttonSelected
+    enteredText = ""
+    if m.keyboardDialog.text <> invalid
+        enteredText = m.keyboardDialog.text
+    end if
+
+    closeKeyboardDialog()
+
+    if selectedButton = 0
+        sendTextCommand(enteredText)
+    end if
+end sub
+
+sub onKeyboardDialogWasClosed()
+    closeKeyboardDialog()
 end sub
 
 sub onBufferPosterLoadStatusChanged()
