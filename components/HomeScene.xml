@@ -39,11 +39,17 @@
       color="0xEAB308FF"
       font="font:SmallSystemFont"
       text="Carregando..." />
+    <Poster
+      id="previewPoster"
+      width="640"
+      height="360"
+      translation="[50, 190]"
+      loadDisplayMode="scaleToFit" />
     <LabelList
       id="windowList"
-      translation="[50, 190]"
-      itemSize="[1180, 48]"
-      numRows="9"
+      translation="[710, 190]"
+      itemSize="[520, 48]"
+      numRows="7"
       drawFocusFeedback="true" />
   </children>
 </component>

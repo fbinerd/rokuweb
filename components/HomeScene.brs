@@ -3,6 +3,7 @@ sub init()
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
+    m.previewPoster = m.top.findNode("previewPoster")
     m.refreshTimer = m.top.findNode("refreshTimer")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
@@ -56,6 +57,7 @@ sub applyBridgeResponse()
     if responseCode <> 200 or responseBody = invalid or responseBody = ""
         m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
         m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
+        m.previewPoster.uri = ""
         setListMessage(["Nao foi possivel carregar as janelas do bridge HTTP.", "Pressione OK para tentar novamente."])
         return
     end if
@@ -63,17 +65,20 @@ sub applyBridgeResponse()
     json = ParseJson(responseBody)
     if json = invalid or json.windows = invalid
         m.statusLabel.text = "Resposta invalida do bridge HTTP"
+        m.previewPoster.uri = ""
         setListMessage(["O endpoint /api/windows nao retornou um JSON esperado."])
         return
     end if
 
     items = []
+    m.previewPoster.uri = ""
     for each window in json.windows
         title = getString(window.title, "Janela sem titulo")
         state = getString(window.state, "Desconhecido")
         initialUrl = getString(window.initialUrl, "")
         publishedUrl = getString(window.publishedWebRtcUrl, "")
         streamUrl = getString(window.streamUrl, "")
+        thumbnailUrl = getString(window.thumbnailUrl, "")
         isPublishing = getBoolean(window.isPublishing)
 
         line = title + " | " + state
@@ -93,10 +98,15 @@ sub applyBridgeResponse()
         end if
 
         items.Push(line)
+
+        if thumbnailUrl <> "" and items.Count() = 1
+            m.previewPoster.uri = appendCacheBust(thumbnailUrl)
+        end if
     end for
 
     if items.Count() = 0
         m.statusLabel.text = "Bridge conectado, sem janelas disponiveis"
+        m.previewPoster.uri = ""
         setListMessage(["Nenhuma janela foi publicada no app .NET ainda."])
         return
     end if
@@ -139,4 +149,14 @@ function getBoolean(value as dynamic) as boolean
     end if
 
     return false
+end function
+
+function appendCacheBust(url as string) as string
+    separator = "?"
+    if Instr(1, url, "?") > 0
+        separator = "&"
+    end if
+
+    now = CreateObject("roDateTime")
+    return url + separator + "ts=" + now.AsSeconds().ToStr()
 end function
