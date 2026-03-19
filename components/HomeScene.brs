@@ -6,6 +6,7 @@ sub init()
     m.pageSize = 6
     m.gridColumns = 3
     m.isFullscreen = false
+    m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
 
@@ -21,6 +22,7 @@ sub init()
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
+    m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -60,6 +62,7 @@ sub init()
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
+    m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.top.setFocus(true)
@@ -70,13 +73,18 @@ sub init()
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
-    if not press
-        return false
-    end if
-
-    reportInputKey(key)
-
     if m.isFullscreen
+        if not press
+            if key = m.heldDirectionKey
+                stopHeldDirection()
+                return true
+            end if
+
+            return false
+        end if
+
+        reportInputKey(key)
+
         if key = "back" or key = "Back"
             hideFullscreen()
             return true
@@ -89,8 +97,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
 
         if key = "up" or key = "down" or key = "left" or key = "right"
-            moveCursor(key)
-            sendPointerCommand("move")
+            startHeldDirection(key)
             return true
         end if
 
@@ -102,6 +109,12 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         return false
     end if
+
+    if not press
+        return false
+    end if
+
+    reportInputKey(key)
 
     if key = "up"
         moveSelection(-m.gridColumns)
@@ -312,6 +325,7 @@ end sub
 
 sub hideFullscreen()
     m.isFullscreen = false
+    stopHeldDirection()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -348,6 +362,38 @@ sub moveCursor(command as string)
     end if
 
     updateCursorMarker()
+end sub
+
+sub startHeldDirection(key as string)
+    m.heldDirectionKey = key
+    moveCursor(key)
+    sendPointerCommand("move")
+
+    if m.cursorMoveTimer <> invalid
+        m.cursorMoveTimer.control = "stop"
+        m.cursorMoveTimer.control = "start"
+    end if
+end sub
+
+sub stopHeldDirection()
+    m.heldDirectionKey = ""
+    if m.cursorMoveTimer <> invalid
+        m.cursorMoveTimer.control = "stop"
+    end if
+end sub
+
+sub onCursorMoveTimerFire()
+    if not m.isFullscreen
+        stopHeldDirection()
+        return
+    end if
+
+    if m.heldDirectionKey = ""
+        return
+    end if
+
+    moveCursor(m.heldDirectionKey)
+    sendPointerCommand("move")
 end sub
 
 sub updateCursorMarker()
