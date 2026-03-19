@@ -1,10 +1,13 @@
 sub init()
+    m.bridgeHost = "10.0.0.83:8090"
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
     m.refreshTimer = m.top.findNode("refreshTimer")
+    m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
     m.refreshTimer.observeField("fire", "onRefreshTimerFired")
+    m.bridgeRequestTask.observeField("responseBody", "onBridgeResponseChanged")
     m.refreshTimer.control = "start"
 
     loadWindows()
@@ -28,19 +31,23 @@ sub onRefreshTimerFired()
 end sub
 
 sub loadWindows()
-    bridgeHost = "10.1.0.10:8090"
-    url = "http://" + bridgeHost + "/api/windows"
+    if m.bridgeRequestTask.control = "run"
+        return
+    end if
 
-    transfer = CreateObject("roUrlTransfer")
-    transfer.SetUrl(url)
+    m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
+    m.bridgeRequestTask.bridgeHost = m.bridgeHost
+    m.bridgeRequestTask.control = "run"
+end sub
 
-    responseBody = transfer.GetToString()
-    responseCode = transfer.GetResponseCode()
+sub onBridgeResponseChanged()
+    responseBody = m.bridgeRequestTask.responseBody
+    responseCode = m.bridgeRequestTask.responseCode
 
-    if responseCode <> 200 or responseBody = invalid
-        m.statusLabel.text = "Falha ao conectar em " + bridgeHost
+    if responseCode <> 200 or responseBody = invalid or responseBody = ""
+        m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
         m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
-        setListMessage(["Nao foi possivel carregar as janelas do bridge HTTP."])
+        setListMessage(["Nao foi possivel carregar as janelas do bridge HTTP.", "Pressione OK para tentar novamente."])
         return
     end if
 
@@ -85,7 +92,7 @@ sub loadWindows()
         return
     end if
 
-    m.statusLabel.text = "Bridge conectado em " + bridgeHost
+    m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
     m.subtitleLabel.text = "Janelas detectadas: " + json.windowCount.ToStr() + " | OK para atualizar"
     setListMessage(items)
 end sub

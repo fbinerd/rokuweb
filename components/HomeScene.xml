@@ -5,6 +5,7 @@
   </interface>
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
+    <BridgeRequestTask id="bridgeRequestTask" />
     <Timer
       id="refreshTimer"
       duration="5"
@@ -29,7 +30,7 @@
       translation="[50, 92]"
       color="0x9CC7D8FF"
       font="font:MediumSystemFont"
-      text="Atualizacao automatica a cada 5 segundos" />
+      text="Atualizacao automatica a cada 5 segundos | OK para atualizar" />
     <Label
       id="statusLabel"
       width="1180"
