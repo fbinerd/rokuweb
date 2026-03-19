@@ -337,7 +337,7 @@ sub hideFullscreen()
 end sub
 
 sub moveCursor(command as string)
-    stepSize = 48
+    stepSize = 8
 
     if command = "up"
         m.cursorY = m.cursorY - stepSize
