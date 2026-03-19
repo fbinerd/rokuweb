@@ -397,7 +397,7 @@ sub onCursorMoveTimerFire()
 end sub
 
 sub updateCursorMarker()
-    m.cursorMarker.translation = [m.cursorX - 13, m.cursorY - 13]
+    m.cursorMarker.translation = [m.cursorX - 7, m.cursorY - 5]
 end sub
 
 sub sendRemoteCommand(command as string)

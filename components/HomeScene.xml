@@ -85,12 +85,12 @@
       translation="[0, 0]"
       visible="false"
       loadDisplayMode="zoomToFill" />
-    <Rectangle
+    <Poster
       id="cursorMarker"
-      width="26"
-      height="26"
-      translation="[627, 347]"
-      color="0xFFFFFFFF"
+      width="56"
+      height="56"
+      translation="[637, 358]"
+      uri="pkg:/components/cursor-pointer.png"
       visible="false" />
   </children>
 </component>
