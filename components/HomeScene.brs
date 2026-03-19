@@ -8,7 +8,7 @@ sub init()
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
     m.refreshTimer.observeField("fire", "onRefreshTimerFired")
-    m.bridgeRequestTask.observeField("state", "onBridgeTaskStateChanged")
+    m.bridgeRequestTask.observeField("completedToken", "onBridgeTaskCompleted")
     m.refreshTimer.control = "start"
 
     loadWindows()
@@ -38,12 +38,16 @@ sub loadWindows()
 
     m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
     m.subtitleLabel.text = "Aguarde a resposta do servidor"
+    m.bridgeRequestTask.responseCode = -1
+    m.bridgeRequestTask.responseBody = ""
+    m.bridgeRequestTask.errorMessage = ""
     m.bridgeRequestTask.bridgeHost = m.bridgeHost
     m.bridgeRequestTask.control = "run"
 end sub
 
-sub onBridgeTaskStateChanged()
-    if m.bridgeRequestTask.state <> "stop"
+sub onBridgeTaskCompleted()
+    completedToken = m.bridgeRequestTask.completedToken
+    if completedToken = invalid or completedToken = ""
         return
     end if
 

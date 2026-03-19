@@ -5,6 +5,7 @@
     <field id="responseBody" type="string" />
     <field id="responseCode" type="integer" />
     <field id="errorMessage" type="string" />
+    <field id="completedToken" type="string" />
   </interface>
   <script type="text/brightscript" uri="pkg:/components/BridgeRequestTask.brs" />
 </component>
