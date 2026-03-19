@@ -15,7 +15,7 @@
       id="titleLabel"
       width="1180"
       height="50"
-      translation="[50, 42]"
+      translation="[50, 32]"
       color="0xFFFFFFFF"
       font="font:LargeBoldSystemFont"
       text="Roku HTTP Bridge" />
@@ -23,29 +23,63 @@
       id="subtitleLabel"
       width="1180"
       height="34"
-      translation="[50, 92]"
+      translation="[50, 82]"
       color="0x9CC7D8FF"
       font="font:MediumSystemFont"
-      text="Atualizacao automatica a cada 5 segundos | OK para atualizar" />
+      text="Carregando paineis..." />
     <Label
       id="statusLabel"
       width="1180"
       height="30"
-      translation="[50, 136]"
+      translation="[50, 122]"
       color="0xEAB308FF"
       font="font:SmallSystemFont"
       text="Carregando..." />
+
+    <Group id="panel0" translation="[50, 170]" visible="false">
+      <Rectangle id="panelFrame0" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster0" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel0" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+    <Group id="panel1" translation="[460, 170]" visible="false">
+      <Rectangle id="panelFrame1" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster1" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel1" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+    <Group id="panel2" translation="[870, 170]" visible="false">
+      <Rectangle id="panelFrame2" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster2" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel2" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+    <Group id="panel3" translation="[50, 420]" visible="false">
+      <Rectangle id="panelFrame3" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster3" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel3" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+    <Group id="panel4" translation="[460, 420]" visible="false">
+      <Rectangle id="panelFrame4" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster4" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel4" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+    <Group id="panel5" translation="[870, 420]" visible="false">
+      <Rectangle id="panelFrame5" width="360" height="210" color="0x334155FF" />
+      <Poster id="panelPoster5" width="348" height="160" translation="[6, 6]" loadDisplayMode="scaleToFit" />
+      <Label id="panelLabel5" width="340" height="36" translation="[10, 172]" color="0xFFFFFFFF" font="font:SmallSystemFont" />
+    </Group>
+
     <Poster
-      id="previewPoster"
-      width="640"
-      height="360"
-      translation="[50, 190]"
-      loadDisplayMode="scaleToFit" />
-    <LabelList
-      id="windowList"
-      translation="[710, 190]"
-      itemSize="[520, 48]"
-      numRows="7"
-      drawFocusFeedback="true" />
+      id="fullscreenPoster"
+      width="1280"
+      height="720"
+      translation="[0, 0]"
+      visible="false"
+      loadDisplayMode="zoomToFill" />
+    <Rectangle
+      id="cursorMarker"
+      width="26"
+      height="26"
+      translation="[627, 347]"
+      color="0xFFFFFFFF"
+      visible="false" />
   </children>
 </component>
