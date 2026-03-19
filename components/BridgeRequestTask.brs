@@ -15,6 +15,7 @@ sub execute()
     end if
 
     url = "http://" + bridgeHost + "/api/windows"
+    registerDisplay(bridgeHost)
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)
 
@@ -35,3 +36,40 @@ sub execute()
     m.top.responseCode = responseCode
     m.top.completedToken = m.requestCount.ToStr()
 end sub
+
+sub registerDisplay(bridgeHost as string)
+    deviceInfo = CreateObject("roDeviceInfo")
+    deviceModel = deviceInfo.GetModel()
+    firmwareVersion = deviceInfo.GetVersion()
+    screenWidth = "1280"
+    screenHeight = "720"
+    deviceId = "roku-" + deviceModel + "-" + firmwareVersion
+
+    registerUrl = "http://" + bridgeHost + "/api/register-display"
+    registerUrl = registerUrl + "?deviceId=" + urlEncode(deviceId)
+    registerUrl = registerUrl + "&deviceType=roku"
+    registerUrl = registerUrl + "&deviceModel=" + urlEncode(deviceModel)
+    registerUrl = registerUrl + "&firmwareVersion=" + urlEncode(firmwareVersion)
+    registerUrl = registerUrl + "&screenWidth=" + screenWidth
+    registerUrl = registerUrl + "&screenHeight=" + screenHeight
+
+    transfer = CreateObject("roUrlTransfer")
+    transfer.SetUrl(registerUrl)
+    ignored = transfer.GetToString()
+end sub
+
+function urlEncode(value as string) as string
+    result = ""
+    for i = 1 to Len(value)
+        char = Mid(value, i, 1)
+        code = Asc(char)
+        if (code >= 48 and code <= 57) or (code >= 65 and code <= 90) or (code >= 97 and code <= 122) or char = "-" or char = "_" or char = "."
+            result = result + char
+        else
+            hex = Right("0" + Hex(code), 2)
+            result = result + "%" + hex
+        end if
+    end for
+
+    return result
+end function

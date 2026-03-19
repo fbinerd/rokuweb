@@ -1,5 +1,9 @@
 sub init()
     m.bridgeHost = "10.1.0.10:8090"
+    m.windowEntries = []
+    m.selectedIndex = 0
+    m.isFullscreen = false
+    m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
@@ -7,7 +11,9 @@ sub init()
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.windowList.observeField("itemFocused", "onWindowListItemFocused")
     m.top.setFocus(true)
+    m.previewPoster.loadDisplayMode = "scaleToFit"
 
     m.statusLabel.text = "Canal iniciado"
     m.subtitleLabel.text = "Pressione OK para consultar o servidor"
@@ -19,7 +25,26 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return false
     end if
 
+    if m.isFullscreen
+        if key = "back" or key = "Back"
+            hideFullscreen()
+            return true
+        end if
+
+        if key = "OK"
+            hideFullscreen()
+            return true
+        end if
+
+        return false
+    end if
+
     if key = "OK" or key = "Play"
+        if key = "OK" and m.windowEntries.Count() > 0
+            showFullscreen()
+            return true
+        end if
+
         loadWindows()
         return true
     end if
@@ -66,6 +91,8 @@ sub applyBridgeResponse()
     end if
 
     items = []
+    m.windowEntries = []
+    m.selectedIndex = 0
     m.previewPoster.uri = ""
     for each window in json.windows
         title = getString(window.title, "Janela sem titulo")
@@ -93,6 +120,11 @@ sub applyBridgeResponse()
         end if
 
         items.Push(line)
+        m.windowEntries.Push({
+            title: title
+            thumbnailUrl: thumbnailUrl
+            initialUrl: initialUrl
+        })
 
         if thumbnailUrl <> "" and items.Count() = 1
             m.previewPoster.uri = appendCacheBust(thumbnailUrl)
@@ -109,6 +141,69 @@ sub applyBridgeResponse()
     m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
     m.subtitleLabel.text = "Janelas detectadas: " + json.windowCount.ToStr() + " | OK para atualizar"
     setListMessage(items)
+    m.windowList.setFocus(true)
+end sub
+
+sub onWindowListItemFocused()
+    focusedIndex = m.windowList.itemFocused
+    if focusedIndex = invalid
+        return
+    end if
+
+    if focusedIndex < 0 or focusedIndex >= m.windowEntries.Count()
+        return
+    end if
+
+    m.selectedIndex = focusedIndex
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
+        m.previewPoster.uri = appendCacheBust(entry.thumbnailUrl)
+    end if
+end sub
+
+sub showFullscreen()
+    if m.windowEntries.Count() = 0
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.thumbnailUrl = invalid or entry.thumbnailUrl = ""
+        m.statusLabel.text = "Preview indisponivel para a janela selecionada"
+        return
+    end if
+
+    m.isFullscreen = true
+    m.previewPoster.translation = [0, 0]
+    m.previewPoster.width = 1280
+    m.previewPoster.height = 720
+    m.previewPoster.loadDisplayMode = "zoomToFill"
+    m.windowList.visible = false
+    m.titleLabel.visible = false
+    m.statusLabel.visible = false
+    m.subtitleLabel.visible = false
+    m.previewPoster.uri = appendCacheBust(entry.thumbnailUrl)
+end sub
+
+sub hideFullscreen()
+    m.isFullscreen = false
+    m.previewPoster.translation = [50, 190]
+    m.previewPoster.width = 640
+    m.previewPoster.height = 360
+    m.previewPoster.loadDisplayMode = "scaleToFit"
+    m.windowList.visible = true
+    m.titleLabel.visible = true
+    m.statusLabel.visible = true
+    m.subtitleLabel.visible = true
+
+    if m.windowEntries.Count() > 0
+        entry = m.windowEntries[m.selectedIndex]
+        m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
+        m.subtitleLabel.text = "Selecionado: " + entry.title + " | OK para tela cheia"
+        if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
+            m.previewPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        end if
+        m.windowList.setFocus(true)
+    end if
 end sub
 
 sub setListMessage(items as object)
