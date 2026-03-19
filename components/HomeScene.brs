@@ -4,14 +4,14 @@ sub init()
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.windowList = m.top.findNode("windowList")
     m.previewPoster = m.top.findNode("previewPoster")
-    m.refreshTimer = m.top.findNode("refreshTimer")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.windowList.content = CreateObject("roSGNode", "ContentNode")
-    m.refreshTimer.observeField("fire", "onRefreshTimerFired")
-    m.bridgeRequestTask.observeField("completedToken", "onBridgeTaskCompleted")
-    m.refreshTimer.control = "start"
+    m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.top.setFocus(true)
 
-    loadWindows()
+    m.statusLabel.text = "Canal iniciado"
+    m.subtitleLabel.text = "Pressione OK para consultar o servidor"
+    setListMessage(["Canal carregado com sucesso.", "Pressione OK no controle para consultar o bridge."])
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
@@ -27,27 +27,18 @@ function onKeyEvent(key as string, press as boolean) as boolean
     return false
 end function
 
-sub onRefreshTimerFired()
-    loadWindows()
-end sub
-
 sub loadWindows()
-    if m.bridgeRequestTask.control = "run"
-        return
-    end if
-
     m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
     m.subtitleLabel.text = "Aguarde a resposta do servidor"
     m.bridgeRequestTask.responseCode = -1
     m.bridgeRequestTask.responseBody = ""
     m.bridgeRequestTask.errorMessage = ""
     m.bridgeRequestTask.bridgeHost = m.bridgeHost
-    m.bridgeRequestTask.control = "run"
+    m.bridgeRequestTask.control = "RUN"
 end sub
 
-sub onBridgeTaskCompleted()
-    completedToken = m.bridgeRequestTask.completedToken
-    if completedToken = invalid or completedToken = ""
+sub onBridgeResponseCodeChanged()
+    if m.bridgeRequestTask.responseCode < 0
         return
     end if
 

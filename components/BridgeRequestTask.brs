@@ -22,10 +22,9 @@ sub execute()
     responseCode = 0
 
     responseBody = transfer.GetToString()
-    responseCode = transfer.GetResponseCode()
 
-    m.top.responseCode = responseCode
-    if responseCode = 200 and responseBody <> invalid
+    if responseBody <> invalid and responseBody <> ""
+        responseCode = 200
         m.top.errorMessage = ""
         m.top.responseBody = responseBody
     else
@@ -33,5 +32,6 @@ sub execute()
         m.top.responseBody = ""
     end if
 
+    m.top.responseCode = responseCode
     m.top.completedToken = m.requestCount.ToStr()
 end sub

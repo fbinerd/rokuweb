@@ -6,10 +6,6 @@
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
     <BridgeRequestTask id="bridgeRequestTask" />
-    <Timer
-      id="refreshTimer"
-      duration="5"
-      repeat="true" />
     <Rectangle
       id="background"
       width="1280"
