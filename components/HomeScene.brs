@@ -32,7 +32,20 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
 
         if key = "OK"
-            hideFullscreen()
+            sendRemoteCommand("ok")
+            refreshFullscreenPreview()
+            return true
+        end if
+
+        if key = "up" or key = "down" or key = "left" or key = "right"
+            sendRemoteCommand(key)
+            refreshFullscreenPreview()
+            return true
+        end if
+
+        if key = "Play"
+            sendRemoteCommand("play")
+            refreshFullscreenPreview()
             return true
         end if
 
@@ -95,6 +108,7 @@ sub applyBridgeResponse()
     m.selectedIndex = 0
     m.previewPoster.uri = ""
     for each window in json.windows
+        id = getString(window.id, "")
         title = getString(window.title, "Janela sem titulo")
         state = getString(window.state, "Desconhecido")
         initialUrl = getString(window.initialUrl, "")
@@ -121,6 +135,7 @@ sub applyBridgeResponse()
 
         items.Push(line)
         m.windowEntries.Push({
+            id: id
             title: title
             thumbnailUrl: thumbnailUrl
             initialUrl: initialUrl
@@ -203,6 +218,32 @@ sub hideFullscreen()
             m.previewPoster.uri = appendCacheBust(entry.thumbnailUrl)
         end if
         m.windowList.setFocus(true)
+    end if
+end sub
+
+sub sendRemoteCommand(command as string)
+    if m.windowEntries.Count() = 0
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.id = invalid or entry.id = ""
+        return
+    end if
+
+    transfer = CreateObject("roUrlTransfer")
+    transfer.SetUrl("http://" + m.bridgeHost + "/api/control?windowId=" + entry.id + "&command=" + command)
+    ignored = transfer.GetToString()
+end sub
+
+sub refreshFullscreenPreview()
+    if not m.isFullscreen or m.windowEntries.Count() = 0
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
+        m.previewPoster.uri = appendCacheBust(entry.thumbnailUrl)
     end if
 end sub
 
