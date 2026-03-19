@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="HomeScene" extends="Scene">
+  <interface>
+    <field id="statusText" type="string" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
+  <children>
+    <Rectangle
+      id="background"
+      width="1280"
+      height="720"
+      color="0x101820FF" />
+    <Label
+      id="titleLabel"
+      width="1180"
+      height="50"
+      translation="[50, 42]"
+      color="0xFFFFFFFF"
+      font="font:LargeBoldSystemFont"
+      text="Roku HTTP Bridge" />
+    <Label
+      id="subtitleLabel"
+      width="1180"
+      height="34"
+      translation="[50, 92]"
+      color="0x9CC7D8FF"
+      font="font:MediumSystemFont"
+      text="Conectando ao app .NET local" />
+    <Label
+      id="statusLabel"
+      width="1180"
+      height="30"
+      translation="[50, 136]"
+      color="0xEAB308FF"
+      font="font:SmallSystemFont"
+      text="Carregando..." />
+    <LabelList
+      id="windowList"
+      translation="[50, 190]"
+      itemSize="[1180, 48]"
+      numRows="9"
+      drawFocusFeedback="true" />
+  </children>
+</component>
