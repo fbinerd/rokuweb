@@ -17,6 +17,7 @@ sub init()
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
+    m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -55,6 +56,7 @@ sub init()
     ]
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.top.setFocus(true)
 
     m.statusLabel.text = "Canal iniciado"
@@ -77,20 +79,18 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if key = "OK"
             sendPointerCommand("click")
-            refreshFullscreenPreview()
             return true
         end if
 
         if key = "up" or key = "down" or key = "left" or key = "right"
             moveCursor(key)
             sendPointerCommand("move")
-            refreshFullscreenPreview()
             return true
         end if
 
         if key = "Play"
             sendRemoteCommand("tab")
-            refreshFullscreenPreview()
+            scheduleFullscreenRefresh()
             return true
         end if
 
@@ -396,6 +396,20 @@ sub refreshFullscreenPreview()
     if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
         m.fullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
     end if
+end sub
+
+sub scheduleFullscreenRefresh()
+    if m.previewRefreshTimer = invalid
+        refreshFullscreenPreview()
+        return
+    end if
+
+    m.previewRefreshTimer.control = "stop"
+    m.previewRefreshTimer.control = "start"
+end sub
+
+sub onPreviewRefreshTimerFire()
+    refreshFullscreenPreview()
 end sub
 
 function getString(value as dynamic, fallback as string) as string
