@@ -2,7 +2,8 @@ param(
     [string]$BaseRef = "HEAD~1",
     [string]$OutputDirectory = "dist",
     [string]$BaseUrl = "",
-    [string]$Channel = ""
+    [string]$Channel = "",
+    [string]$SuperCurrentFullPackageUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -405,6 +406,7 @@ function Get-ReleaseHistory {
         [string]$CurrentPreviousVersion,
         [string]$CurrentPreviousReleaseId,
         [string]$CurrentFullPackage,
+        [string]$CurrentFullPackageUrl,
         [string]$CurrentDeltaPackage,
         [string[]]$CurrentChangedFiles,
         [string[]]$CurrentDeletedFiles,
@@ -443,7 +445,7 @@ function Get-ReleaseHistory {
         commit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
         publishedAtUtc = $CurrentGeneratedAtUtc
         fullPackage = $CurrentFullPackage
-        fullPackageUrl = if ($CurrentFullPackage) { $BaseUrl + $CurrentFullPackage } else { $null }
+        fullPackageUrl = if (-not [string]::IsNullOrWhiteSpace($CurrentFullPackageUrl)) { $CurrentFullPackageUrl } elseif ($CurrentFullPackage) { $BaseUrl + $CurrentFullPackage } else { $null }
         deltaPackage = $CurrentDeltaPackage
         deltaPackageUrl = if ($CurrentDeltaPackage) { $BaseUrl + $CurrentDeltaPackage } else { $null }
         deltaSupportedFromVersions = if ($CurrentPreviousVersion) { (New-JsonArray $CurrentPreviousVersion) } else { (New-JsonArray) }
@@ -673,7 +675,7 @@ try {
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
         fullPackage = "$Channel-super-$releaseId-full.zip"
-        fullPackageUrl = "$BaseUrl" + "$Channel-super-$releaseId-full.zip"
+        fullPackageUrl = if ([string]::IsNullOrWhiteSpace($SuperCurrentFullPackageUrl)) { "$BaseUrl" + "$Channel-super-$releaseId-full.zip" } else { $SuperCurrentFullPackageUrl }
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
         deltaPackageUrl = if ($superDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $superDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { (New-JsonArray $previousVersion) } else { (New-JsonArray) }
@@ -698,6 +700,7 @@ try {
         -CurrentPreviousVersion $previousVersion `
         -CurrentPreviousReleaseId $previousReleaseId `
         -CurrentFullPackage $rokuChangesData.fullPackage `
+        -CurrentFullPackageUrl $rokuChangesData.fullPackageUrl `
         -CurrentDeltaPackage $rokuChangesData.deltaPackage `
         -CurrentChangedFiles $rokuChanged `
         -CurrentDeletedFiles $rokuDeleted `
@@ -714,6 +717,7 @@ try {
         -CurrentPreviousVersion $previousVersion `
         -CurrentPreviousReleaseId $previousReleaseId `
         -CurrentFullPackage $superChangesData.fullPackage `
+        -CurrentFullPackageUrl $superChangesData.fullPackageUrl `
         -CurrentDeltaPackage $superChangesData.deltaPackage `
         -CurrentChangedFiles $superChanged `
         -CurrentDeletedFiles $superDeleted `

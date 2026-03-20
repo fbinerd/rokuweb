@@ -93,7 +93,7 @@ jobs:
     if: needs.resolve-builds.outputs.build_stable == 'true'
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout stable
@@ -131,7 +131,37 @@ jobs:
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/'
+        run: |
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/stable-super-full-latest/stable-super-latest-full.zip'
+          ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/' -SuperCurrentFullPackageUrl $fullUrl
+
+      - name: Publish stable super full package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTag = 'stable-super-full-latest'
+          $releaseTitle = 'stable super full latest'
+          $assetPath = Join-Path $PWD ('dist\stable-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (-not (Test-Path $assetPath)) {
+            throw "Pacote full do super nao encontrado: $assetPath"
+          }
+
+          gh release view $releaseTag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $releaseTag $assetPath#stable-super-latest-full.zip --title $releaseTitle --notes 'Pacote full mais recente do canal stable.' --repo '${{ github.repository }}'
+          }
+          else {
+            gh release upload $releaseTag $assetPath#stable-super-latest-full.zip --clobber --repo '${{ github.repository }}'
+          }
+
+      - name: Remove stable super full package from Pages payload
+        shell: pwsh
+        run: |
+          $assetPath = Join-Path $PWD ('dist\stable-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (Test-Path $assetPath) {
+            Remove-Item $assetPath -Force
+          }
 
       - name: Prepare patch artifact content
         shell: pwsh
@@ -196,7 +226,7 @@ jobs:
     if: needs.resolve-builds.outputs.build_develop == 'true'
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout develop
@@ -234,7 +264,37 @@ jobs:
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/'
+        run: |
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/develop-super-full-latest/develop-super-latest-full.zip'
+          ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/' -SuperCurrentFullPackageUrl $fullUrl
+
+      - name: Publish develop super full package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTag = 'develop-super-full-latest'
+          $releaseTitle = 'develop super full latest'
+          $assetPath = Join-Path $PWD ('dist\develop-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (-not (Test-Path $assetPath)) {
+            throw "Pacote full do super nao encontrado: $assetPath"
+          }
+
+          gh release view $releaseTag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $releaseTag $assetPath#develop-super-latest-full.zip --title $releaseTitle --notes 'Pacote full mais recente do canal develop.' --repo '${{ github.repository }}'
+          }
+          else {
+            gh release upload $releaseTag $assetPath#develop-super-latest-full.zip --clobber --repo '${{ github.repository }}'
+          }
+
+      - name: Remove develop super full package from Pages payload
+        shell: pwsh
+        run: |
+          $assetPath = Join-Path $PWD ('dist\develop-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (Test-Path $assetPath) {
+            Remove-Item $assetPath -Force
+          }
 
       - name: Prepare patch artifact content
         shell: pwsh
