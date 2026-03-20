@@ -1,7 +1,18 @@
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$superRoot = Resolve-Path (Join-Path $scriptRoot "..\superWebRTCStream")
+$internalSuperRoot = Join-Path $scriptRoot "superWebRTCStream"
+$externalSuperRoot = Join-Path $scriptRoot "..\superWebRTCStream"
+$superRoot = $null
+
+if (Test-Path $internalSuperRoot) {
+    $superRoot = Resolve-Path $internalSuperRoot
+} elseif (Test-Path $externalSuperRoot) {
+    $superRoot = Resolve-Path $externalSuperRoot
+} else {
+    throw "Nao encontrei a pasta do superWebRTCStream nem dentro nem ao lado do rokuweb."
+}
+
 $superBuildScript = Join-Path $superRoot "Abrir-App.ps1"
 $rokuBuildScript = Join-Path $scriptRoot "Abrir-App.ps1"
 

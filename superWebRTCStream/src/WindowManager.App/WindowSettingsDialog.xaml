@@ -1,0 +1,73 @@
+﻿<Window x:Class="WindowManager.App.WindowSettingsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configuracoes da janela"
+        Width="480"
+        Height="320"
+        MinWidth="420"
+        MinHeight="280"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Nickname do painel" FontWeight="SemiBold" />
+        <TextBox Grid.Row="1"
+                 Margin="0,8,0,0"
+                 Height="34"
+                 VerticalContentAlignment="Center"
+                 Text="{Binding Nickname, UpdateSourceTrigger=PropertyChanged}" />
+
+        <TextBlock Grid.Row="2"
+                   Margin="0,16,0,0"
+                   Text="TV para transmitir"
+                   FontWeight="SemiBold" />
+
+        <StackPanel Grid.Row="3" Margin="0,8,0,0">
+            <ComboBox Height="34"
+                      ItemsSource="{Binding Targets}"
+                      SelectedItem="{Binding SelectedTarget}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel>
+                            <TextBlock Text="{Binding Name}" />
+                            <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <CheckBox Margin="0,16,0,0"
+                      Content="Habilitar WebRTC para esta janela/TV"
+                      IsChecked="{Binding IsWebRtcEnabled}" />
+        </StackPanel>
+
+        <Grid Grid.Row="4" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="1"
+                    Width="90"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Content="Cancelar"
+                    IsCancel="True" />
+
+            <Button Grid.Column="2"
+                    Width="90"
+                    Height="34"
+                    Content="Salvar"
+                    IsDefault="True"
+                    Click="OnSaveClick" />
+        </Grid>
+    </Grid>
+</Window>

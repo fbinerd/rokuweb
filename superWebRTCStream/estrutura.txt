@@ -1,0 +1,6 @@
+1-Aplicativo gerenciador de janelas
+2-capacidade de gerar janelas, instancias do navegador CEF para windows
+3-implementar tecnologia miracast
+4-capacidade de transmitir as janelas das instancias separadas do cef, 
+                                    cada um para uma tv diferente rastreada na rede cabeada.
+5-capacidade de visualizar essas janelas e interagir com elas na instancia do gerenciador de janelas
