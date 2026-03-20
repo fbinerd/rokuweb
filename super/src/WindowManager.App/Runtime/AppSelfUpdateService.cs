@@ -45,7 +45,7 @@ public sealed class AppSelfUpdateService
         var extractRoot = Path.Combine(tempRoot, "extracted");
         var scriptPath = Path.Combine(tempRoot, "apply-update.cmd");
         var targetDirectory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var exePath = Path.Combine(targetDirectory, "WindowManager.App.exe");
+        var exePath = Path.Combine(targetDirectory, "SuperPainel.exe");
         var extractedDirectories = new List<string>();
         var lastPackagePath = string.Empty;
 
