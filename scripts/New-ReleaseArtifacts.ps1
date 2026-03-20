@@ -374,6 +374,22 @@ function Write-JsonFile {
     $Data | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function New-JsonArray {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [object[]]$Items
+    )
+
+    $list = New-Object System.Collections.ArrayList
+    foreach ($item in @($Items)) {
+        if ($null -ne $item) {
+            [void]$list.Add($item)
+        }
+    }
+
+    return $list
+}
+
 function Get-ReleaseHistory {
     param(
         [Parameter(Mandatory = $true)]
@@ -430,14 +446,14 @@ function Get-ReleaseHistory {
         fullPackageUrl = if ($CurrentFullPackage) { $BaseUrl + $CurrentFullPackage } else { $null }
         deltaPackage = $CurrentDeltaPackage
         deltaPackageUrl = if ($CurrentDeltaPackage) { $BaseUrl + $CurrentDeltaPackage } else { $null }
-        deltaSupportedFromVersions = if ($CurrentPreviousVersion) { [object[]]@($CurrentPreviousVersion) } else { [object[]]@() }
-        deltaSupportedFromReleases = if ($CurrentPreviousReleaseId) { [object[]]@($CurrentPreviousReleaseId) } else { [object[]]@() }
+        deltaSupportedFromVersions = if ($CurrentPreviousVersion) { (New-JsonArray $CurrentPreviousVersion) } else { (New-JsonArray) }
+        deltaSupportedFromReleases = if ($CurrentPreviousReleaseId) { (New-JsonArray $CurrentPreviousReleaseId) } else { (New-JsonArray) }
         fullPackageRequiredIfCurrentVersionOlderThan = $CurrentPreviousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $CurrentPreviousReleaseId
-        changedFiles = [object[]]@($CurrentChangedFiles)
-        deletedFiles = [object[]]@($CurrentDeletedFiles)
-        files = [object[]]@($CurrentFiles)
-        deltaFiles = [object[]]@($CurrentDeltaFiles)
+        changedFiles = (New-JsonArray $CurrentChangedFiles)
+        deletedFiles = (New-JsonArray $CurrentDeletedFiles)
+        files = (New-JsonArray $CurrentFiles)
+        deltaFiles = (New-JsonArray $CurrentDeltaFiles)
     }
     $releases += $currentEntry
     $seenReleaseIds[$CurrentReleaseId] = $true
@@ -483,14 +499,14 @@ function Get-ReleaseHistory {
             fullPackageUrl = $BaseUrl + "$packagePrefix-$releaseId-full.zip"
             deltaPackage = $deltaPackage
             deltaPackageUrl = if ($deltaPackage) { $BaseUrl + $deltaPackage } else { $null }
-            deltaSupportedFromVersions = if ($parentVersion) { [object[]]@($parentVersion) } else { [object[]]@() }
-            deltaSupportedFromReleases = if ($parentReleaseId) { [object[]]@($parentReleaseId) } else { [object[]]@() }
+            deltaSupportedFromVersions = if ($parentVersion) { (New-JsonArray $parentVersion) } else { (New-JsonArray) }
+            deltaSupportedFromReleases = if ($parentReleaseId) { (New-JsonArray $parentReleaseId) } else { (New-JsonArray) }
             fullPackageRequiredIfCurrentVersionOlderThan = $parentVersion
             fullPackageRequiredIfCurrentReleaseOlderThan = $parentReleaseId
-            changedFiles = [object[]]@()
-            deletedFiles = [object[]]@()
-            files = [object[]]@()
-            deltaFiles = [object[]]@()
+            changedFiles = (New-JsonArray)
+            deletedFiles = (New-JsonArray)
+            files = (New-JsonArray)
+            deltaFiles = (New-JsonArray)
         }
         $seenReleaseIds[$releaseId] = $true
     }
@@ -635,16 +651,16 @@ try {
         fullPackageUrl = "$BaseUrl" + "$Channel-rokuweb-$releaseId-full.zip"
         deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
         deltaPackageUrl = if ($rokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $rokuDeltaZip) } else { $null }
-        deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
-        deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
+        deltaSupportedFromVersions = if ($previousVersion) { (New-JsonArray $previousVersion) } else { (New-JsonArray) }
+        deltaSupportedFromReleases = if ($previousReleaseId) { (New-JsonArray $previousReleaseId) } else { (New-JsonArray) }
         deltaStatus = $deltaStatus
         deltaMessage = $deltaMessage
         fullPackageRequiredIfCurrentVersionOlderThan = $previousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
-        changedFiles = @($rokuChanged)
-        deletedFiles = @($rokuDeleted)
-        files = @($rokuCurrentFileEntries)
-        deltaFiles = @($rokuDeltaFileEntries)
+        changedFiles = (New-JsonArray $rokuChanged)
+        deletedFiles = (New-JsonArray $rokuDeleted)
+        files = (New-JsonArray $rokuCurrentFileEntries)
+        deltaFiles = (New-JsonArray $rokuDeltaFileEntries)
     }
     Write-JsonFile -Path (Join-Path $outputRoot ("{0}-rokuweb-{1}-changes.json" -f $Channel, $releaseId)) -Data $rokuChangesData
 
@@ -660,16 +676,16 @@ try {
         fullPackageUrl = "$BaseUrl" + "$Channel-super-$releaseId-full.zip"
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
         deltaPackageUrl = if ($superDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $superDeltaZip) } else { $null }
-        deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
-        deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
+        deltaSupportedFromVersions = if ($previousVersion) { (New-JsonArray $previousVersion) } else { (New-JsonArray) }
+        deltaSupportedFromReleases = if ($previousReleaseId) { (New-JsonArray $previousReleaseId) } else { (New-JsonArray) }
         deltaStatus = $deltaStatus
         deltaMessage = $deltaMessage
         fullPackageRequiredIfCurrentVersionOlderThan = $previousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
-        changedFiles = @($superChanged)
-        deletedFiles = @($superDeleted)
-        files = @($superCurrentFileEntries)
-        deltaFiles = @($superDeltaFileEntries)
+        changedFiles = (New-JsonArray $superChanged)
+        deletedFiles = (New-JsonArray $superDeleted)
+        files = (New-JsonArray $superCurrentFileEntries)
+        deltaFiles = (New-JsonArray $superDeltaFileEntries)
     }
     Write-JsonFile -Path (Join-Path $outputRoot ("{0}-super-{1}-changes.json" -f $Channel, $releaseId)) -Data $superChangesData
 
@@ -716,7 +732,7 @@ try {
         publishedAtUtc = $generatedAtUtc
         minimumSupportedVersion = if ($previousVersion) { $previousVersion } else { $rokuVersion }
         minimumSupportedRelease = if ($previousReleaseId) { $previousReleaseId } else { $releaseId }
-        releases = [object[]]$rokuHistory
+        releases = (New-JsonArray $rokuHistory)
     })
 
     Write-JsonFile -Path (Join-Path $outputRoot "latest-super.json") -Data ([pscustomobject]@{
@@ -730,7 +746,7 @@ try {
         publishedAtUtc = $generatedAtUtc
         minimumSupportedVersion = if ($previousVersion) { $previousVersion } else { $rokuVersion }
         minimumSupportedRelease = if ($previousReleaseId) { $previousReleaseId } else { $releaseId }
-        releases = [object[]]$superHistory
+        releases = (New-JsonArray $superHistory)
     })
 }
 finally {
