@@ -21,6 +21,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Compute release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $major = (Get-Content manifest | Where-Object { $_ -like 'major_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $minor = (Get-Content manifest | Where-Object { $_ -like 'minor_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $build = (Get-Content manifest | Where-Object { $_ -like 'build_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $version = "$major.$minor.$build"
+          $sha = (git rev-parse --short HEAD).Trim()
+          $releaseId = "$version-$sha"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "release_id=$releaseId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -42,20 +55,20 @@ jobs:
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
-          name: rokuweb-package
+          name: rokuweb-package-${{ steps.meta.outputs.release_id }}
           path: hello-roku.zip
           if-no-files-found: error
 
       - name: Upload super release
         uses: actions/upload-artifact@v4
         with:
-          name: super-release
+          name: super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
       - name: Upload versioned release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: versioned-release-artifacts
+          name: versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
           path: dist/**
           if-no-files-found: error
