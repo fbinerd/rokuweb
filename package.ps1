@@ -48,6 +48,7 @@ function Test-IncludedRokuFile {
     if ($relativePath -eq $Output) { return $false }
     if ($relativePath -eq "manifest") { return $true }
     if ($relativePath.StartsWith("components/")) { return $true }
+    if ($relativePath.StartsWith("images/")) { return $true }
     if ($relativePath.StartsWith("source/")) { return $true }
 
     return $false

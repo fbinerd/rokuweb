@@ -3,6 +3,7 @@
   <interface>
     <field id="statusText" type="string" />
   </interface>
+  <script type="text/brightscript" uri="pkg:/source/AppBranding.brs" />
   <script type="text/brightscript" uri="pkg:/source/BuildInfo.brs" />
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
@@ -27,7 +28,7 @@
       translation="[50, 32]"
       color="0xFFFFFFFF"
       font="font:LargeBoldSystemFont"
-      text="Roku HTTP Bridge" />
+      text="SuperPainel" />
     <Label
       id="subtitleLabel"
       width="1180"

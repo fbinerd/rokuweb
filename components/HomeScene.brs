@@ -90,6 +90,7 @@ sub init()
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
 
+    m.titleLabel.text = GetRokuAppShortName()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
     m.subtitleLabel.text = "Procurando automaticamente o super..."
     m.versionLabel.text = "Canal " + GetRokuChannelReleaseId()
