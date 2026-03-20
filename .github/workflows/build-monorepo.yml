@@ -51,28 +51,20 @@ jobs:
           echo "build_stable=$build_stable" >> "$GITHUB_OUTPUT"
           echo "build_develop=$build_develop" >> "$GITHUB_OUTPUT"
 
-  build-channel:
+  build-stable:
     runs-on: windows-latest
     needs: resolve-builds
-    if: |
-      (matrix.channel == 'stable' && needs.resolve-builds.outputs.build_stable == 'true') ||
-      (matrix.channel == 'develop' && needs.resolve-builds.outputs.build_develop == 'true')
-    strategy:
-      fail-fast: false
-      matrix:
-        channel:
-          - stable
-          - develop
+    if: needs.resolve-builds.outputs.build_stable == 'true'
 
     permissions:
       contents: read
 
     steps:
-      - name: Checkout ${{ matrix.channel }}
+      - name: Checkout stable
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ matrix.channel }}
+          ref: stable
 
       - name: Compute release metadata
         id: meta
@@ -99,11 +91,11 @@ jobs:
 
       - name: Package rokuweb
         shell: pwsh
-        run: ./package.ps1 -Channel '${{ matrix.channel }}' -Output '${{ matrix.channel }}-roku.zip'
+        run: ./package.ps1 -Channel 'stable' -Output 'stable-roku.zip'
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel '${{ matrix.channel }}' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/${{ matrix.channel }}/'
+        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/'
 
       - name: Prepare patch artifact content
         shell: pwsh
@@ -119,42 +111,141 @@ jobs:
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-roku-package-${{ steps.meta.outputs.release_id }}
-          path: ${{ matrix.channel }}-roku.zip
+          name: stable-roku-package-${{ steps.meta.outputs.release_id }}
+          path: stable-roku.zip
           if-no-files-found: error
 
       - name: Upload super release
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-super-release-${{ steps.meta.outputs.release_id }}
+          name: stable-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
-      - name: Upload versioned release patch artifacts
+      - name: Upload patch debug artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
+          name: stable-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
           path: patch-artifacts/**
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          name: stable-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-rokuweb.json
           if-no-files-found: error
 
       - name: Upload latest super manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-latest-super-json-${{ steps.meta.outputs.release_id }}
+          name: stable-latest-super-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-super.json
           if-no-files-found: error
 
       - name: Upload pages source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pages-source-${{ matrix.channel }}
+          name: pages-source-stable
+          path: dist/**
+          if-no-files-found: error
+
+  build-develop:
+    runs-on: windows-latest
+    needs: resolve-builds
+    if: needs.resolve-builds.outputs.build_develop == 'true'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: develop
+
+      - name: Compute release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $major = (Get-Content manifest | Where-Object { $_ -like 'major_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $minor = (Get-Content manifest | Where-Object { $_ -like 'minor_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $build = (Get-Content manifest | Where-Object { $_ -like 'build_version=*' } | Select-Object -First 1).Split('=')[1].Trim()
+          $version = "$major.$minor.$build"
+          $sha = (git rev-parse --short HEAD).Trim()
+          $releaseId = "$version-$sha"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "release_id=$releaseId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build super
+        shell: pwsh
+        working-directory: ./super
+        run: ./build.ps1 -Restore -Build
+
+      - name: Package rokuweb
+        shell: pwsh
+        run: ./package.ps1 -Channel 'develop' -Output 'develop-roku.zip'
+
+      - name: Build release artifacts
+        shell: pwsh
+        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/'
+
+      - name: Prepare patch artifact content
+        shell: pwsh
+        run: |
+          $patchRoot = Join-Path $PWD "patch-artifacts"
+          if (Test-Path $patchRoot) {
+            Remove-Item -Recurse -Force $patchRoot
+          }
+          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
+          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
+
+      - name: Upload Roku package
+        uses: actions/upload-artifact@v4
+        with:
+          name: develop-roku-package-${{ steps.meta.outputs.release_id }}
+          path: develop-roku.zip
+          if-no-files-found: error
+
+      - name: Upload super release
+        uses: actions/upload-artifact@v4
+        with:
+          name: develop-super-release-${{ steps.meta.outputs.release_id }}
+          path: super/src/WindowManager.App/bin/Release/**
+          if-no-files-found: error
+
+      - name: Upload patch debug artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: develop-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
+          path: patch-artifacts/**
+          if-no-files-found: error
+
+      - name: Upload latest rokuweb manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: develop-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          path: dist/latest-rokuweb.json
+          if-no-files-found: error
+
+      - name: Upload latest super manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: develop-latest-super-json-${{ steps.meta.outputs.release_id }}
+          path: dist/latest-super.json
+          if-no-files-found: error
+
+      - name: Upload pages source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-source-develop
           path: dist/**
           if-no-files-found: error
 
@@ -162,7 +253,8 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - resolve-builds
-      - build-channel
+      - build-stable
+      - build-develop
     if: github.event_name != 'pull_request'
 
     permissions:
@@ -175,9 +267,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Install git
-        run: git --version
-
       - name: Download stable pages source
         if: needs.resolve-builds.outputs.build_stable == 'true'
         uses: actions/download-artifact@v4
