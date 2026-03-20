@@ -77,11 +77,13 @@ jobs:
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
-      - name: Upload versioned release artifacts
+      - name: Upload versioned release patch artifacts
         uses: actions/upload-artifact@v4
         with:
           name: versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
-          path: dist/**
+          path: |
+            dist/*-delta-from-*.zip
+            dist/*-changes.json
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
