@@ -1,6 +1,7 @@
 param(
     [string]$BaseRef = "HEAD~1",
-    [string]$OutputDirectory = "dist"
+    [string]$OutputDirectory = "dist",
+    [string]$BaseUrl = "https://fbinerd.github.io/rokuweb/updates/"
 )
 
 $ErrorActionPreference = "Stop"
@@ -342,7 +343,9 @@ function Get-ReleaseHistory {
         [string]$CurrentFullPackage,
         [string]$CurrentDeltaPackage,
         [string[]]$CurrentChangedFiles,
-        [string[]]$CurrentDeletedFiles
+        [string[]]$CurrentDeletedFiles,
+        [Parameter(Mandatory = $true)]
+        [string]$BaseUrl
     )
 
     $pathspecs = if ($AppName -eq "super") {
@@ -372,7 +375,9 @@ function Get-ReleaseHistory {
         commit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
         publishedAtUtc = $CurrentGeneratedAtUtc
         fullPackage = $CurrentFullPackage
+        fullPackageUrl = if ($CurrentFullPackage) { $BaseUrl + $CurrentFullPackage } else { $null }
         deltaPackage = $CurrentDeltaPackage
+        deltaPackageUrl = if ($CurrentDeltaPackage) { $BaseUrl + $CurrentDeltaPackage } else { $null }
         deltaSupportedFromVersions = if ($CurrentPreviousVersion) { [object[]]@($CurrentPreviousVersion) } else { [object[]]@() }
         deltaSupportedFromReleases = if ($CurrentPreviousReleaseId) { [object[]]@($CurrentPreviousReleaseId) } else { [object[]]@() }
         fullPackageRequiredIfCurrentVersionOlderThan = $CurrentPreviousVersion
@@ -421,7 +426,9 @@ function Get-ReleaseHistory {
             commit = $commit
             publishedAtUtc = $publishedAtUtc
             fullPackage = "$AppName-$releaseId-full.zip"
+            fullPackageUrl = $BaseUrl + "$AppName-$releaseId-full.zip"
             deltaPackage = $deltaPackage
+            deltaPackageUrl = if ($deltaPackage) { $BaseUrl + $deltaPackage } else { $null }
             deltaSupportedFromVersions = if ($parentVersion) { [object[]]@($parentVersion) } else { [object[]]@() }
             deltaSupportedFromReleases = if ($parentReleaseId) { [object[]]@($parentReleaseId) } else { [object[]]@() }
             fullPackageRequiredIfCurrentVersionOlderThan = $parentVersion
@@ -551,7 +558,9 @@ try {
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
         fullPackage = "rokuweb-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "rokuweb-$releaseId-full.zip"
         deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
+        deltaPackageUrl = if ($rokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $rokuDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
         deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
         deltaStatus = $deltaStatus
@@ -572,7 +581,9 @@ try {
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
         fullPackage = "super-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "super-$releaseId-full.zip"
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
+        deltaPackageUrl = if ($superDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $superDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
         deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
         deltaStatus = $deltaStatus
@@ -595,7 +606,8 @@ try {
         -CurrentFullPackage $rokuChangesData.fullPackage `
         -CurrentDeltaPackage $rokuChangesData.deltaPackage `
         -CurrentChangedFiles $rokuChanged `
-        -CurrentDeletedFiles $rokuDeleted
+        -CurrentDeletedFiles $rokuDeleted `
+        -BaseUrl $BaseUrl
 
     $superHistory = Get-ReleaseHistory `
         -RepositoryRoot $repoRoot `
@@ -608,13 +620,15 @@ try {
         -CurrentFullPackage $superChangesData.fullPackage `
         -CurrentDeltaPackage $superChangesData.deltaPackage `
         -CurrentChangedFiles $superChanged `
-        -CurrentDeletedFiles $superDeleted
+        -CurrentDeletedFiles $superDeleted `
+        -BaseUrl $BaseUrl
 
     Write-JsonFile -Path (Join-Path $outputRoot "latest-rokuweb.json") -Data ([pscustomobject]@{
         app = "rokuweb"
         distributionChannel = "github-pages"
         manifestPath = "updates/latest-rokuweb.json"
         assetBasePath = "updates/"
+        manifestUrl = "$BaseUrl" + "latest-rokuweb.json"
         currentRelease = $releaseId
         currentVersion = $rokuVersion
         publishedAtUtc = $generatedAtUtc
@@ -628,6 +642,7 @@ try {
         distributionChannel = "github-pages"
         manifestPath = "updates/latest-super.json"
         assetBasePath = "updates/"
+        manifestUrl = "$BaseUrl" + "latest-super.json"
         currentRelease = $releaseId
         currentVersion = $rokuVersion
         publishedAtUtc = $generatedAtUtc
