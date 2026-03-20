@@ -10,6 +10,17 @@ on:
       - stable
       - develop
   workflow_dispatch:
+    inputs:
+      channels:
+        description: "Canais para compilar"
+        required: false
+        default: "current"
+        type: choice
+        options:
+          - current
+          - stable
+          - develop
+          - both
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -30,8 +41,21 @@ jobs:
           build_develop=false
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            build_stable=true
-            build_develop=true
+            selected_channels="${{ github.event.inputs.channels }}"
+            if [ "$selected_channels" = "both" ]; then
+              build_stable=true
+              build_develop=true
+            elif [ "$selected_channels" = "stable" ]; then
+              build_stable=true
+            elif [ "$selected_channels" = "develop" ]; then
+              build_develop=true
+            else
+              if [ "${{ github.ref_name }}" = "stable" ]; then
+                build_stable=true
+              elif [ "${{ github.ref_name }}" = "develop" ]; then
+                build_develop=true
+              fi
+            fi
           elif [ "${{ github.event_name }}" = "push" ]; then
             if [ "${{ github.ref_name }}" = "stable" ]; then
               build_stable=true
