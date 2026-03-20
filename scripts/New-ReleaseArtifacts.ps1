@@ -306,7 +306,7 @@ function New-ZipFromFiles {
 
     $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($file in $Files) {
+        foreach ($file in @($Files)) {
             if (-not (Test-Path $file)) {
                 continue
             }
@@ -560,18 +560,28 @@ try {
             $superChanged = Get-ChangedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
             $superDeleted = Get-DeletedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
 
-            $rokuDeltaFiles = $rokuChanged | ForEach-Object { Join-Path $repoRoot $_ }
-            $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
-            New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
-            $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
+            $rokuDeltaFiles = @($rokuChanged | ForEach-Object { Join-Path $repoRoot $_ })
+            if ($rokuDeltaFiles.Count -gt 0) {
+                $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
+                $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
+            }
 
-            $superDeltaFiles = $superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ }
-            $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
-            New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
-            $superDeltaFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superDeltaFiles
+            $superDeltaFiles = @($superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ })
+            if ($superDeltaFiles.Count -gt 0) {
+                $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
+                $superDeltaFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superDeltaFiles
+            }
 
-            $deltaStatus = "created"
-            $deltaMessage = ""
+            if ($rokuDeltaFiles.Count -eq 0 -and $superDeltaFiles.Count -eq 0) {
+                $deltaStatus = "not_needed"
+                $deltaMessage = "Nenhum arquivo do app mudou nesta release."
+            }
+            else {
+                $deltaStatus = "created"
+                $deltaMessage = ""
+            }
         }
         catch {
             $deltaStatus = "skipped"
