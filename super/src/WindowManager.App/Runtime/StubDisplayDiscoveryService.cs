@@ -332,7 +332,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             return false;
         }
 
-        return !name.StartsWith("urn:", StringComparison.OrdinalIgnoreCase);
+        return !name!.StartsWith("urn:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsLegacyFakeRecord(KnownDisplayRecord record)
@@ -494,7 +494,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             return false;
         }
 
-        return value.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
+        return value!.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static string TryResolveMacAddress(IPAddress address)
