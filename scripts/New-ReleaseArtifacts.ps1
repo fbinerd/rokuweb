@@ -187,6 +187,32 @@ function Get-HashDictionary {
     return $map
 }
 
+function Get-FileEntryList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Files
+    )
+
+    $entries = @()
+    foreach ($file in ($Files | Sort-Object -Unique)) {
+        if (-not (Test-Path $file)) {
+            continue
+        }
+
+        $relative = Get-RelativePath -Root $Root -Path $file
+        $fileInfo = Get-Item -Path $file
+        $entries += [pscustomobject]@{
+            path = $relative
+            sha256 = (Get-FileHash -Algorithm SHA256 -Path $file).Hash
+            size = [int64]$fileInfo.Length
+        }
+    }
+
+    return [object[]]$entries
+}
+
 function Get-DirectoryHashDictionary {
     param(
         [Parameter(Mandatory = $true)]
@@ -344,6 +370,8 @@ function Get-ReleaseHistory {
         [string]$CurrentDeltaPackage,
         [string[]]$CurrentChangedFiles,
         [string[]]$CurrentDeletedFiles,
+        [psobject[]]$CurrentFiles,
+        [psobject[]]$CurrentDeltaFiles,
         [Parameter(Mandatory = $true)]
         [string]$BaseUrl
     )
@@ -384,6 +412,8 @@ function Get-ReleaseHistory {
         fullPackageRequiredIfCurrentReleaseOlderThan = $CurrentPreviousReleaseId
         changedFiles = [object[]]@($CurrentChangedFiles)
         deletedFiles = [object[]]@($CurrentDeletedFiles)
+        files = [object[]]@($CurrentFiles)
+        deltaFiles = [object[]]@($CurrentDeltaFiles)
     }
     $releases += $currentEntry
     $seenReleaseIds[$CurrentReleaseId] = $true
@@ -435,6 +465,8 @@ function Get-ReleaseHistory {
             fullPackageRequiredIfCurrentReleaseOlderThan = $parentReleaseId
             changedFiles = [object[]]@()
             deletedFiles = [object[]]@()
+            files = [object[]]@()
+            deltaFiles = [object[]]@()
         }
         $seenReleaseIds[$releaseId] = $true
     }
@@ -464,8 +496,10 @@ try {
 
     $rokuFiles = Get-RokuPackageFiles -Root $repoRoot
     $rokuCurrentMap = Get-HashDictionary -Root $repoRoot -Files $rokuFiles
+    $rokuCurrentFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuFiles
     $superCurrentFiles = Get-SuperPackageFiles -Root $superReleaseRoot
     $superCurrentMap = Get-HashDictionary -Root $superReleaseRoot -Files $superCurrentFiles
+    $superCurrentFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superCurrentFiles
 
     $previousVersion = ""
     $previousReleaseId = ""
@@ -475,6 +509,8 @@ try {
     $rokuDeleted = @()
     $superChanged = @()
     $superDeleted = @()
+    $rokuDeltaFileEntries = @()
+    $superDeltaFileEntries = @()
 
     $canCreateDelta = $true
     try {
@@ -527,10 +563,12 @@ try {
             $rokuDeltaFiles = $rokuChanged | ForEach-Object { Join-Path $repoRoot $_ }
             $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
             New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
+            $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
 
             $superDeltaFiles = $superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ }
             $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
             New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
+            $superDeltaFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superDeltaFiles
 
             $deltaStatus = "created"
             $deltaMessage = ""
@@ -546,6 +584,8 @@ try {
             $rokuDeleted = @()
             $superChanged = @()
             $superDeleted = @()
+            $rokuDeltaFileEntries = @()
+            $superDeltaFileEntries = @()
         }
     }
 
@@ -569,6 +609,8 @@ try {
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($rokuChanged)
         deletedFiles = @($rokuDeleted)
+        files = @($rokuCurrentFileEntries)
+        deltaFiles = @($rokuDeltaFileEntries)
     }
     Write-JsonFile -Path (Join-Path $outputRoot ("rokuweb-{0}-changes.json" -f $releaseId)) -Data $rokuChangesData
 
@@ -592,6 +634,8 @@ try {
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($superChanged)
         deletedFiles = @($superDeleted)
+        files = @($superCurrentFileEntries)
+        deltaFiles = @($superDeltaFileEntries)
     }
     Write-JsonFile -Path (Join-Path $outputRoot ("super-{0}-changes.json" -f $releaseId)) -Data $superChangesData
 
@@ -607,6 +651,8 @@ try {
         -CurrentDeltaPackage $rokuChangesData.deltaPackage `
         -CurrentChangedFiles $rokuChanged `
         -CurrentDeletedFiles $rokuDeleted `
+        -CurrentFiles $rokuCurrentFileEntries `
+        -CurrentDeltaFiles $rokuDeltaFileEntries `
         -BaseUrl $BaseUrl
 
     $superHistory = Get-ReleaseHistory `
@@ -621,6 +667,8 @@ try {
         -CurrentDeltaPackage $superChangesData.deltaPackage `
         -CurrentChangedFiles $superChanged `
         -CurrentDeletedFiles $superDeleted `
+        -CurrentFiles $superCurrentFileEntries `
+        -CurrentDeltaFiles $superDeltaFileEntries `
         -BaseUrl $BaseUrl
 
     Write-JsonFile -Path (Join-Path $outputRoot "latest-rokuweb.json") -Data ([pscustomobject]@{
