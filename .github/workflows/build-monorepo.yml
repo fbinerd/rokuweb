@@ -163,23 +163,13 @@ jobs:
             Remove-Item $assetPath -Force
           }
 
-      - name: Prepare patch artifact content
-        shell: pwsh
-        run: |
-          $patchRoot = Join-Path $PWD "patch-artifacts"
-          if (Test-Path $patchRoot) {
-            Remove-Item -Recurse -Force $patchRoot
-          }
-          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
-          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
-
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
           name: stable-roku-package-${{ steps.meta.outputs.release_id }}
           path: stable-roku.zip
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload super release
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
@@ -188,14 +178,18 @@ jobs:
           name: stable-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload patch debug artifacts
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
-          path: patch-artifacts/**
+          path: |
+            dist/*-delta-from-*.zip
+            dist/*-changes.json
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload latest rokuweb manifest
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
@@ -219,6 +213,7 @@ jobs:
           name: pages-source-stable
           path: dist/**
           if-no-files-found: error
+          compression-level: 0
 
   build-develop:
     runs-on: windows-latest
@@ -296,23 +291,13 @@ jobs:
             Remove-Item $assetPath -Force
           }
 
-      - name: Prepare patch artifact content
-        shell: pwsh
-        run: |
-          $patchRoot = Join-Path $PWD "patch-artifacts"
-          if (Test-Path $patchRoot) {
-            Remove-Item -Recurse -Force $patchRoot
-          }
-          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
-          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
-
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
           name: develop-roku-package-${{ steps.meta.outputs.release_id }}
           path: develop-roku.zip
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload super release
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
@@ -321,14 +306,18 @@ jobs:
           name: develop-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload patch debug artifacts
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
-          path: patch-artifacts/**
+          path: |
+            dist/*-delta-from-*.zip
+            dist/*-changes.json
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload latest rokuweb manifest
         if: needs.resolve-builds.outputs.artifact_mode == 'full'
@@ -352,6 +341,7 @@ jobs:
           name: pages-source-develop
           path: dist/**
           if-no-files-found: error
+          compression-level: 0
 
   publish-pages:
     runs-on: ubuntu-latest
