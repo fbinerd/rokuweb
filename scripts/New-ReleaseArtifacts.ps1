@@ -484,6 +484,29 @@ function Get-ReleaseHistory {
     $releases += $currentEntry
     $seenReleaseIds[$CurrentReleaseId] = $true
 
+    if (-not [string]::IsNullOrWhiteSpace($CurrentPreviousReleaseId) -and -not $seenReleaseIds.ContainsKey($CurrentPreviousReleaseId)) {
+        $previousCommit = Get-ShortShaFromReleaseId -ReleaseId $CurrentPreviousReleaseId -Version $CurrentPreviousVersion
+        $releases += [pscustomobject]@{
+            version = $CurrentPreviousVersion
+            releaseId = $CurrentPreviousReleaseId
+            commit = $previousCommit
+            publishedAtUtc = $null
+            fullPackage = $null
+            fullPackageUrl = $null
+            deltaPackage = $null
+            deltaPackageUrl = $null
+            deltaSupportedFromVersions = (New-JsonArray)
+            deltaSupportedFromReleases = (New-JsonArray)
+            fullPackageRequiredIfCurrentVersionOlderThan = $null
+            fullPackageRequiredIfCurrentReleaseOlderThan = $null
+            changedFiles = (New-JsonArray)
+            deletedFiles = (New-JsonArray)
+            files = (New-JsonArray)
+            deltaFiles = (New-JsonArray)
+        }
+        $seenReleaseIds[$CurrentPreviousReleaseId] = $true
+    }
+
     $publishedManifest = Get-PublishedManifestDocument -BaseUrl $BaseUrl -AppName $AppName
     if ($publishedManifest -and $publishedManifest.releases) {
         foreach ($release in @($publishedManifest.releases)) {
