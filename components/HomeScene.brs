@@ -238,13 +238,15 @@ sub applyBridgeResponse()
                 scheduleAutoConnectRetry()
             else
                 m.isAutoConnecting = false
+                startPanelRefresh()
                 m.statusLabel.text = "Nao foi possivel encontrar " + m.defaultBridgeHost
                 m.subtitleLabel.text = "Informe o IP do super para conectar"
                 promptForBridgeHost()
             end if
         else
+            startPanelRefresh()
             m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
-            m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
+            m.subtitleLabel.text = "Tentando reconectar automaticamente..."
         end if
         hideGrid()
         return
@@ -277,8 +279,8 @@ sub applyBridgeResponse()
 
     if m.windowEntries.Count() = 0
         m.statusLabel.text = "Bridge conectado, sem paineis disponiveis"
-        m.subtitleLabel.text = "Nenhuma janela publicada no app .NET ainda."
-        stopPanelRefresh()
+        m.subtitleLabel.text = "Nenhuma janela publicada ainda. Atualizando automaticamente..."
+        startPanelRefresh()
         hideGrid()
         return
     end if
@@ -305,6 +307,7 @@ end sub
 sub beginAutoConnect()
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
+    startPanelRefresh()
     loadWindows()
 end sub
 
