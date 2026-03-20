@@ -28,7 +28,8 @@ public sealed class Bootstrapper
         var profileStore = new ProfileStore();
         var browserSnapshotService = new BrowserSnapshotService();
         var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService);
-        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore);
+        var appUpdateManifestService = new AppUpdateManifestService();
+        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService);
 
         return new MainWindow(viewModel, browserSnapshotService);
     }

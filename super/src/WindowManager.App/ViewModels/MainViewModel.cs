@@ -29,6 +29,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly ProfileStore _profileStore;
     private readonly LocalWebRtcPublisherService _webRtcPublisherService;
     private readonly KnownDisplayStore _knownDisplayStore;
+    private readonly AppUpdateManifestService _appUpdateManifestService;
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
@@ -43,6 +44,12 @@ public sealed class MainViewModel : ViewModelBase
     private string _webRtcSpecificIp = string.Empty;
     private bool _isDefaultProfile;
     private string _statusMessage = "Pronto para criar janelas e associar destinos.";
+    private string _appVersionStatus = string.Format("Versao local: {0} ({1})", BuildVersionInfo.Version, BuildVersionInfo.ReleaseId);
+    private string _updateStatusMessage = "Verificacao de atualizacao pendente.";
+    private string _latestAvailableVersion = "Ainda nao consultado";
+    private string _recommendedUpdatePackageUrl = string.Empty;
+    private bool _isUpdateAvailable;
+    private bool _isCheckingForUpdates;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -50,7 +57,8 @@ public sealed class MainViewModel : ViewModelBase
         RoutingService routingService,
         ProfileStore profileStore,
         LocalWebRtcPublisherService webRtcPublisherService,
-        KnownDisplayStore knownDisplayStore)
+        KnownDisplayStore knownDisplayStore,
+        AppUpdateManifestService appUpdateManifestService)
     {
         _browserInstanceHost = browserInstanceHost;
         _displayDiscoveryService = displayDiscoveryService;
@@ -58,6 +66,7 @@ public sealed class MainViewModel : ViewModelBase
         _profileStore = profileStore;
         _webRtcPublisherService = webRtcPublisherService;
         _knownDisplayStore = knownDisplayStore;
+        _appUpdateManifestService = appUpdateManifestService;
 
         ResolutionModes = Enum.GetValues(typeof(RenderResolutionMode)).Cast<RenderResolutionMode>().ToArray();
         WebRtcBindModes = Enum.GetValues(typeof(WebRtcBindMode)).Cast<WebRtcBindMode>().ToArray();
@@ -257,6 +266,42 @@ public sealed class MainViewModel : ViewModelBase
         private set => SetProperty(ref _statusMessage, value);
     }
 
+    public string AppVersionStatus
+    {
+        get => _appVersionStatus;
+        private set => SetProperty(ref _appVersionStatus, value);
+    }
+
+    public string UpdateStatusMessage
+    {
+        get => _updateStatusMessage;
+        private set => SetProperty(ref _updateStatusMessage, value);
+    }
+
+    public string LatestAvailableVersion
+    {
+        get => _latestAvailableVersion;
+        private set => SetProperty(ref _latestAvailableVersion, value);
+    }
+
+    public string RecommendedUpdatePackageUrl
+    {
+        get => _recommendedUpdatePackageUrl;
+        private set => SetProperty(ref _recommendedUpdatePackageUrl, value);
+    }
+
+    public bool IsUpdateAvailable
+    {
+        get => _isUpdateAvailable;
+        private set => SetProperty(ref _isUpdateAvailable, value);
+    }
+
+    public bool IsCheckingForUpdates
+    {
+        get => _isCheckingForUpdates;
+        private set => SetProperty(ref _isCheckingForUpdates, value);
+    }
+
     public string PreviewTitle =>
         SelectedWindow is null ? "Nenhuma janela selecionada" : SelectedWindow.Title;
 
@@ -364,7 +409,44 @@ public sealed class MainViewModel : ViewModelBase
         ProfileName = startupProfileName;
         await LoadProfileAsync();
 
+        _ = CheckForAppUpdatesAsync();
         _ = RefreshTargetsAfterStartupAsync();
+    }
+
+    private async Task CheckForAppUpdatesAsync()
+    {
+        try
+        {
+            IsCheckingForUpdates = true;
+            UpdateStatusMessage = "Consultando atualizacoes do super...";
+            var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
+
+            AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
+            LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
+                ? "Sem informacao remota"
+                : string.Format("{0} ({1})", result.LatestVersion, result.LatestReleaseId);
+            IsUpdateAvailable = result.UpdateAvailable;
+            RecommendedUpdatePackageUrl = result.RecommendedPackageUrl;
+            UpdateStatusMessage = result.StatusMessage;
+
+            AppLog.Write(
+                "Updater",
+                string.Format(
+                    "Manifesto consultado em {0}. UpdateAvailable={1}. Atual={2}. Remoto={3}.",
+                    result.ManifestUrl,
+                    result.UpdateAvailable,
+                    result.CurrentReleaseId,
+                    result.LatestReleaseId));
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusMessage = string.Format("Falha ao consultar atualizacoes: {0}", ex.Message);
+            AppLog.Write("Updater", UpdateStatusMessage);
+        }
+        finally
+        {
+            IsCheckingForUpdates = false;
+        }
     }
 
     private async Task RefreshTargetsAfterStartupAsync()

@@ -14,3 +14,4 @@ super/**/*.log
 super/**/*.tmp
 super/**/*.cache
 super/.vs/
+super/src/WindowManager.App/Runtime/BuildVersionInfo.g.cs

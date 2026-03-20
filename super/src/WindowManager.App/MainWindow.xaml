@@ -143,6 +143,22 @@
                     </Grid>
                 </GroupBox>
 
+                <GroupBox Header="Atualizacoes" Margin="0,12,0,0">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="{Binding AppVersionStatus}" />
+                        <TextBlock Margin="0,8,0,0"
+                                   Text="{Binding LatestAvailableVersion, StringFormat=Release mais recente: {0}}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Margin="0,8,0,0"
+                                   Text="{Binding UpdateStatusMessage}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Margin="0,8,0,0"
+                                   Foreground="#0F766E"
+                                   Text="{Binding RecommendedUpdatePackageUrl}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </GroupBox>
+
                 <GroupBox Header="Publicacao WebRTC Local" Margin="0,12,0,0">
                     <Grid Margin="12">
                         <Grid.RowDefinitions>
