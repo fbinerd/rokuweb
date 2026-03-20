@@ -1,7 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$packagePath = Join-Path $scriptRoot "hello-roku.zip"
+$packagePath = Join-Path $scriptRoot "stable-roku.zip"
+if (-not (Test-Path $packagePath)) {
+    $packagePath = Join-Path $scriptRoot "hello-roku.zip"
+}
 
 function Build-Package {
     if (Test-Path $packagePath) {

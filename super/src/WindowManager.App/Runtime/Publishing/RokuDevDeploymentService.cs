@@ -268,6 +268,12 @@ public sealed class RokuDevDeploymentService
             return string.Empty;
         }
 
+        var stablePackage = Path.Combine(root, "stable-roku.zip");
+        if (File.Exists(stablePackage))
+        {
+            return stablePackage;
+        }
+
         return Path.Combine(root, "hello-roku.zip");
     }
 

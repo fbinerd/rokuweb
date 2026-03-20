@@ -3,11 +3,9 @@ name: Build Monorepo
 on:
   push:
     branches:
-      - main
       - stable
   pull_request:
     branches:
-      - main
       - stable
   workflow_dispatch:
 
@@ -57,7 +55,7 @@ jobs:
 
       - name: Package rokuweb
         shell: pwsh
-        run: ./package.ps1
+        run: ./package.ps1 -Output stable-roku.zip
 
       - name: Build release artifacts
         shell: pwsh
@@ -77,35 +75,35 @@ jobs:
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
-          name: rokuweb-package-${{ steps.meta.outputs.release_id }}
-          path: hello-roku.zip
+          name: stable-roku-package-${{ steps.meta.outputs.release_id }}
+          path: stable-roku.zip
           if-no-files-found: error
 
       - name: Upload super release
         uses: actions/upload-artifact@v4
         with:
-          name: super-release-${{ steps.meta.outputs.release_id }}
+          name: stable-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
       - name: Upload versioned release patch artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
+          name: stable-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
           path: patch-artifacts/**
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
         uses: actions/upload-artifact@v4
         with:
-          name: latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          name: stable-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-rokuweb.json
           if-no-files-found: error
 
       - name: Upload latest super manifest
         uses: actions/upload-artifact@v4
         with:
-          name: latest-super-json-${{ steps.meta.outputs.release_id }}
+          name: stable-latest-super-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-super.json
           if-no-files-found: error
 

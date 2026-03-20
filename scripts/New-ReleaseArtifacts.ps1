@@ -376,6 +376,8 @@ function Get-ReleaseHistory {
         [string]$BaseUrl
     )
 
+    $packagePrefix = if ($AppName -eq "super") { "stable-super" } else { "stable-rokuweb" }
+
     $pathspecs = if ($AppName -eq "super") {
         @("--", "super")
     }
@@ -444,7 +446,7 @@ function Get-ReleaseHistory {
 
         $publishedAtUtc = Get-GitCommitTimestampUtc -RepositoryRoot $RepositoryRoot -Revision $commit
         $deltaPackage = if ($parentReleaseId) {
-            "$AppName-$releaseId-delta-from-$parentReleaseId.zip"
+            "$packagePrefix-$releaseId-delta-from-$parentReleaseId.zip"
         }
         else {
             $null
@@ -455,8 +457,8 @@ function Get-ReleaseHistory {
             releaseId = $releaseId
             commit = $commit
             publishedAtUtc = $publishedAtUtc
-            fullPackage = "$AppName-$releaseId-full.zip"
-            fullPackageUrl = $BaseUrl + "$AppName-$releaseId-full.zip"
+            fullPackage = "$packagePrefix-$releaseId-full.zip"
+            fullPackageUrl = $BaseUrl + "$packagePrefix-$releaseId-full.zip"
             deltaPackage = $deltaPackage
             deltaPackageUrl = if ($deltaPackage) { $BaseUrl + $deltaPackage } else { $null }
             deltaSupportedFromVersions = if ($parentVersion) { [object[]]@($parentVersion) } else { [object[]]@() }
@@ -486,12 +488,12 @@ try {
     $releaseId = "$rokuVersion-$currentShortSha"
     $generatedAtUtc = [DateTime]::UtcNow.ToString("O")
 
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Output (Join-Path $OutputDirectory ("rokuweb-{0}-full.zip" -f $releaseId))
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Output (Join-Path $OutputDirectory ("stable-rokuweb-{0}-full.zip" -f $releaseId))
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao gerar pacote completo do rokuweb."
     }
 
-    $superFullZip = Join-Path $outputRoot ("super-{0}-full.zip" -f $releaseId)
+    $superFullZip = Join-Path $outputRoot ("stable-super-{0}-full.zip" -f $releaseId)
     New-ZipFromDirectory -DirectoryPath $superReleaseRoot -ZipPath $superFullZip
 
     $rokuFiles = Get-RokuPackageFiles -Root $repoRoot
@@ -562,14 +564,14 @@ try {
 
             $rokuDeltaFiles = @($rokuChanged | ForEach-Object { Join-Path $repoRoot $_ })
             if ($rokuDeltaFiles.Count -gt 0) {
-                $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                $rokuDeltaZip = Join-Path $outputRoot ("stable-rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
                 New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
                 $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
             }
 
             $superDeltaFiles = @($superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ })
             if ($superDeltaFiles.Count -gt 0) {
-                $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                $superDeltaZip = Join-Path $outputRoot ("stable-super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
                 New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
                 $superDeltaFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superDeltaFiles
             }
@@ -607,8 +609,8 @@ try {
         previousReleaseId = $previousReleaseId
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
-        fullPackage = "rokuweb-$releaseId-full.zip"
-        fullPackageUrl = "$BaseUrl" + "rokuweb-$releaseId-full.zip"
+        fullPackage = "stable-rokuweb-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "stable-rokuweb-$releaseId-full.zip"
         deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
         deltaPackageUrl = if ($rokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $rokuDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
@@ -622,7 +624,7 @@ try {
         files = @($rokuCurrentFileEntries)
         deltaFiles = @($rokuDeltaFileEntries)
     }
-    Write-JsonFile -Path (Join-Path $outputRoot ("rokuweb-{0}-changes.json" -f $releaseId)) -Data $rokuChangesData
+    Write-JsonFile -Path (Join-Path $outputRoot ("stable-rokuweb-{0}-changes.json" -f $releaseId)) -Data $rokuChangesData
 
     $superChangesData = [pscustomobject]@{
         app = "super"
@@ -632,8 +634,8 @@ try {
         previousReleaseId = $previousReleaseId
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
-        fullPackage = "super-$releaseId-full.zip"
-        fullPackageUrl = "$BaseUrl" + "super-$releaseId-full.zip"
+        fullPackage = "stable-super-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "stable-super-$releaseId-full.zip"
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
         deltaPackageUrl = if ($superDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $superDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
@@ -647,7 +649,7 @@ try {
         files = @($superCurrentFileEntries)
         deltaFiles = @($superDeltaFileEntries)
     }
-    Write-JsonFile -Path (Join-Path $outputRoot ("super-{0}-changes.json" -f $releaseId)) -Data $superChangesData
+    Write-JsonFile -Path (Join-Path $outputRoot ("stable-super-{0}-changes.json" -f $releaseId)) -Data $superChangesData
 
     $rokuHistory = Get-ReleaseHistory `
         -RepositoryRoot $repoRoot `

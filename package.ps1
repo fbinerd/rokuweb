@@ -1,5 +1,5 @@
 param(
-    [string]$Output = "hello-roku.zip"
+    [string]$Output = "stable-roku.zip"
 )
 
 Add-Type -AssemblyName System.IO.Compression
