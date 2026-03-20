@@ -163,6 +163,17 @@ jobs:
 
               Push-Location $tempRepo
               try {
+                Push-Location (Join-Path $tempRepo 'super')
+                try {
+                  powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Restore -Build
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "Falha ao compilar o super para o canal '$channel'."
+                  }
+                }
+                finally {
+                  Pop-Location
+                }
+
                 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-ReleaseArtifacts.ps1 -Channel $channel -BaseUrl ("https://fbinerd.github.io/rokuweb/updates/{0}/" -f $channel)
                 if ($LASTEXITCODE -ne 0) {
                   throw "Falha ao gerar artefatos para o canal '$channel'."
