@@ -21,6 +21,14 @@ on:
           - stable
           - develop
           - both
+      artifact_mode:
+        description: "Quantidade de artifacts do run"
+        required: false
+        default: "minimal"
+        type: choice
+        options:
+          - minimal
+          - full
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -31,6 +39,7 @@ jobs:
     outputs:
       build_stable: ${{ steps.flags.outputs.build_stable }}
       build_develop: ${{ steps.flags.outputs.build_develop }}
+      artifact_mode: ${{ steps.flags.outputs.artifact_mode }}
     steps:
       - name: Resolve channel builds
         id: flags
@@ -39,9 +48,11 @@ jobs:
           set -euo pipefail
           build_stable=false
           build_develop=false
+          artifact_mode=minimal
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             selected_channels="${{ github.event.inputs.channels }}"
+            artifact_mode="${{ github.event.inputs.artifact_mode }}"
             if [ "$selected_channels" = "both" ]; then
               build_stable=true
               build_develop=true
@@ -74,6 +85,7 @@ jobs:
 
           echo "build_stable=$build_stable" >> "$GITHUB_OUTPUT"
           echo "build_develop=$build_develop" >> "$GITHUB_OUTPUT"
+          echo "artifact_mode=$artifact_mode" >> "$GITHUB_OUTPUT"
 
   build-stable:
     runs-on: windows-latest
@@ -140,6 +152,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload super release
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-super-release-${{ steps.meta.outputs.release_id }}
@@ -147,6 +160,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload patch debug artifacts
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
@@ -154,6 +168,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
@@ -161,6 +176,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest super manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-latest-super-json-${{ steps.meta.outputs.release_id }}
@@ -239,6 +255,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload super release
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-super-release-${{ steps.meta.outputs.release_id }}
@@ -246,6 +263,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload patch debug artifacts
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
@@ -253,6 +271,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
@@ -260,6 +279,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest super manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-latest-super-json-${{ steps.meta.outputs.release_id }}
