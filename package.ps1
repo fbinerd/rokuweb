@@ -7,6 +7,11 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $zipPath = Join-Path $root $Output
+$zipDirectory = Split-Path -Parent $zipPath
+
+if (-not [string]::IsNullOrWhiteSpace($zipDirectory) -and -not (Test-Path $zipDirectory)) {
+    New-Item -ItemType Directory -Path $zipDirectory -Force | Out-Null
+}
 
 if (Test-Path $zipPath) {
     Remove-Item $zipPath -Force

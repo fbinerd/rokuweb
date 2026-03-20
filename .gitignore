@@ -1,5 +1,9 @@
 hello-roku.zip
 roku-dev.config.clixml
+dist/
+.dotnet/
+.templateengine/
+WindowManager.sln
 
 # Monorepo do super
 super/.dotnet/

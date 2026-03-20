@@ -33,6 +33,10 @@ jobs:
         shell: pwsh
         run: ./package.ps1
 
+      - name: Build release artifacts
+        shell: pwsh
+        run: ./scripts/New-ReleaseArtifacts.ps1
+
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
@@ -45,4 +49,11 @@ jobs:
         with:
           name: super-release
           path: super/src/WindowManager.App/bin/Release/**
+          if-no-files-found: error
+
+      - name: Upload versioned release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: versioned-release-artifacts
+          path: dist/**
           if-no-files-found: error
