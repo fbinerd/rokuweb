@@ -71,6 +71,43 @@ function Get-RokuReleaseId {
     return "$version-$shortSha"
 }
 
+function Get-RokuBuildVersion {
+    $fallback = Get-ManifestValue -Path (Join-Path $root "manifest") -Key "build_version"
+
+    try {
+        $commitCount = (& git -C $root rev-list --count HEAD 2>$null).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($commitCount)) {
+            return $commitCount
+        }
+    }
+    catch {
+    }
+
+    return $fallback
+}
+
+function Write-StagedManifest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationRoot
+    )
+
+    $sourceManifestPath = Join-Path $root "manifest"
+    $destinationManifestPath = Join-Path $DestinationRoot "manifest"
+    $buildVersion = Get-RokuBuildVersion
+    $content = Get-Content -Path $sourceManifestPath
+    $rewritten = foreach ($line in $content) {
+        if ($line -like "build_version=*") {
+            "build_version=$buildVersion"
+        }
+        else {
+            $line
+        }
+    }
+
+    Set-Content -Path $destinationManifestPath -Value $rewritten -Encoding ASCII
+}
+
 function Write-BuildInfoFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -116,6 +153,7 @@ foreach ($file in $files) {
 }
 
 Write-BuildInfoFile -DestinationRoot $stagingRoot
+Write-StagedManifest -DestinationRoot $stagingRoot
 
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 
