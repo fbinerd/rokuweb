@@ -105,22 +105,104 @@ function Get-RokuBuildVersion {
     return $fallback
 }
 
+function New-VersionedImagePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RelativePath,
+        [Parameter(Mandatory = $true)]
+        [string]$BuildVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$ChannelName
+    )
+
+    $directory = Split-Path -Parent $RelativePath
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($RelativePath)
+    $extension = [System.IO.Path]::GetExtension($RelativePath)
+    $versionedName = "{0}-{1}-{2}{3}" -f $fileName, $ChannelName, $BuildVersion, $extension
+
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        return $versionedName.Replace("\", "/")
+    }
+
+    return ((Join-Path $directory $versionedName) -replace "\\", "/")
+}
+
+function Copy-VersionedManifestImages {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$BuildVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$ChannelName
+    )
+
+    $manifestPath = Join-Path $root "manifest"
+    $imageKeys = @(
+        "mm_icon_focus_hd"
+        "mm_icon_focus_sd"
+        "mm_icon_side_hd"
+        "mm_icon_side_sd"
+        "splash_screen_hd"
+        "splash_screen_sd"
+    )
+
+    $map = @{}
+    foreach ($key in $imageKeys) {
+        $relativePath = Get-ManifestValue -Path $manifestPath -Key $key
+        if ([string]::IsNullOrWhiteSpace($relativePath)) {
+            continue
+        }
+
+        $sourcePath = Join-Path $root ($relativePath -replace "/", "\")
+        if (-not (Test-Path $sourcePath)) {
+            continue
+        }
+
+        $versionedRelativePath = New-VersionedImagePath -RelativePath $relativePath -BuildVersion $BuildVersion -ChannelName $ChannelName
+        $destinationPath = Join-Path $DestinationRoot ($versionedRelativePath -replace "/", "\")
+        $destinationDirectory = Split-Path -Parent $destinationPath
+        if (-not (Test-Path $destinationDirectory)) {
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        }
+
+        Copy-Item -Path $sourcePath -Destination $destinationPath -Force
+        $map[$key] = $versionedRelativePath
+    }
+
+    return $map
+}
+
 function Write-StagedManifest {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$DestinationRoot
+        [string]$DestinationRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$BuildVersion,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$VersionedImageMap
     )
 
     $sourceManifestPath = Join-Path $root "manifest"
     $destinationManifestPath = Join-Path $DestinationRoot "manifest"
-    $buildVersion = Get-RokuBuildVersion
     $content = Get-Content -Path $sourceManifestPath
     $rewritten = foreach ($line in $content) {
         if ($line -like "build_version=*") {
             "build_version=$buildVersion"
         }
         else {
-            $line
+            $separatorIndex = $line.IndexOf("=")
+            $currentKey = ""
+            if ($separatorIndex -gt 0) {
+                $currentKey = $line.Substring(0, $separatorIndex).Trim()
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($currentKey) -and $VersionedImageMap.ContainsKey($currentKey)) {
+                "$currentKey=$($VersionedImageMap[$currentKey])"
+            }
+            else {
+                $line
+            }
         }
     }
 
@@ -157,6 +239,8 @@ $files = Get-ChildItem -Path $root -Recurse -File | Where-Object {
     Test-IncludedRokuFile -FullName $_.FullName
 }
 
+$buildVersion = Get-RokuBuildVersion
+
 New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
 
 $copiedFiles = @()
@@ -177,7 +261,8 @@ foreach ($file in $files) {
 }
 
 Write-BuildInfoFile -DestinationRoot $stagingRoot
-Write-StagedManifest -DestinationRoot $stagingRoot
+$versionedImageMap = Copy-VersionedManifestImages -DestinationRoot $stagingRoot -BuildVersion $buildVersion -ChannelName $resolvedChannel
+Write-StagedManifest -DestinationRoot $stagingRoot -BuildVersion $buildVersion -VersionedImageMap $versionedImageMap
 
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 
@@ -188,6 +273,11 @@ try {
 
     $buildInfoPath = Join-Path $stagingRoot "source\BuildInfo.brs"
     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $buildInfoPath, "source/BuildInfo.brs") | Out-Null
+
+    foreach ($versionedImageRelativePath in $versionedImageMap.Values) {
+        $versionedImagePath = Join-Path $stagingRoot ($versionedImageRelativePath -replace "/", "\")
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $versionedImagePath, $versionedImageRelativePath) | Out-Null
+    }
 }
 finally {
     $zip.Dispose()
