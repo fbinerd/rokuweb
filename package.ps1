@@ -12,8 +12,24 @@ if (Test-Path $zipPath) {
     Remove-Item $zipPath -Force
 }
 
+function Test-IncludedRokuFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FullName
+    )
+
+    $relativePath = $FullName.Substring($root.Length + 1).Replace("\", "/")
+
+    if ($relativePath -eq $Output) { return $false }
+    if ($relativePath -eq "manifest") { return $true }
+    if ($relativePath.StartsWith("components/")) { return $true }
+    if ($relativePath.StartsWith("source/")) { return $true }
+
+    return $false
+}
+
 $files = Get-ChildItem -Path $root -Recurse -File | Where-Object {
-    $_.FullName -ne $zipPath
+    Test-IncludedRokuFile -FullName $_.FullName
 }
 
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)

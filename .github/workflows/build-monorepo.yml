@@ -1,0 +1,48 @@
+name: Build Monorepo
+
+on:
+  push:
+    branches:
+      - main
+      - stable
+  pull_request:
+    branches:
+      - main
+      - stable
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build super
+        shell: pwsh
+        working-directory: ./super
+        run: ./build.ps1 -Restore -Build
+
+      - name: Package rokuweb
+        shell: pwsh
+        run: ./package.ps1
+
+      - name: Upload Roku package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rokuweb-package
+          path: hello-roku.zip
+          if-no-files-found: error
+
+      - name: Upload super release
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-release
+          path: super/src/WindowManager.App/bin/Release/**
+          if-no-files-found: error
