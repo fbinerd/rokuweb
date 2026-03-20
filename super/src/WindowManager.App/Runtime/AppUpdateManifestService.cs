@@ -30,6 +30,7 @@ public sealed class AppUpdateManifestService
                 var body = content is null
                     ? string.Empty
                     : await content.ReadAsStringAsync().ConfigureAwait(false);
+                body = NormalizeJsonBody(body);
                 var preview = BuildPreview(body);
 
                 AppLog.Write(
@@ -117,6 +118,16 @@ public sealed class AppUpdateManifestService
         }
 
         return normalized;
+    }
+
+    private static string NormalizeJsonBody(string body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return string.Empty;
+        }
+
+        return body.Trim().TrimStart('\uFEFF');
     }
 
     private static UpdatePackagePlan SelectRecommendedPackagePlan(string currentReleaseId, UpdateManifestDocument document, UpdateReleaseEntry latestRelease)
