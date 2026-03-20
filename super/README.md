@@ -59,6 +59,16 @@ http://IP_DO_WINDOWS:8090/api/windows
 ```
 
 6. Instale o pacote `hello-roku.zip` na TV Roku.
+
+## Atualizacao automatica de TVs em dev mode
+
+Se quiser que o `super` empurre atualizacoes do canal Roku automaticamente para TVs em modo desenvolvedor:
+
+1. copie `roku-devices.example.json` para `roku-devices.json`
+2. preencha `deviceId`, `host`, `username` e `password`
+3. mantenha `hello-roku.zip` atualizado na raiz do monorepo
+
+Quando uma TV Roku se registrar no bridge com versao antiga do canal, o `super` tenta fazer sideload automatico do pacote via developer mode.
 7. Abra o app Roku na TV.
 8. O app deve listar a janela `emei.lovable.app` vinda do servidor Windows.
 

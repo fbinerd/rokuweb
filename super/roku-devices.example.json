@@ -1,0 +1,11 @@
+{
+  "devices": [
+    {
+      "deviceId": "roku-D000X-999.99E99999A",
+      "host": "10.1.0.17",
+      "username": "rokudev",
+      "password": "SUA_SENHA_DEV_AQUI",
+      "enabled": true
+    }
+  ]
+}

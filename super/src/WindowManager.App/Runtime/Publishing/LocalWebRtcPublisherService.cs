@@ -17,6 +17,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly RokuDevDeploymentService _rokuDevDeploymentService = new RokuDevDeploymentService();
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
@@ -282,11 +283,17 @@ public sealed class LocalWebRtcPublisherService
             DeviceType = GetValue(values, "deviceType"),
             DeviceModel = GetValue(values, "deviceModel"),
             FirmwareVersion = GetValue(values, "firmwareVersion"),
+            ChannelVersion = GetValue(values, "channelVersion"),
             ScreenWidth = ParseInt(GetValue(values, "screenWidth"), 0),
             ScreenHeight = ParseInt(GetValue(values, "screenHeight"), 0),
             NetworkAddress = remoteAddress,
             LastSeenUtc = DateTime.UtcNow.ToString("O")
         };
+
+        snapshot.ExpectedChannelVersion = GetExpectedRokuChannelVersion();
+        snapshot.UpdateAvailable =
+            !string.IsNullOrWhiteSpace(snapshot.ExpectedChannelVersion) &&
+            !string.Equals(snapshot.ChannelVersion, snapshot.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
 
         var changed = true;
         if (_registeredDisplays.TryGetValue(key, out var previous))
@@ -294,8 +301,10 @@ public sealed class LocalWebRtcPublisherService
             changed =
                 !string.Equals(previous.DeviceModel, snapshot.DeviceModel, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(previous.FirmwareVersion, snapshot.FirmwareVersion, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(previous.ChannelVersion, snapshot.ChannelVersion, StringComparison.OrdinalIgnoreCase) ||
                 previous.ScreenWidth != snapshot.ScreenWidth ||
                 previous.ScreenHeight != snapshot.ScreenHeight ||
+                previous.UpdateAvailable != snapshot.UpdateAvailable ||
                 !string.Equals(previous.NetworkAddress, snapshot.NetworkAddress, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -306,13 +315,28 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "Roku",
                 string.Format(
-                    "TV registrada/atualizada: id={0}, modelo={1}, firmware={2}, resolucao={3}x{4}, ip={5}",
+                    "TV registrada/atualizada: id={0}, modelo={1}, firmware={2}, canal={3}, esperado={4}, resolucao={5}x{6}, ip={7}",
                     snapshot.DeviceId,
                     snapshot.DeviceModel,
                     snapshot.FirmwareVersion,
+                    snapshot.ChannelVersion,
+                    snapshot.ExpectedChannelVersion,
                     snapshot.ScreenWidth,
                     snapshot.ScreenHeight,
                     snapshot.NetworkAddress));
+        }
+
+        if (snapshot.UpdateAvailable)
+        {
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "TV desatualizada detectada: id={0}, atual={1}, esperado={2}",
+                    snapshot.DeviceId,
+                    snapshot.ChannelVersion,
+                    snapshot.ExpectedChannelVersion));
+
+            _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
         }
     }
 
@@ -550,6 +574,50 @@ public sealed class LocalWebRtcPublisherService
     {
         return string.Format("{0}:{1}", port, slug);
     }
+
+    private static string GetExpectedRokuChannelVersion()
+    {
+        try
+        {
+            var current = new DirectoryInfo(AppContext.BaseDirectory);
+            while (current is not null)
+            {
+                var manifestPath = Path.Combine(current.FullName, "manifest");
+                var superPath = Path.Combine(current.FullName, "super");
+                if (File.Exists(manifestPath) && Directory.Exists(superPath))
+                {
+                    var major = "0";
+                    var minor = "0";
+                    var build = "0";
+
+                    foreach (var line in File.ReadAllLines(manifestPath))
+                    {
+                        if (line.StartsWith("major_version=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            major = line.Substring("major_version=".Length).Trim();
+                        }
+                        else if (line.StartsWith("minor_version=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            minor = line.Substring("minor_version=".Length).Trim();
+                        }
+                        else if (line.StartsWith("build_version=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            build = line.Substring("build_version=".Length).Trim();
+                        }
+                    }
+
+                    return string.Format("{0}.{1}.{2}", major, minor, build);
+                }
+
+                current = current.Parent;
+            }
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
+    }
 }
 
 [DataContract]
@@ -611,16 +679,25 @@ public sealed class RegisteredDisplaySnapshot
     [DataMember(Name = "firmwareVersion", Order = 4)]
     public string FirmwareVersion { get; set; } = string.Empty;
 
-    [DataMember(Name = "screenWidth", Order = 5)]
+    [DataMember(Name = "channelVersion", Order = 5)]
+    public string ChannelVersion { get; set; } = string.Empty;
+
+    [DataMember(Name = "expectedChannelVersion", Order = 6)]
+    public string ExpectedChannelVersion { get; set; } = string.Empty;
+
+    [DataMember(Name = "updateAvailable", Order = 7)]
+    public bool UpdateAvailable { get; set; }
+
+    [DataMember(Name = "screenWidth", Order = 8)]
     public int ScreenWidth { get; set; }
 
-    [DataMember(Name = "screenHeight", Order = 6)]
+    [DataMember(Name = "screenHeight", Order = 9)]
     public int ScreenHeight { get; set; }
 
-    [DataMember(Name = "networkAddress", Order = 7)]
+    [DataMember(Name = "networkAddress", Order = 10)]
     public string NetworkAddress { get; set; } = string.Empty;
 
-    [DataMember(Name = "lastSeenUtc", Order = 8)]
+    [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
 }
 

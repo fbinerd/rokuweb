@@ -39,8 +39,13 @@ end sub
 
 sub registerDisplay(bridgeHost as string)
     deviceInfo = CreateObject("roDeviceInfo")
+    appInfo = CreateObject("roAppInfo")
     deviceModel = deviceInfo.GetModel()
     firmwareVersion = deviceInfo.GetVersion()
+    channelVersion = ""
+    if appInfo <> invalid
+        channelVersion = appInfo.GetVersion()
+    end if
     screenWidth = "1280"
     screenHeight = "720"
     deviceId = "roku-" + deviceModel + "-" + firmwareVersion
@@ -50,6 +55,7 @@ sub registerDisplay(bridgeHost as string)
     registerUrl = registerUrl + "&deviceType=roku"
     registerUrl = registerUrl + "&deviceModel=" + urlEncode(deviceModel)
     registerUrl = registerUrl + "&firmwareVersion=" + urlEncode(firmwareVersion)
+    registerUrl = registerUrl + "&channelVersion=" + urlEncode(channelVersion)
     registerUrl = registerUrl + "&screenWidth=" + screenWidth
     registerUrl = registerUrl + "&screenHeight=" + screenHeight
 
