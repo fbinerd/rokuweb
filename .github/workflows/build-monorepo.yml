@@ -125,17 +125,6 @@ jobs:
         working-directory: ./super
         run: ./build.ps1 -Restore -Build
 
-      - name: Build SuperPainel installer
-        shell: pwsh
-        working-directory: ./super
-        run: |
-          ./Build-Installer.ps1 `
-            -ReleaseRoot '.\src\WindowManager.App\bin\Release\net481' `
-            -OutputPath '..\stable-superpainel-installer.zip' `
-            -Version '${{ steps.meta.outputs.version }}' `
-            -ReleaseId '${{ steps.meta.outputs.release_id }}' `
-            -Channel 'stable'
-
       - name: Package rokuweb
         shell: pwsh
         run: ./package.ps1 -Channel 'stable' -Output 'stable-roku.zip'
@@ -190,13 +179,6 @@ jobs:
         with:
           name: stable-roku-package-${{ steps.meta.outputs.release_id }}
           path: stable-roku.zip
-          if-no-files-found: error
-
-      - name: Upload SuperPainel installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: stable-superpainel-installer-${{ steps.meta.outputs.release_id }}
-          path: stable-superpainel-installer.zip
           if-no-files-found: error
 
       - name: Upload super release
@@ -276,17 +258,6 @@ jobs:
         working-directory: ./super
         run: ./build.ps1 -Restore -Build
 
-      - name: Build SuperPainel installer
-        shell: pwsh
-        working-directory: ./super
-        run: |
-          ./Build-Installer.ps1 `
-            -ReleaseRoot '.\src\WindowManager.App\bin\Release\net481' `
-            -OutputPath '..\develop-superpainel-installer.zip' `
-            -Version '${{ steps.meta.outputs.version }}' `
-            -ReleaseId '${{ steps.meta.outputs.release_id }}' `
-            -Channel 'develop'
-
       - name: Package rokuweb
         shell: pwsh
         run: ./package.ps1 -Channel 'develop' -Output 'develop-roku.zip'
@@ -341,13 +312,6 @@ jobs:
         with:
           name: develop-roku-package-${{ steps.meta.outputs.release_id }}
           path: develop-roku.zip
-          if-no-files-found: error
-
-      - name: Upload SuperPainel installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: develop-superpainel-installer-${{ steps.meta.outputs.release_id }}
-          path: develop-superpainel-installer.zip
           if-no-files-found: error
 
       - name: Upload super release
