@@ -16,9 +16,9 @@ public sealed class AppUpdateManifestService
         Timeout = TimeSpan.FromSeconds(8)
     };
 
-    public async Task<AppUpdateCheckResult> CheckForUpdateAsync(CancellationToken cancellationToken)
+    public async Task<AppUpdateCheckResult> CheckForUpdateAsync(string? updateChannel, CancellationToken cancellationToken)
     {
-        var manifestUrl = BuildVersionInfo.LatestManifestUrl;
+        var manifestUrl = BuildManifestUrl(updateChannel);
 
         try
         {
@@ -93,6 +93,12 @@ public sealed class AppUpdateManifestService
                 manifestUrl,
                 string.Format("Falha ao consultar atualizacoes: {0}", ex.Message));
         }
+    }
+
+    public static string BuildManifestUrl(string? updateChannel)
+    {
+        var channel = UpdateChannelNames.Normalize(updateChannel);
+        return string.Format("https://fbinerd.github.io/rokuweb/updates/{0}/latest-super.json", channel);
     }
 
     private static string BuildPreview(string body)

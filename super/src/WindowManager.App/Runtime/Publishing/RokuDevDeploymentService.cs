@@ -24,6 +24,12 @@ public sealed class RokuDevDeploymentService
     };
 
     private readonly ConcurrentDictionary<string, string> _scheduledVersions = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
+
+    public RokuDevDeploymentService(AppUpdatePreferenceStore appUpdatePreferenceStore)
+    {
+        _appUpdatePreferenceStore = appUpdatePreferenceStore;
+    }
 
     public void TryScheduleUpdate(RegisteredDisplaySnapshot display, string expectedVersion)
     {
@@ -209,7 +215,7 @@ public sealed class RokuDevDeploymentService
 
     private async Task<RokuResolvedPackage> DownloadLatestRokuPackageAsync(string expectedVersion)
     {
-        var manifestUrl = BuildLatestRokuManifestUrl();
+        var manifestUrl = await BuildLatestRokuManifestUrlAsync().ConfigureAwait(false);
         using (var response = await ManifestClient.GetAsync(manifestUrl).ConfigureAwait(false))
         {
             response.EnsureSuccessStatusCode();
@@ -266,6 +272,12 @@ public sealed class RokuDevDeploymentService
         if (string.IsNullOrWhiteSpace(root))
         {
             return string.Empty;
+        }
+
+        var channelPackage = Path.Combine(root, UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel) + "-roku.zip");
+        if (File.Exists(channelPackage))
+        {
+            return channelPackage;
         }
 
         var stablePackage = Path.Combine(root, "stable-roku.zip");
@@ -435,15 +447,11 @@ public sealed class RokuDevDeploymentService
         return display.NetworkAddress;
     }
 
-    private static string BuildLatestRokuManifestUrl()
+    private async Task<string> BuildLatestRokuManifestUrlAsync()
     {
-        var latestSuperManifest = BuildVersionInfo.LatestManifestUrl ?? string.Empty;
-        if (latestSuperManifest.IndexOf("latest-super.json", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return latestSuperManifest.Replace("latest-super.json", "latest-rokuweb.json");
-        }
-
-        return "https://fbinerd.github.io/rokuweb/updates/latest-rokuweb.json";
+        var preferences = await _appUpdatePreferenceStore.LoadAsync(default).ConfigureAwait(false);
+        var channel = UpdateChannelNames.Normalize(preferences.UpdateChannel);
+        return string.Format("https://fbinerd.github.io/rokuweb/updates/{0}/latest-rokuweb.json", channel);
     }
 
     private static string FindMonorepoRoot()

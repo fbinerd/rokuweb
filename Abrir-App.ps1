@@ -1,7 +1,24 @@
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$packagePath = Join-Path $scriptRoot "stable-roku.zip"
+try {
+    $branchName = (& git -C $scriptRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+}
+catch {
+    $branchName = "stable"
+}
+
+if ($branchName -ne "develop") {
+    $branchName = "stable"
+}
+
+$packagePath = Join-Path $scriptRoot "$branchName-roku.zip"
+if (-not (Test-Path $packagePath)) {
+    $packagePath = Join-Path $scriptRoot "stable-roku.zip"
+}
+if (-not (Test-Path $packagePath)) {
+    $packagePath = Join-Path $scriptRoot "develop-roku.zip"
+}
 if (-not (Test-Path $packagePath)) {
     $packagePath = Join-Path $scriptRoot "hello-roku.zip"
 }

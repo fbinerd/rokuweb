@@ -35,6 +35,7 @@ $build = Get-ManifestValue -Path $manifestPath -Key "build_version"
 $version = "$major.$minor.$build"
 $shortSha = "local"
 $fullSha = "local"
+$currentChannel = "stable"
 
 try {
     $resolvedShortSha = (& git -C $repoRoot rev-parse --short HEAD 2>$null).Trim()
@@ -45,6 +46,16 @@ try {
     $resolvedFullSha = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
     if (-not [string]::IsNullOrWhiteSpace($resolvedFullSha)) {
         $fullSha = $resolvedFullSha
+    }
+
+    $resolvedBranch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($resolvedBranch)) {
+        if ($resolvedBranch -eq "develop") {
+            $currentChannel = "develop"
+        }
+        elseif ($resolvedBranch -eq "stable") {
+            $currentChannel = "stable"
+        }
     }
 }
 catch {
@@ -61,6 +72,7 @@ internal static class BuildVersionInfo
     public const string Version = "$version";
     public const string ReleaseId = "$releaseId";
     public const string Commit = "$fullSha";
+    public const string CurrentBuildChannel = "$currentChannel";
     public const string LatestManifestUrl = "$manifestUrl";
 }
 "@

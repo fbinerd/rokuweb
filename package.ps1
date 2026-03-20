@@ -1,11 +1,29 @@
 param(
-    [string]$Output = "stable-roku.zip"
+    [string]$Output = "",
+    [string]$Channel = ""
 )
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$resolvedChannel = if ([string]::IsNullOrWhiteSpace($Channel)) {
+    try {
+        $branch = (& git -C $root rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        if ($branch -eq "develop") { "develop" } else { "stable" }
+    }
+    catch {
+        "stable"
+    }
+}
+else {
+    $Channel.Trim().ToLowerInvariant()
+}
+
+if ([string]::IsNullOrWhiteSpace($Output)) {
+    $Output = "$resolvedChannel-roku.zip"
+}
+
 $zipPath = Join-Path $root $Output
 $zipDirectory = Split-Path -Parent $zipPath
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-package-" + [System.Guid]::NewGuid().ToString("N"))

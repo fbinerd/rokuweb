@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - stable
+      - develop
   pull_request:
     branches:
       - stable
+      - develop
   workflow_dispatch:
 
 permissions:
@@ -37,8 +39,10 @@ jobs:
           $version = "$major.$minor.$build"
           $sha = (git rev-parse --short HEAD).Trim()
           $releaseId = "$version-$sha"
+          $channel = "${{ github.ref_name }}"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "release_id=$releaseId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -55,11 +59,11 @@ jobs:
 
       - name: Package rokuweb
         shell: pwsh
-        run: ./package.ps1 -Output stable-roku.zip
+        run: ./package.ps1 -Channel '${{ steps.meta.outputs.channel }}' -Output '${{ steps.meta.outputs.channel }}-roku.zip'
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1
+        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel '${{ steps.meta.outputs.channel }}' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/${{ steps.meta.outputs.channel }}/'
 
       - name: Prepare patch artifact content
         shell: pwsh
@@ -75,35 +79,35 @@ jobs:
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
-          name: stable-roku-package-${{ steps.meta.outputs.release_id }}
-          path: stable-roku.zip
+          name: ${{ steps.meta.outputs.channel }}-roku-package-${{ steps.meta.outputs.release_id }}
+          path: ${{ steps.meta.outputs.channel }}-roku.zip
           if-no-files-found: error
 
       - name: Upload super release
         uses: actions/upload-artifact@v4
         with:
-          name: stable-super-release-${{ steps.meta.outputs.release_id }}
+          name: ${{ steps.meta.outputs.channel }}-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
       - name: Upload versioned release patch artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: stable-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
+          name: ${{ steps.meta.outputs.channel }}-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
           path: patch-artifacts/**
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
         uses: actions/upload-artifact@v4
         with:
-          name: stable-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          name: ${{ steps.meta.outputs.channel }}-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-rokuweb.json
           if-no-files-found: error
 
       - name: Upload latest super manifest
         uses: actions/upload-artifact@v4
         with:
-          name: stable-latest-super-json-${{ steps.meta.outputs.release_id }}
+          name: ${{ steps.meta.outputs.channel }}-latest-super-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-super.json
           if-no-files-found: error
 
@@ -112,11 +116,27 @@ jobs:
         run: |
           $pagesRoot = Join-Path $PWD "pages-content"
           $updatesRoot = Join-Path $pagesRoot "updates"
+          $channelRoot = Join-Path $updatesRoot "${{ steps.meta.outputs.channel }}"
           if (Test-Path $pagesRoot) {
             Remove-Item -Recurse -Force $pagesRoot
           }
           New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
-          Copy-Item -Path dist\* -Destination $updatesRoot -Recurse -Force
+          if ((git ls-remote --exit-code origin gh-pages) 2>$null) {
+            git fetch origin gh-pages
+            $ghPagesRoot = Join-Path $PWD "gh-pages-current"
+            if (Test-Path $ghPagesRoot) {
+              Remove-Item -Recurse -Force $ghPagesRoot
+            }
+            git worktree add $ghPagesRoot origin/gh-pages
+            Copy-Item -Path (Join-Path $ghPagesRoot '*') -Destination $pagesRoot -Recurse -Force
+            git worktree remove $ghPagesRoot --force
+          }
+          New-Item -ItemType Directory -Path $channelRoot -Force | Out-Null
+          Copy-Item -Path dist\* -Destination $channelRoot -Recurse -Force
+          if ('${{ steps.meta.outputs.channel }}' -eq 'stable') {
+            Copy-Item -Path dist\latest-rokuweb.json -Destination (Join-Path $updatesRoot 'latest-rokuweb.json') -Force
+            Copy-Item -Path dist\latest-super.json -Destination (Join-Path $updatesRoot 'latest-super.json') -Force
+          }
           @"
           <!doctype html>
           <html lang="en">
@@ -127,8 +147,10 @@ jobs:
           <body>
             <h1>rokuweb updates</h1>
             <ul>
-              <li><a href="./updates/latest-rokuweb.json">latest-rokuweb.json</a></li>
-              <li><a href="./updates/latest-super.json">latest-super.json</a></li>
+              <li><a href="./updates/stable/latest-rokuweb.json">stable/latest-rokuweb.json</a></li>
+              <li><a href="./updates/stable/latest-super.json">stable/latest-super.json</a></li>
+              <li><a href="./updates/develop/latest-rokuweb.json">develop/latest-rokuweb.json</a></li>
+              <li><a href="./updates/develop/latest-super.json">develop/latest-super.json</a></li>
             </ul>
           </body>
           </html>

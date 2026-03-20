@@ -1,7 +1,8 @@
 param(
     [string]$BaseRef = "HEAD~1",
     [string]$OutputDirectory = "dist",
-    [string]$BaseUrl = "https://fbinerd.github.io/rokuweb/updates/"
+    [string]$BaseUrl = "",
+    [string]$Channel = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,27 @@ $superReleaseRoot = Join-Path $superRoot "src\WindowManager.App\bin\Release\net4
 $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-base-" + [Guid]::NewGuid().ToString("N"))
 $deltaStatus = "not_attempted"
 $deltaMessage = ""
+
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    try {
+        $branch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        if ($branch -eq "develop") {
+            $Channel = "develop"
+        }
+        else {
+            $Channel = "stable"
+        }
+    }
+    catch {
+        $Channel = "stable"
+    }
+}
+
+$Channel = $Channel.Trim().ToLowerInvariant()
+
+if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    $BaseUrl = "https://fbinerd.github.io/rokuweb/updates/$Channel/"
+}
 
 function Get-GitShortSha {
     param(
@@ -376,7 +398,7 @@ function Get-ReleaseHistory {
         [string]$BaseUrl
     )
 
-    $packagePrefix = if ($AppName -eq "super") { "stable-super" } else { "stable-rokuweb" }
+    $packagePrefix = if ($AppName -eq "super") { "$Channel-super" } else { "$Channel-rokuweb" }
 
     $pathspecs = if ($AppName -eq "super") {
         @("--", "super")
@@ -488,12 +510,12 @@ try {
     $releaseId = "$rokuVersion-$currentShortSha"
     $generatedAtUtc = [DateTime]::UtcNow.ToString("O")
 
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Output (Join-Path $OutputDirectory ("stable-rokuweb-{0}-full.zip" -f $releaseId))
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Channel $Channel -Output (Join-Path $OutputDirectory ("{0}-rokuweb-{1}-full.zip" -f $Channel, $releaseId))
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao gerar pacote completo do rokuweb."
     }
 
-    $superFullZip = Join-Path $outputRoot ("stable-super-{0}-full.zip" -f $releaseId)
+    $superFullZip = Join-Path $outputRoot ("{0}-super-{1}-full.zip" -f $Channel, $releaseId)
     New-ZipFromDirectory -DirectoryPath $superReleaseRoot -ZipPath $superFullZip
 
     $rokuFiles = Get-RokuPackageFiles -Root $repoRoot
@@ -564,14 +586,14 @@ try {
 
             $rokuDeltaFiles = @($rokuChanged | ForEach-Object { Join-Path $repoRoot $_ })
             if ($rokuDeltaFiles.Count -gt 0) {
-                $rokuDeltaZip = Join-Path $outputRoot ("stable-rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                $rokuDeltaZip = Join-Path $outputRoot ("{0}-rokuweb-{1}-delta-from-{2}.zip" -f $Channel, $releaseId, $previousReleaseId)
                 New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
                 $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
             }
 
             $superDeltaFiles = @($superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ })
             if ($superDeltaFiles.Count -gt 0) {
-                $superDeltaZip = Join-Path $outputRoot ("stable-super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+                $superDeltaZip = Join-Path $outputRoot ("{0}-super-{1}-delta-from-{2}.zip" -f $Channel, $releaseId, $previousReleaseId)
                 New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
                 $superDeltaFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superDeltaFiles
             }
@@ -609,8 +631,8 @@ try {
         previousReleaseId = $previousReleaseId
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
-        fullPackage = "stable-rokuweb-$releaseId-full.zip"
-        fullPackageUrl = "$BaseUrl" + "stable-rokuweb-$releaseId-full.zip"
+        fullPackage = "$Channel-rokuweb-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "$Channel-rokuweb-$releaseId-full.zip"
         deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
         deltaPackageUrl = if ($rokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $rokuDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
@@ -624,7 +646,7 @@ try {
         files = @($rokuCurrentFileEntries)
         deltaFiles = @($rokuDeltaFileEntries)
     }
-    Write-JsonFile -Path (Join-Path $outputRoot ("stable-rokuweb-{0}-changes.json" -f $releaseId)) -Data $rokuChangesData
+    Write-JsonFile -Path (Join-Path $outputRoot ("{0}-rokuweb-{1}-changes.json" -f $Channel, $releaseId)) -Data $rokuChangesData
 
     $superChangesData = [pscustomobject]@{
         app = "super"
@@ -634,8 +656,8 @@ try {
         previousReleaseId = $previousReleaseId
         baseRef = $BaseRef
         generatedAtUtc = $generatedAtUtc
-        fullPackage = "stable-super-$releaseId-full.zip"
-        fullPackageUrl = "$BaseUrl" + "stable-super-$releaseId-full.zip"
+        fullPackage = "$Channel-super-$releaseId-full.zip"
+        fullPackageUrl = "$BaseUrl" + "$Channel-super-$releaseId-full.zip"
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
         deltaPackageUrl = if ($superDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $superDeltaZip) } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
@@ -649,7 +671,7 @@ try {
         files = @($superCurrentFileEntries)
         deltaFiles = @($superDeltaFileEntries)
     }
-    Write-JsonFile -Path (Join-Path $outputRoot ("stable-super-{0}-changes.json" -f $releaseId)) -Data $superChangesData
+    Write-JsonFile -Path (Join-Path $outputRoot ("{0}-super-{1}-changes.json" -f $Channel, $releaseId)) -Data $superChangesData
 
     $rokuHistory = Get-ReleaseHistory `
         -RepositoryRoot $repoRoot `
@@ -686,8 +708,8 @@ try {
     Write-JsonFile -Path (Join-Path $outputRoot "latest-rokuweb.json") -Data ([pscustomobject]@{
         app = "rokuweb"
         distributionChannel = "github-pages"
-        manifestPath = "updates/latest-rokuweb.json"
-        assetBasePath = "updates/"
+        manifestPath = "updates/$Channel/latest-rokuweb.json"
+        assetBasePath = "updates/$Channel/"
         manifestUrl = "$BaseUrl" + "latest-rokuweb.json"
         currentRelease = $releaseId
         currentVersion = $rokuVersion
@@ -700,8 +722,8 @@ try {
     Write-JsonFile -Path (Join-Path $outputRoot "latest-super.json") -Data ([pscustomobject]@{
         app = "super"
         distributionChannel = "github-pages"
-        manifestPath = "updates/latest-super.json"
-        assetBasePath = "updates/"
+        manifestPath = "updates/$Channel/latest-super.json"
+        assetBasePath = "updates/$Channel/"
         manifestUrl = "$BaseUrl" + "latest-super.json"
         currentRelease = $releaseId
         currentVersion = $rokuVersion

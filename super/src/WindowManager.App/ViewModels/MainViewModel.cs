@@ -57,6 +57,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _autoUpdateEnabled;
     private AppUpdateCheckResult? _lastUpdateCheckResult;
     private string _additionalDiscoveryCidrs = string.Empty;
+    private string _selectedUpdateChannel = UpdateChannelNames.Stable;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -119,6 +120,8 @@ public sealed class MainViewModel : ViewModelBase
     public IReadOnlyList<RenderResolutionMode> ResolutionModes { get; }
 
     public IReadOnlyList<WebRtcBindMode> WebRtcBindModes { get; }
+
+    public IReadOnlyList<string> UpdateChannels { get; } = new[] { UpdateChannelNames.Stable, UpdateChannelNames.Develop };
 
     public AsyncRelayCommand CreateWindowCommand { get; }
     public AsyncRelayCommand NavigateSelectedWindowCommand { get; }
@@ -343,6 +346,19 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public string SelectedUpdateChannel
+    {
+        get => _selectedUpdateChannel;
+        set
+        {
+            var normalized = UpdateChannelNames.Normalize(value);
+            if (SetProperty(ref _selectedUpdateChannel, normalized))
+            {
+                _ = PersistUpdatePreferencesAsync();
+            }
+        }
+    }
+
     public string AdditionalDiscoveryCidrs
     {
         get => _additionalDiscoveryCidrs;
@@ -489,6 +505,7 @@ public sealed class MainViewModel : ViewModelBase
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
         AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        SelectedUpdateChannel = preferences.UpdateChannel;
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
 
@@ -606,7 +623,7 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()
     {
-        var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
+        var result = await _appUpdateManifestService.CheckForUpdateAsync(SelectedUpdateChannel, CancellationToken.None);
 
         AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
         LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
@@ -651,6 +668,7 @@ public sealed class MainViewModel : ViewModelBase
                 new AppUpdatePreferences
                 {
                     AutoUpdateEnabled = AutoUpdateEnabled,
+                    UpdateChannel = SelectedUpdateChannel,
                     AdditionalDiscoveryCidrs = AdditionalDiscoveryCidrs
                 },
                 CancellationToken.None);

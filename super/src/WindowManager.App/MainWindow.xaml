@@ -147,6 +147,13 @@
                     <StackPanel Margin="12">
                         <CheckBox Content="Baixar e aplicar atualizacoes automaticamente ao iniciar"
                                   IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Margin="0,8,0,0"
+                                   Text="Canal de atualizacao"
+                                   FontWeight="SemiBold" />
+                        <ComboBox Margin="0,8,0,0"
+                                  Height="34"
+                                  ItemsSource="{Binding UpdateChannels}"
+                                  SelectedItem="{Binding SelectedUpdateChannel, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Text="{Binding AppVersionStatus}" />
                         <TextBlock Margin="0,8,0,0"
                                    Text="{Binding LatestAvailableVersion, StringFormat=Release mais recente: {0}}"

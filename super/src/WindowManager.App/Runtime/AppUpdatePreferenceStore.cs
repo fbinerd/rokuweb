@@ -56,5 +56,8 @@ public sealed class AppUpdatePreferences
     public bool AutoUpdateEnabled { get; set; } = true;
 
     [DataMember(Order = 2)]
+    public string UpdateChannel { get; set; } = UpdateChannelNames.Stable;
+
+    [DataMember(Order = 3)]
     public string AdditionalDiscoveryCidrs { get; set; } = string.Empty;
 }

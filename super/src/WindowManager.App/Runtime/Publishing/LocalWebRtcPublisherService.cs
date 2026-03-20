@@ -17,7 +17,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
-    private readonly RokuDevDeploymentService _rokuDevDeploymentService = new RokuDevDeploymentService();
+    private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
@@ -28,9 +28,10 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
     public async Task<string> PublishAsync(WindowSession session, int serverPort, WebRtcBindMode bindMode, string specificIp, CancellationToken cancellationToken)
