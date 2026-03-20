@@ -1,0 +1,114 @@
+name: Publish Pages
+
+on:
+  workflow_run:
+    workflows:
+      - Build Monorepo
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'stable' || github.event.workflow_run.head_branch == 'develop'))
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Resolve channel
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            channel="stable"
+            run_id=""
+          else
+            channel="${{ github.event.workflow_run.head_branch }}"
+            run_id="${{ github.event.workflow_run.id }}"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download current channel pages source
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-source-${{ steps.meta.outputs.channel }}
+          path: current-pages-source
+          run-id: ${{ steps.meta.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Pages content
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          channel="${{ steps.meta.outputs.channel }}"
+          pages_root="$PWD/pages-content"
+          updates_root="$pages_root/updates"
+          origin_url="https://github.com/${{ github.repository }}.git"
+
+          rm -rf "$pages_root"
+          mkdir -p "$updates_root"
+
+          if git ls-remote --exit-code --heads "$origin_url" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$origin_url" gh-pages-current || true
+            if [ -d gh-pages-current ]; then
+              cp -a gh-pages-current/. "$pages_root/" || true
+              rm -rf "$pages_root/.git" gh-pages-current
+            fi
+          fi
+
+          if [ -d current-pages-source ]; then
+            rm -rf "$updates_root/$channel"
+            mkdir -p "$updates_root/$channel"
+            cp -a current-pages-source/. "$updates_root/$channel/"
+          fi
+
+          if [ -f "$updates_root/stable/latest-rokuweb.json" ]; then
+            cp "$updates_root/stable/latest-rokuweb.json" "$updates_root/latest-rokuweb.json"
+          fi
+          if [ -f "$updates_root/stable/latest-super.json" ]; then
+            cp "$updates_root/stable/latest-super.json" "$updates_root/latest-super.json"
+          fi
+
+          cat > "$pages_root/index.html" <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <title>rokuweb updates</title>
+          </head>
+          <body>
+            <h1>rokuweb updates</h1>
+            <ul>
+              <li><a href="./updates/stable/latest-rokuweb.json">stable/latest-rokuweb.json</a></li>
+              <li><a href="./updates/stable/latest-super.json">stable/latest-super.json</a></li>
+              <li><a href="./updates/develop/latest-rokuweb.json">develop/latest-rokuweb.json</a></li>
+              <li><a href="./updates/develop/latest-super.json">develop/latest-super.json</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages-content
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
