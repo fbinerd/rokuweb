@@ -11,21 +11,28 @@ on:
       - develop
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
+  build-channel:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel:
+          - stable
+          - develop
+
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout
+      - name: Checkout ${{ matrix.channel }}
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ matrix.channel }}
 
       - name: Compute release metadata
         id: meta
@@ -37,10 +44,8 @@ jobs:
           $version = "$major.$minor.$build"
           $sha = (git rev-parse --short HEAD).Trim()
           $releaseId = "$version-$sha"
-          $channel = "${{ github.ref_name }}"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "release_id=$releaseId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -54,11 +59,11 @@ jobs:
 
       - name: Package rokuweb
         shell: pwsh
-        run: ./package.ps1 -Channel '${{ steps.meta.outputs.channel }}' -Output '${{ steps.meta.outputs.channel }}-roku.zip'
+        run: ./package.ps1 -Channel '${{ matrix.channel }}' -Output '${{ matrix.channel }}-roku.zip'
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel '${{ steps.meta.outputs.channel }}' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/${{ steps.meta.outputs.channel }}/'
+        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel '${{ matrix.channel }}' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/${{ matrix.channel }}/'
 
       - name: Prepare patch artifact content
         shell: pwsh
@@ -74,41 +79,120 @@ jobs:
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.channel }}-roku-package-${{ steps.meta.outputs.release_id }}
-          path: ${{ steps.meta.outputs.channel }}-roku.zip
+          name: ${{ matrix.channel }}-roku-package-${{ steps.meta.outputs.release_id }}
+          path: ${{ matrix.channel }}-roku.zip
           if-no-files-found: error
 
       - name: Upload super release
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.channel }}-super-release-${{ steps.meta.outputs.release_id }}
+          name: ${{ matrix.channel }}-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
 
       - name: Upload versioned release patch artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.channel }}-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
+          name: ${{ matrix.channel }}-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
           path: patch-artifacts/**
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.channel }}-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          name: ${{ matrix.channel }}-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-rokuweb.json
           if-no-files-found: error
 
       - name: Upload latest super manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.channel }}-latest-super-json-${{ steps.meta.outputs.release_id }}
+          name: ${{ matrix.channel }}-latest-super-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-super.json
           if-no-files-found: error
 
       - name: Upload pages source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pages-source-${{ steps.meta.outputs.channel }}
+          name: pages-source-${{ matrix.channel }}
           path: dist/**
           if-no-files-found: error
+
+  publish-pages:
+    runs-on: ubuntu-latest
+    needs: build-channel
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download stable pages source
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-source-stable
+          path: pages-source-stable
+
+      - name: Download develop pages source
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-source-develop
+          path: pages-source-develop
+
+      - name: Prepare Pages content
+        shell: bash
+        run: |
+          set -euo pipefail
+          pages_root="$PWD/pages-content"
+          updates_root="$pages_root/updates"
+
+          rm -rf "$pages_root"
+          mkdir -p "$updates_root/stable" "$updates_root/develop"
+
+          if [ ! -f "pages-source-stable/latest-super.json" ] || [ ! -f "pages-source-develop/latest-super.json" ]; then
+            echo "Artifacts de Pages dos canais stable/develop nao foram encontrados."
+            exit 1
+          fi
+
+          cp -a pages-source-stable/. "$updates_root/stable/"
+          cp -a pages-source-develop/. "$updates_root/develop/"
+
+          cp "$updates_root/stable/latest-rokuweb.json" "$updates_root/latest-rokuweb.json"
+          cp "$updates_root/stable/latest-super.json" "$updates_root/latest-super.json"
+
+          cat > "$pages_root/index.html" <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <title>rokuweb updates</title>
+          </head>
+          <body>
+            <h1>rokuweb updates</h1>
+            <ul>
+              <li><a href="./updates/stable/latest-rokuweb.json">stable/latest-rokuweb.json</a></li>
+              <li><a href="./updates/stable/latest-super.json">stable/latest-super.json</a></li>
+              <li><a href="./updates/develop/latest-rokuweb.json">develop/latest-rokuweb.json</a></li>
+              <li><a href="./updates/develop/latest-super.json">develop/latest-super.json</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages-content
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
