@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -18,9 +20,20 @@ public sealed class AppSelfUpdateService
 
     public async Task<AppSelfUpdateResult> DownloadAndPrepareAsync(AppUpdateCheckResult update, CancellationToken cancellationToken)
     {
-        if (update is null || !update.UpdateAvailable || string.IsNullOrWhiteSpace(update.RecommendedPackageUrl))
+        if (update is null || !update.UpdateAvailable)
         {
             return AppSelfUpdateResult.Failure("Nenhuma atualizacao disponivel para aplicar.");
+        }
+
+        var packageUrls = update.PackageUrls?.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? Array.Empty<string>();
+        if (packageUrls.Length == 0 && !string.IsNullOrWhiteSpace(update.RecommendedPackageUrl))
+        {
+            packageUrls = new[] { update.RecommendedPackageUrl };
+        }
+
+        if (packageUrls.Length == 0)
+        {
+            return AppSelfUpdateResult.Failure("Manifesto sem pacotes validos para aplicar.");
         }
 
         var tempRoot = Path.Combine(
@@ -29,36 +42,49 @@ public sealed class AppSelfUpdateService
             "updates",
             update.LatestReleaseId);
 
-        var packageFileName = Path.GetFileName(new Uri(update.RecommendedPackageUrl).AbsolutePath);
-        var packagePath = Path.Combine(tempRoot, packageFileName);
-        var extractDirectory = Path.Combine(tempRoot, "extracted");
+        var extractRoot = Path.Combine(tempRoot, "extracted");
         var scriptPath = Path.Combine(tempRoot, "apply-update.cmd");
         var targetDirectory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var exePath = Path.Combine(targetDirectory, "WindowManager.App.exe");
+        var extractedDirectories = new List<string>();
+        var lastPackagePath = string.Empty;
 
         Directory.CreateDirectory(tempRoot);
 
-        using (var response = await HttpClient.GetAsync(update.RecommendedPackageUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
+        if (Directory.Exists(extractRoot))
         {
-            response.EnsureSuccessStatusCode();
-            using (var sourceStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-            using (var destinationStream = File.Create(packagePath))
+            Directory.Delete(extractRoot, recursive: true);
+        }
+
+        Directory.CreateDirectory(extractRoot);
+
+        for (var index = 0; index < packageUrls.Length; index++)
+        {
+            var packageUrl = packageUrls[index];
+            var packageFileName = Path.GetFileName(new Uri(packageUrl).AbsolutePath);
+            var packagePath = Path.Combine(tempRoot, string.Format("{0:D2}-{1}", index + 1, packageFileName));
+            var extractDirectory = Path.Combine(extractRoot, string.Format("{0:D2}", index + 1));
+
+            using (var response = await HttpClient.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
             {
-                await sourceStream.CopyToAsync(destinationStream).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                using (var sourceStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                using (var destinationStream = File.Create(packagePath))
+                {
+                    await sourceStream.CopyToAsync(destinationStream).ConfigureAwait(false);
+                }
             }
-        }
 
-        if (Directory.Exists(extractDirectory))
-        {
-            Directory.Delete(extractDirectory, recursive: true);
+            Directory.CreateDirectory(extractDirectory);
+            ZipFile.ExtractToDirectory(packagePath, extractDirectory);
+            extractedDirectories.Add(extractDirectory);
+            lastPackagePath = packagePath;
         }
-
-        ZipFile.ExtractToDirectory(packagePath, extractDirectory);
 
         var currentProcess = Process.GetCurrentProcess();
         var scriptContent = BuildUpdateScript(
             currentProcess.Id,
-            extractDirectory,
+            extractedDirectories.ToArray(),
             targetDirectory,
             exePath);
 
@@ -73,36 +99,40 @@ public sealed class AppSelfUpdateService
         });
 
         return AppSelfUpdateResult.Success(
-            update.RecommendedPackageUrl,
-            packagePath,
-            extractDirectory,
+            string.Join(Environment.NewLine, packageUrls),
+            lastPackagePath,
+            extractRoot,
             scriptPath);
     }
 
-    private static string BuildUpdateScript(int processId, string sourceDirectory, string targetDirectory, string executablePath)
+    private static string BuildUpdateScript(int processId, string[] sourceDirectories, string targetDirectory, string executablePath)
     {
         string Escape(string value) => value.Replace("\"", "\"\"");
 
-        return string.Join(
-            Environment.NewLine,
-            new[]
-            {
-                "@echo off",
-                "setlocal",
-                string.Format("set \"SOURCE={0}\"", Escape(sourceDirectory)),
-                string.Format("set \"TARGET={0}\"", Escape(targetDirectory)),
-                string.Format("set \"EXE={0}\"", Escape(executablePath)),
-                string.Format("set \"PID={0}\"", processId),
-                ":waitloop",
-                "tasklist /FI \"PID eq %PID%\" | findstr /I \"%PID%\" >nul",
-                "if not errorlevel 1 (",
-                "  timeout /t 1 /nobreak >nul",
-                "  goto waitloop",
-                ")",
-                "robocopy \"%SOURCE%\" \"%TARGET%\" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
-                "start \"\" \"%EXE%\"",
-                "endlocal"
-            });
+        var scriptLines = new List<string>
+        {
+            "@echo off",
+            "setlocal",
+            string.Format("set \"TARGET={0}\"", Escape(targetDirectory)),
+            string.Format("set \"EXE={0}\"", Escape(executablePath)),
+            string.Format("set \"PID={0}\"", processId),
+            ":waitloop",
+            "tasklist /FI \"PID eq %PID%\" | findstr /I \"%PID%\" >nul",
+            "if not errorlevel 1 (",
+            "  timeout /t 1 /nobreak >nul",
+            "  goto waitloop",
+            ")"
+        };
+
+        foreach (var sourceDirectory in sourceDirectories)
+        {
+            scriptLines.Add(string.Format("robocopy \"{0}\" \"%TARGET%\" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul", Escape(sourceDirectory)));
+        }
+
+        scriptLines.Add("start \"\" \"%EXE%\"");
+        scriptLines.Add("endlocal");
+
+        return string.Join(Environment.NewLine, scriptLines);
     }
 }
 

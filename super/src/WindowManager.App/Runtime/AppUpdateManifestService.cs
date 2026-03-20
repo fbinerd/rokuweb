@@ -1,5 +1,5 @@
 using System;
-using System.IO;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.Serialization;
@@ -50,9 +50,9 @@ public sealed class AppUpdateManifestService
                     }
 
                     var updateAvailable = !string.Equals(currentReleaseId, document.CurrentRelease, StringComparison.OrdinalIgnoreCase);
-                    var recommendedUrl = SelectRecommendedPackageUrl(currentReleaseId, currentVersion, latestRelease);
+                    var packagePlan = SelectRecommendedPackagePlan(currentReleaseId, document, latestRelease);
                     var message = updateAvailable
-                        ? string.Format("Atualizacao disponivel: {0} ({1}).", latestRelease.Version, latestRelease.ReleaseId)
+                        ? string.Format("Atualizacao disponivel: {0} ({1}). Plano: {2}.", latestRelease.Version, latestRelease.ReleaseId, packagePlan.Description)
                         : string.Format("Aplicativo atualizado em {0} ({1}).", currentVersion, currentReleaseId);
 
                     return AppUpdateCheckResult.Success(
@@ -62,7 +62,9 @@ public sealed class AppUpdateManifestService
                         latestRelease.Version,
                         latestRelease.ReleaseId,
                         updateAvailable,
-                        recommendedUrl,
+                        packagePlan.PrimaryUrl,
+                        packagePlan.PackageUrls,
+                        packagePlan.Description,
                         message);
                 }
             }
@@ -75,25 +77,48 @@ public sealed class AppUpdateManifestService
         }
     }
 
-    private static string SelectRecommendedPackageUrl(string currentReleaseId, string currentVersion, UpdateReleaseEntry latestRelease)
+    private static UpdatePackagePlan SelectRecommendedPackagePlan(string currentReleaseId, UpdateManifestDocument document, UpdateReleaseEntry latestRelease)
     {
-        if (!string.IsNullOrWhiteSpace(latestRelease.DeltaPackageUrl))
+        if (string.IsNullOrWhiteSpace(currentReleaseId) || document.Releases is null || document.Releases.Length == 0)
         {
-            if (!string.IsNullOrWhiteSpace(latestRelease.FullPackageRequiredIfCurrentReleaseOlderThan) &&
-                string.Equals(latestRelease.FullPackageRequiredIfCurrentReleaseOlderThan, currentReleaseId, StringComparison.OrdinalIgnoreCase))
+            return UpdatePackagePlan.Full(latestRelease.FullPackageUrl);
+        }
+
+        if (string.Equals(currentReleaseId, latestRelease.ReleaseId, StringComparison.OrdinalIgnoreCase))
+        {
+            return UpdatePackagePlan.None();
+        }
+
+        if (!document.Releases.Any(x => string.Equals(x.ReleaseId, currentReleaseId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return UpdatePackagePlan.Full(latestRelease.FullPackageUrl);
+        }
+
+        var patchUrls = new List<string>();
+        var pointerReleaseId = currentReleaseId;
+
+        while (!string.Equals(pointerReleaseId, latestRelease.ReleaseId, StringComparison.OrdinalIgnoreCase))
+        {
+            var nextRelease = document.Releases.FirstOrDefault(x =>
+                x.DeltaSupportedFromReleases?.Any(y => string.Equals(y, pointerReleaseId, StringComparison.OrdinalIgnoreCase)) == true);
+
+            if (nextRelease is null || string.IsNullOrWhiteSpace(nextRelease.DeltaPackageUrl))
             {
-                return latestRelease.DeltaPackageUrl;
+                return UpdatePackagePlan.Full(latestRelease.FullPackageUrl);
             }
 
-            if (string.IsNullOrWhiteSpace(currentReleaseId) &&
-                !string.IsNullOrWhiteSpace(latestRelease.FullPackageRequiredIfCurrentVersionOlderThan) &&
-                string.Equals(latestRelease.FullPackageRequiredIfCurrentVersionOlderThan, currentVersion, StringComparison.OrdinalIgnoreCase))
+            patchUrls.Add(nextRelease.DeltaPackageUrl);
+            pointerReleaseId = nextRelease.ReleaseId;
+
+            if (patchUrls.Count > document.Releases.Length + 1)
             {
-                return latestRelease.DeltaPackageUrl;
+                return UpdatePackagePlan.Full(latestRelease.FullPackageUrl);
             }
         }
 
-        return latestRelease.FullPackageUrl ?? string.Empty;
+        return patchUrls.Count == 0
+            ? UpdatePackagePlan.Full(latestRelease.FullPackageUrl)
+            : UpdatePackagePlan.PatchChain(patchUrls);
     }
 }
 
@@ -111,6 +136,8 @@ public sealed class AppUpdateCheckResult
     public string LatestReleaseId { get; private set; } = string.Empty;
     public bool UpdateAvailable { get; private set; }
     public string RecommendedPackageUrl { get; private set; } = string.Empty;
+    public string[] PackageUrls { get; private set; } = Array.Empty<string>();
+    public string PackageStrategyDescription { get; private set; } = string.Empty;
     public string StatusMessage { get; private set; } = string.Empty;
 
     public static AppUpdateCheckResult Success(
@@ -121,6 +148,8 @@ public sealed class AppUpdateCheckResult
         string latestReleaseId,
         bool updateAvailable,
         string recommendedPackageUrl,
+        IEnumerable<string>? packageUrls,
+        string packageStrategyDescription,
         string statusMessage)
     {
         return new AppUpdateCheckResult
@@ -133,6 +162,8 @@ public sealed class AppUpdateCheckResult
             LatestReleaseId = latestReleaseId,
             UpdateAvailable = updateAvailable,
             RecommendedPackageUrl = recommendedPackageUrl ?? string.Empty,
+            PackageUrls = packageUrls?.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? Array.Empty<string>(),
+            PackageStrategyDescription = packageStrategyDescription ?? string.Empty,
             StatusMessage = statusMessage ?? string.Empty
         };
     }
@@ -149,6 +180,8 @@ public sealed class AppUpdateCheckResult
             LatestReleaseId = string.Empty,
             UpdateAvailable = false,
             RecommendedPackageUrl = string.Empty,
+            PackageUrls = Array.Empty<string>(),
+            PackageStrategyDescription = string.Empty,
             StatusMessage = statusMessage ?? string.Empty
         };
     }
@@ -181,9 +214,54 @@ public sealed class UpdateReleaseEntry
 
     [DataMember(Name = "deltaPackageUrl")]
     public string DeltaPackageUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "deltaSupportedFromReleases")]
+    public string[] DeltaSupportedFromReleases { get; set; } = Array.Empty<string>();
+
     [DataMember(Name = "fullPackageRequiredIfCurrentVersionOlderThan")]
     public string FullPackageRequiredIfCurrentVersionOlderThan { get; set; } = string.Empty;
 
     [DataMember(Name = "fullPackageRequiredIfCurrentReleaseOlderThan")]
     public string FullPackageRequiredIfCurrentReleaseOlderThan { get; set; } = string.Empty;
+}
+
+internal sealed class UpdatePackagePlan
+{
+    private UpdatePackagePlan()
+    {
+    }
+
+    public string PrimaryUrl { get; private set; } = string.Empty;
+    public string[] PackageUrls { get; private set; } = Array.Empty<string>();
+    public string Description { get; private set; } = string.Empty;
+
+    public static UpdatePackagePlan None()
+    {
+        return new UpdatePackagePlan
+        {
+            PackageUrls = Array.Empty<string>(),
+            Description = "sem download"
+        };
+    }
+
+    public static UpdatePackagePlan Full(string url)
+    {
+        return new UpdatePackagePlan
+        {
+            PrimaryUrl = url ?? string.Empty,
+            PackageUrls = string.IsNullOrWhiteSpace(url) ? Array.Empty<string>() : new string[] { url ?? string.Empty },
+            Description = "pacote completo"
+        };
+    }
+
+    public static UpdatePackagePlan PatchChain(IEnumerable<string> urls)
+    {
+        var packageUrls = urls.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+        return new UpdatePackagePlan
+        {
+            PrimaryUrl = packageUrls.FirstOrDefault() ?? string.Empty,
+            PackageUrls = packageUrls,
+            Description = string.Format("cadeia de {0} patch(es)", packageUrls.Length)
+        };
+    }
 }
