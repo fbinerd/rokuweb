@@ -8,6 +8,8 @@ sub init()
     m.isFullscreen = false
     m.isKeyboardOpen = false
     m.isClosingKeyboard = false
+    m.isFullscreenRefreshInFlight = false
+    m.previewRevision = 0
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
@@ -26,6 +28,7 @@ sub init()
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
+    m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
     m.panelGroups = [
@@ -66,6 +69,7 @@ sub init()
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
+    m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
@@ -328,13 +332,16 @@ sub showFullscreen()
     m.bufferFullscreenPoster.visible = false
     m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
+    m.isFullscreenRefreshInFlight = false
     updateCursorMarker()
+    startFullscreenStream()
     m.top.setFocus(true)
 end sub
 
 sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
+    stopFullscreenStream()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -498,12 +505,13 @@ sub sendTextCommand(textValue as string)
 end sub
 
 sub refreshFullscreenPreview()
-    if not m.isFullscreen or m.windowEntries.Count() = 0
+    if not m.isFullscreen or m.windowEntries.Count() = 0 or m.isFullscreenRefreshInFlight
         return
     end if
 
     entry = m.windowEntries[m.selectedIndex]
     if entry.thumbnailUrl <> invalid and entry.thumbnailUrl <> ""
+        m.isFullscreenRefreshInFlight = true
         m.bufferFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
     end if
 end sub
@@ -519,6 +527,10 @@ sub scheduleFullscreenRefresh()
 end sub
 
 sub onPreviewRefreshTimerFire()
+    refreshFullscreenPreview()
+end sub
+
+sub onFullscreenStreamTimerFire()
     refreshFullscreenPreview()
 end sub
 
@@ -623,6 +635,11 @@ sub onBufferPosterLoadStatusChanged()
         return
     end if
 
+    if m.bufferFullscreenPoster.loadStatus = "failed"
+        m.isFullscreenRefreshInFlight = false
+        return
+    end if
+
     if m.bufferFullscreenPoster.loadStatus <> "ready"
         return
     end if
@@ -634,6 +651,23 @@ sub onBufferPosterLoadStatusChanged()
     m.activeFullscreenPoster = m.bufferFullscreenPoster
     m.bufferFullscreenPoster = previousActive
     m.bufferFullscreenPoster.visible = false
+    m.isFullscreenRefreshInFlight = false
+end sub
+
+sub startFullscreenStream()
+    if m.fullscreenStreamTimer = invalid
+        return
+    end if
+
+    m.fullscreenStreamTimer.control = "stop"
+    m.fullscreenStreamTimer.control = "start"
+end sub
+
+sub stopFullscreenStream()
+    m.isFullscreenRefreshInFlight = false
+    if m.fullscreenStreamTimer <> invalid
+        m.fullscreenStreamTimer.control = "stop"
+    end if
 end sub
 
 function getString(value as dynamic, fallback as string) as string
@@ -658,8 +692,8 @@ function appendCacheBust(url as string) as string
         separator = "&"
     end if
 
-    now = CreateObject("roDateTime")
-    return url + separator + "ts=" + now.AsSeconds().ToStr()
+    m.previewRevision = m.previewRevision + 1
+    return url + separator + "ts=" + m.previewRevision.ToStr()
 end function
 
 function trimTitle(title as string) as string
