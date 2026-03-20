@@ -301,19 +301,71 @@ jobs:
           set -euo pipefail
           pages_root="$PWD/pages-content"
           updates_root="$pages_root/updates"
-          origin_url="https://github.com/${{ github.repository }}.git"
+          base_url="https://fbinerd.github.io/rokuweb/updates"
+
+          fetch_channel_from_pages() {
+            channel="$1"
+            channel_root="$updates_root/$channel"
+            channel_url="$base_url/$channel"
+            index_url="$channel_url/channel-file-index.json"
+
+            mkdir -p "$channel_root"
+
+            if curl --fail --silent --show-error "$index_url" -o "$channel_root/channel-file-index.json"; then
+              python3 - "$channel_root/channel-file-index.json" "$channel_root" "$channel_url" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.request
+
+index_path = pathlib.Path(sys.argv[1])
+channel_root = pathlib.Path(sys.argv[2])
+channel_url = sys.argv[3].rstrip("/")
+
+data = json.loads(index_path.read_text(encoding="utf-8"))
+for relative in data.get("files", []):
+    relative = relative.strip("/")
+    destination = channel_root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(f"{channel_url}/{relative}", destination)
+PY
+              return 0
+            fi
+
+            rm -f "$channel_root/channel-file-index.json"
+
+            if curl --fail --silent --show-error "$channel_url/latest-super.json" -o "$channel_root/latest-super.json" && \
+               curl --fail --silent --show-error "$channel_url/latest-rokuweb.json" -o "$channel_root/latest-rokuweb.json"; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          write_channel_index() {
+            channel="$1"
+            channel_root="$updates_root/$channel"
+
+            python3 - "$channel_root" <<'PY'
+import json
+import pathlib
+import sys
+
+channel_root = pathlib.Path(sys.argv[1])
+files = []
+for path in sorted(channel_root.rglob("*")):
+    if path.is_file():
+        files.append(path.relative_to(channel_root).as_posix())
+
+(channel_root / "channel-file-index.json").write_text(
+    json.dumps({"files": files}, indent=2),
+    encoding="utf-8"
+)
+PY
+          }
 
           rm -rf "$pages_root"
           mkdir -p "$updates_root/stable" "$updates_root/develop"
-
-          if git ls-remote --exit-code --heads "$origin_url" gh-pages >/dev/null 2>&1; then
-            git clone --depth 1 --branch gh-pages "$origin_url" gh-pages-current || true
-            if [ -d gh-pages-current ]; then
-              cp -a gh-pages-current/. "$pages_root/" || true
-              rm -rf "$pages_root/.git" gh-pages-current
-              mkdir -p "$updates_root/stable" "$updates_root/develop"
-            fi
-          fi
 
           if [ -d "pages-source-stable" ]; then
             rm -rf "$updates_root/stable"
@@ -328,19 +380,26 @@ jobs:
           fi
 
           if [ ! -f "$updates_root/stable/latest-super.json" ]; then
-            echo "Canal stable ausente no conteudo montado do Pages."
-            exit 1
+            fetch_channel_from_pages "stable" || {
+              echo "Canal stable ausente no conteudo montado do Pages."
+              exit 1
+            }
           fi
 
           if [ ! -f "$updates_root/develop/latest-super.json" ]; then
-            echo "Canal develop ausente no conteudo montado do Pages."
-            exit 1
+            fetch_channel_from_pages "develop" || {
+              echo "Canal develop ausente no conteudo montado do Pages."
+              exit 1
+            }
           fi
 
           if [ ! -f "$updates_root/stable/latest-rokuweb.json" ] || [ ! -f "$updates_root/develop/latest-rokuweb.json" ]; then
             echo "Artifacts de Pages dos canais stable/develop nao foram encontrados."
             exit 1
           fi
+
+          write_channel_index "stable"
+          write_channel_index "develop"
 
           cp "$updates_root/stable/latest-rokuweb.json" "$updates_root/latest-rokuweb.json"
           cp "$updates_root/stable/latest-super.json" "$updates_root/latest-super.json"
