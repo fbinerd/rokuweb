@@ -577,6 +577,11 @@ public sealed class LocalWebRtcPublisherService
 
     private static string GetExpectedRokuChannelVersion()
     {
+        if (!string.IsNullOrWhiteSpace(BuildVersionInfo.ReleaseId))
+        {
+            return BuildVersionInfo.ReleaseId;
+        }
+
         try
         {
             var current = new DirectoryInfo(AppContext.BaseDirectory);

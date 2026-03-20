@@ -42,10 +42,7 @@ sub registerDisplay(bridgeHost as string)
     appInfo = CreateObject("roAppInfo")
     deviceModel = deviceInfo.GetModel()
     firmwareVersion = deviceInfo.GetVersion()
-    channelVersion = ""
-    if appInfo <> invalid
-        channelVersion = appInfo.GetVersion()
-    end if
+    channelVersion = GetRokuChannelReleaseId()
     screenWidth = "1280"
     screenHeight = "720"
     deviceId = "roku-" + deviceModel + "-" + firmwareVersion
