@@ -255,7 +255,21 @@ jobs:
       - resolve-builds
       - build-stable
       - build-develop
-    if: github.event_name != 'pull_request'
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (
+        needs.build-stable.result == 'success' ||
+        needs.build-stable.result == 'skipped'
+      ) &&
+      (
+        needs.build-develop.result == 'success' ||
+        needs.build-develop.result == 'skipped'
+      ) &&
+      (
+        needs.resolve-builds.outputs.build_stable == 'true' ||
+        needs.resolve-builds.outputs.build_develop == 'true'
+      )
 
     permissions:
       contents: read
