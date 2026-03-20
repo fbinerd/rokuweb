@@ -38,6 +38,7 @@ sub init()
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
+    m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
@@ -80,6 +81,7 @@ sub init()
     ]
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.panelRefreshTimer.observeField("fire", "onPanelRefreshTimerFire")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
@@ -202,11 +204,11 @@ sub reportInputKey(key as string)
     m.inputLogTask.control = "RUN"
 end sub
 
-sub loadWindows()
-    if m.isAutoConnecting
+sub loadWindows(silent = false as boolean)
+    if not silent and m.isAutoConnecting
         m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
         m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " de " + m.autoConnectMaxAttempts.ToStr()
-    else
+    else if not silent
         m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
         m.subtitleLabel.text = "Aguarde a resposta do servidor"
     end if
@@ -256,9 +258,12 @@ sub applyBridgeResponse()
         return
     end if
 
+    previousSelectedId = ""
+    if m.windowEntries.Count() > 0 and m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
+        previousSelectedId = getString(m.windowEntries[m.selectedIndex].id, "")
+    end if
+
     m.windowEntries = []
-    m.selectedIndex = 0
-    m.pageStart = 0
 
     for each window in json.windows
         m.windowEntries.Push({
@@ -273,12 +278,26 @@ sub applyBridgeResponse()
     if m.windowEntries.Count() = 0
         m.statusLabel.text = "Bridge conectado, sem paineis disponiveis"
         m.subtitleLabel.text = "Nenhuma janela publicada no app .NET ainda."
+        stopPanelRefresh()
         hideGrid()
         return
     end if
 
+    m.selectedIndex = 0
+    if previousSelectedId <> ""
+        for i = 0 to m.windowEntries.Count() - 1
+            if getString(m.windowEntries[i].id, "") = previousSelectedId
+                m.selectedIndex = i
+                exit for
+            end if
+        end for
+    end if
+
+    m.pageStart = 0
+
     m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
     m.isAutoConnecting = false
+    startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
 end sub
@@ -287,6 +306,31 @@ sub beginAutoConnect()
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
     loadWindows()
+end sub
+
+sub startPanelRefresh()
+    if m.panelRefreshTimer = invalid
+        return
+    end if
+
+    m.panelRefreshTimer.control = "stop"
+    m.panelRefreshTimer.control = "start"
+end sub
+
+sub stopPanelRefresh()
+    if m.panelRefreshTimer = invalid
+        return
+    end if
+
+    m.panelRefreshTimer.control = "stop"
+end sub
+
+sub onPanelRefreshTimerFire()
+    if m.isAutoConnecting or m.isKeyboardOpen or m.isFullscreen
+        return
+    end if
+
+    loadWindows(true)
 end sub
 
 sub scheduleAutoConnectRetry()
@@ -399,6 +443,7 @@ sub showFullscreen()
     m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
+    stopPanelRefresh()
     updateCursorMarker()
     startFullscreenStream()
     m.top.setFocus(true)
@@ -414,6 +459,7 @@ sub hideFullscreen()
     m.titleLabel.visible = true
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
+    startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
 end sub
