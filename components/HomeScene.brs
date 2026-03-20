@@ -1,5 +1,6 @@
 sub init()
-    m.bridgeHost = "10.1.0.10:8090"
+    m.defaultBridgeHost = "superweb.local:8090"
+    m.bridgeHost = m.defaultBridgeHost
     m.windowEntries = []
     m.selectedIndex = 0
     m.pageStart = 0
@@ -13,8 +14,11 @@ sub init()
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
+    m.autoConnectAttempts = 0
+    m.autoConnectMaxAttempts = 10
+    m.isAutoConnecting = true
+    m.keyboardPurpose = ""
     deviceInfo = CreateObject("roDeviceInfo")
-    appInfo = CreateObject("roAppInfo")
     m.deviceModel = deviceInfo.GetModel()
     m.firmwareVersion = deviceInfo.GetVersion()
     m.channelVersion = GetRokuChannelReleaseId()
@@ -35,6 +39,7 @@ sub init()
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
+    m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
@@ -76,6 +81,7 @@ sub init()
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
+    m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
@@ -84,10 +90,11 @@ sub init()
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
 
-    m.statusLabel.text = "Canal iniciado"
-    m.subtitleLabel.text = "Pressione OK para consultar o servidor"
+    m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
+    m.subtitleLabel.text = "Procurando automaticamente o super..."
     m.versionLabel.text = "Canal " + GetRokuChannelReleaseId()
     hideGrid()
+    beginAutoConnect()
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
@@ -161,7 +168,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if m.windowEntries.Count() > 0
             showFullscreen()
         else
-            loadWindows()
+            if m.isAutoConnecting
+                loadWindows()
+            else
+                promptForBridgeHost()
+            end if
         end if
         return true
     end if
@@ -191,8 +202,13 @@ sub reportInputKey(key as string)
 end sub
 
 sub loadWindows()
-    m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
-    m.subtitleLabel.text = "Aguarde a resposta do servidor"
+    if m.isAutoConnecting
+        m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
+        m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " de " + m.autoConnectMaxAttempts.ToStr()
+    else
+        m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
+        m.subtitleLabel.text = "Aguarde a resposta do servidor"
+    end if
     m.bridgeRequestTask.responseCode = -1
     m.bridgeRequestTask.responseBody = ""
     m.bridgeRequestTask.errorMessage = ""
@@ -213,8 +229,20 @@ sub applyBridgeResponse()
     responseCode = m.bridgeRequestTask.responseCode
 
     if responseCode <> 200 or responseBody = invalid or responseBody = ""
-        m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
-        m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
+        if m.isAutoConnecting
+            m.autoConnectAttempts = m.autoConnectAttempts + 1
+            if m.autoConnectAttempts < m.autoConnectMaxAttempts
+                scheduleAutoConnectRetry()
+            else
+                m.isAutoConnecting = false
+                m.statusLabel.text = "Nao foi possivel encontrar " + m.defaultBridgeHost
+                m.subtitleLabel.text = "Informe o IP do super para conectar"
+                promptForBridgeHost()
+            end if
+        else
+            m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
+            m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
+        end if
         hideGrid()
         return
     end if
@@ -249,8 +277,33 @@ sub applyBridgeResponse()
     end if
 
     m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
+    m.isAutoConnecting = false
     refreshGrid()
     m.top.setFocus(true)
+end sub
+
+sub beginAutoConnect()
+    m.autoConnectAttempts = 0
+    m.isAutoConnecting = true
+    loadWindows()
+end sub
+
+sub scheduleAutoConnectRetry()
+    if m.autoConnectTimer = invalid
+        loadWindows()
+        return
+    end if
+
+    m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
+    m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente..."
+    m.autoConnectTimer.control = "stop"
+    m.autoConnectTimer.control = "start"
+end sub
+
+sub onAutoConnectTimerFire()
+    if m.isAutoConnecting
+        loadWindows()
+    end if
 end sub
 
 sub refreshGrid()
@@ -595,6 +648,29 @@ sub openKeyboardDialog(initialValue as string, multiline as boolean)
     m.top.dialog = keyboard
 end sub
 
+sub promptForBridgeHost()
+    if m.isKeyboardOpen
+        return
+    end if
+
+    keyboard = CreateObject("roSGNode", "KeyboardDialog")
+    if keyboard = invalid
+        m.statusLabel.text = "Entrada de IP indisponivel nesta Roku"
+        return
+    end if
+
+    keyboard.title = "IP do super"
+    keyboard.text = m.bridgeHost
+    keyboard.buttons = ["Conectar", "Cancelar"]
+    keyboard.observeField("buttonSelected", "onKeyboardDialogButtonSelected")
+    keyboard.observeField("wasClosed", "onKeyboardDialogWasClosed")
+
+    m.keyboardPurpose = "bridge-host"
+    m.keyboardDialog = keyboard
+    m.isKeyboardOpen = true
+    m.top.dialog = keyboard
+end sub
+
 sub closeKeyboardDialog()
     if m.isClosingKeyboard
         return
@@ -609,6 +685,7 @@ sub closeKeyboardDialog()
 
     m.keyboardDialog = invalid
     m.isKeyboardOpen = false
+    m.keyboardPurpose = ""
     m.top.dialog = invalid
     if m.isFullscreen
         m.top.setFocus(true)
@@ -622,6 +699,7 @@ sub onKeyboardDialogButtonSelected()
     end if
 
     selectedButton = m.keyboardDialog.buttonSelected
+    purpose = m.keyboardPurpose
     enteredText = ""
     if m.keyboardDialog.text <> invalid
         enteredText = m.keyboardDialog.text
@@ -630,7 +708,14 @@ sub onKeyboardDialogButtonSelected()
     closeKeyboardDialog()
 
     if selectedButton = 0
-        sendTextCommand(enteredText)
+        if purpose = "bridge-host"
+            m.bridgeHost = normalizeBridgeHost(enteredText)
+            m.statusLabel.text = "Conectando em " + m.bridgeHost
+            m.subtitleLabel.text = "Tentativa manual iniciada"
+            loadWindows()
+        else
+            sendTextCommand(enteredText)
+        end if
     end if
 end sub
 
@@ -714,4 +799,17 @@ function trimTitle(title as string) as string
     end if
 
     return Left(title, 31) + "..."
+end function
+
+function normalizeBridgeHost(value as string) as string
+    host = Trim(value)
+    if host = ""
+        return m.defaultBridgeHost
+    end if
+
+    if Instr(1, host, ":") = 0
+        host = host + ":8090"
+    end if
+
+    return host
 end function
