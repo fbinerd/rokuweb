@@ -33,7 +33,8 @@ public sealed class AppDataMaintenanceService
 
         if (Directory.Exists(DataRoot))
         {
-            foreach (var file in Directory.GetFiles(DataRoot, "*", SearchOption.AllDirectories))
+            foreach (var file in Directory.GetFiles(DataRoot, "*", SearchOption.AllDirectories)
+                .Where(x => !IsInsideCefDirectory(x)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var relativePath = GetRelativePath(DataRoot, file);
@@ -112,24 +113,6 @@ public sealed class AppDataMaintenanceService
             File.Delete(file);
         }
 
-        var cefRoot = AppDataPaths.CefRoot;
-        if (!Directory.Exists(cefRoot))
-        {
-            return;
-        }
-
-        var cacheDirectory = Path.Combine(cefRoot, "cache");
-        foreach (var entry in Directory.GetFileSystemEntries(cefRoot).Where(x => !string.Equals(x, cacheDirectory, StringComparison.OrdinalIgnoreCase)))
-        {
-            if (Directory.Exists(entry))
-            {
-                Directory.Delete(entry, recursive: true);
-            }
-            else if (File.Exists(entry))
-            {
-                File.Delete(entry);
-            }
-        }
     }
 
     private static string GetRelativePath(string root, string path)
@@ -141,5 +124,11 @@ public sealed class AppDataMaintenanceService
         }
 
         return path.Substring(normalizedRoot.Length).Replace("\\", "/");
+    }
+
+    private static bool IsInsideCefDirectory(string path)
+    {
+        var cefRoot = AppDataPaths.CefRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return path.StartsWith(cefRoot, StringComparison.OrdinalIgnoreCase);
     }
 }
