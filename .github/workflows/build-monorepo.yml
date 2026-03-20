@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -48,9 +46,6 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
 
       - name: Build super
         shell: pwsh
@@ -111,123 +106,9 @@ jobs:
           path: dist/latest-super.json
           if-no-files-found: error
 
-      - name: Prepare Pages content
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pagesRoot = Join-Path $PWD "pages-content"
-          $updatesRoot = Join-Path $pagesRoot "updates"
-          $currentChannel = '${{ steps.meta.outputs.channel }}'
-          $currentDistRoot = Join-Path $PWD "dist"
-          $channels = @('stable', 'develop')
-
-          function Copy-ChannelDist {
-            param(
-              [Parameter(Mandatory = $true)]
-              [string]$SourceDist,
-              [Parameter(Mandatory = $true)]
-              [string]$ChannelName
-            )
-
-            $targetRoot = Join-Path $updatesRoot $ChannelName
-            New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
-            Copy-Item -Path (Join-Path $SourceDist '*') -Destination $targetRoot -Recurse -Force
-          }
-
-          if (Test-Path $pagesRoot) {
-            Remove-Item -Recurse -Force $pagesRoot
-          }
-          New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
-
-          foreach ($channel in $channels) {
-            if ($channel -eq $currentChannel) {
-              Copy-ChannelDist -SourceDist $currentDistRoot -ChannelName $channel
-              continue
-            }
-
-            $tempRepo = Join-Path $PWD ("pages-channel-" + $channel)
-            try {
-              if (Test-Path $tempRepo) {
-                Remove-Item -Recurse -Force $tempRepo
-              }
-
-              $originUrl = (git remote get-url origin).Trim()
-              if ([string]::IsNullOrWhiteSpace($originUrl)) {
-                throw "Nao foi possivel resolver a URL do remoto origin."
-              }
-
-              git clone --depth 1 --branch $channel $originUrl $tempRepo
-              if ($LASTEXITCODE -ne 0) {
-                throw "Falha ao clonar a branch '$channel' para gerar o feed do Pages."
-              }
-
-              Push-Location $tempRepo
-              try {
-                Push-Location (Join-Path $tempRepo 'super')
-                try {
-                  powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Restore -Build
-                  if ($LASTEXITCODE -ne 0) {
-                    throw "Falha ao compilar o super para o canal '$channel'."
-                  }
-                }
-                finally {
-                  Pop-Location
-                }
-
-                powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-ReleaseArtifacts.ps1 -Channel $channel -BaseUrl ("https://fbinerd.github.io/rokuweb/updates/{0}/" -f $channel)
-                if ($LASTEXITCODE -ne 0) {
-                  throw "Falha ao gerar artefatos para o canal '$channel'."
-                }
-              }
-              finally {
-                Pop-Location
-              }
-
-              Copy-ChannelDist -SourceDist (Join-Path $tempRepo 'dist') -ChannelName $channel
-            }
-            finally {
-              if (Test-Path $tempRepo) {
-                Remove-Item -Recurse -Force $tempRepo
-              }
-            }
-          }
-
-          Copy-Item -Path (Join-Path $updatesRoot 'stable\latest-rokuweb.json') -Destination (Join-Path $updatesRoot 'latest-rokuweb.json') -Force
-          Copy-Item -Path (Join-Path $updatesRoot 'stable\latest-super.json') -Destination (Join-Path $updatesRoot 'latest-super.json') -Force
-
-          @"
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-            <title>rokuweb updates</title>
-          </head>
-          <body>
-            <h1>rokuweb updates</h1>
-            <ul>
-              <li><a href="./updates/stable/latest-rokuweb.json">stable/latest-rokuweb.json</a></li>
-              <li><a href="./updates/stable/latest-super.json">stable/latest-super.json</a></li>
-              <li><a href="./updates/develop/latest-rokuweb.json">develop/latest-rokuweb.json</a></li>
-              <li><a href="./updates/develop/latest-super.json">develop/latest-super.json</a></li>
-            </ul>
-          </body>
-          </html>
-          "@ | Set-Content -Path (Join-Path $pagesRoot "index.html") -Encoding UTF8
-          exit 0
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+      - name: Upload pages source artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: pages-content
-
-  deploy-pages:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name != 'pull_request'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: pages-source-${{ steps.meta.outputs.channel }}
+          path: dist/**
+          if-no-files-found: error
