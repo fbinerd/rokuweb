@@ -58,6 +58,16 @@ public sealed class RokuDevDeploymentService
         });
     }
 
+    public Task<string> DeployNowAsync(RegisteredDisplaySnapshot display, string expectedVersion)
+    {
+        if (display is null || string.IsNullOrWhiteSpace(expectedVersion))
+        {
+            return Task.FromResult("parametros_invalidos");
+        }
+
+        return DeployAsync(display, expectedVersion);
+    }
+
     private async Task<string> DeployAsync(RegisteredDisplaySnapshot display, string expectedVersion)
     {
         try

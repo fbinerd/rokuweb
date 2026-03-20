@@ -13,6 +13,12 @@ sub init()
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
+    deviceInfo = CreateObject("roDeviceInfo")
+    appInfo = CreateObject("roAppInfo")
+    m.deviceModel = deviceInfo.GetModel()
+    m.firmwareVersion = deviceInfo.GetVersion()
+    m.channelVersion = GetRokuChannelReleaseId()
+    m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -177,6 +183,10 @@ sub reportInputKey(key as string)
     m.inputLogTask.keyName = key
     m.inputLogTask.fullscreen = m.isFullscreen
     m.inputLogTask.selectedIndex = m.selectedIndex
+    m.inputLogTask.deviceId = m.deviceId
+    m.inputLogTask.deviceModel = m.deviceModel
+    m.inputLogTask.firmwareVersion = m.firmwareVersion
+    m.inputLogTask.channelVersion = m.channelVersion
     m.inputLogTask.control = "RUN"
 end sub
 

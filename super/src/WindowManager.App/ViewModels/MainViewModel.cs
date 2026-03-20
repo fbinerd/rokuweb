@@ -101,6 +101,7 @@ public sealed class MainViewModel : ViewModelBase
         DeleteSelectedPanelCommand = new AsyncRelayCommand(DeleteSelectedPanelAsync, CanDeleteSelectedPanel);
         SearchUpdatesCommand = new AsyncRelayCommand(SearchUpdatesAsync, CanSearchUpdates);
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, CanInstallUpdate);
+        UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
 
         UpdateBridgeSnapshot();
     }
@@ -133,6 +134,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand DeleteSelectedPanelCommand { get; }
     public AsyncRelayCommand SearchUpdatesCommand { get; }
     public AsyncRelayCommand InstallUpdateCommand { get; }
+    public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -551,6 +553,17 @@ public sealed class MainViewModel : ViewModelBase
         {
             IsCheckingForUpdates = false;
         }
+    }
+
+    private async Task UpdateConnectedTvsAsync()
+    {
+        UpdateStatusMessage = "Verificando TVs conectadas para sideload...";
+        AppLog.Write("RokuDeploy", "Disparo manual solicitado para atualizar TVs conectadas.");
+
+        var updatedCount = await _webRtcPublisherService.ForceUpdateConnectedDisplaysAsync(CancellationToken.None);
+        UpdateStatusMessage = updatedCount <= 0
+            ? "Nenhuma TV conectada precisava de atualizacao."
+            : string.Format("{0} TV(s) receberam sideload de atualizacao.", updatedCount);
     }
 
     private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()

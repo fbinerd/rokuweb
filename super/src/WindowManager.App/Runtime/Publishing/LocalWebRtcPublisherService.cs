@@ -71,6 +71,57 @@ public sealed class LocalWebRtcPublisherService
         return Task.CompletedTask;
     }
 
+    public async Task<int> ForceUpdateConnectedDisplaysAsync(CancellationToken cancellationToken)
+    {
+        var expectedVersion = GetExpectedRokuChannelVersion();
+        var displays = _registeredDisplays.Values.ToArray();
+        var updatedCount = 0;
+
+        foreach (var display in displays)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            display.ExpectedChannelVersion = expectedVersion;
+            display.UpdateAvailable =
+                !string.IsNullOrWhiteSpace(display.ExpectedChannelVersion) &&
+                !string.Equals(display.ChannelVersion, display.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
+
+            if (!display.UpdateAvailable)
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "TV ja esta atualizada e foi ignorada no disparo manual: id={0}, canal={1}",
+                        display.DeviceId,
+                        display.ChannelVersion));
+                continue;
+            }
+
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Atualizacao manual disparada para TV id={0}, atual={1}, esperado={2}",
+                    display.DeviceId,
+                    display.ChannelVersion,
+                    display.ExpectedChannelVersion));
+
+            var result = await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Resultado do sideload manual para TV id={0}: {1}",
+                    display.DeviceId,
+                    result));
+
+            if (string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+            {
+                updatedCount++;
+            }
+        }
+
+        return updatedCount;
+    }
+
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
@@ -352,6 +403,7 @@ public sealed class LocalWebRtcPublisherService
         var key = GetValue(values, "key");
         var fullscreen = GetValue(values, "fullscreen");
         var selected = GetValue(values, "selected");
+        PromoteInputLogToRegisteredDisplay(values, remoteAddress);
 
         AppLog.Write(
             "RokuInput",
@@ -361,6 +413,82 @@ public sealed class LocalWebRtcPublisherService
                 fullscreen,
                 selected,
                 remoteAddress));
+    }
+
+    private void PromoteInputLogToRegisteredDisplay(Dictionary<string, string> values, string remoteAddress)
+    {
+        var deviceId = GetValue(values, "deviceId");
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            if (string.IsNullOrWhiteSpace(remoteAddress))
+            {
+                return;
+            }
+
+            deviceId = "roku-" + remoteAddress.Replace(".", "-");
+        }
+
+        var channelVersion = GetValue(values, "channelVersion");
+        if (string.IsNullOrWhiteSpace(channelVersion) && _registeredDisplays.TryGetValue(deviceId, out var existing))
+        {
+            channelVersion = existing.ChannelVersion;
+        }
+
+        var snapshot = new RegisteredDisplaySnapshot
+        {
+            DeviceId = deviceId,
+            DeviceType = "roku",
+            DeviceModel = GetValue(values, "deviceModel"),
+            FirmwareVersion = GetValue(values, "firmwareVersion"),
+            ChannelVersion = channelVersion,
+            NetworkAddress = remoteAddress,
+            LastSeenUtc = DateTime.UtcNow.ToString("O")
+        };
+
+        snapshot.ExpectedChannelVersion = GetExpectedRokuChannelVersion();
+        snapshot.UpdateAvailable =
+            !string.IsNullOrWhiteSpace(snapshot.ExpectedChannelVersion) &&
+            !string.Equals(snapshot.ChannelVersion, snapshot.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
+
+        var changed = true;
+        if (_registeredDisplays.TryGetValue(deviceId, out var previous))
+        {
+            changed =
+                !string.Equals(previous.DeviceModel, snapshot.DeviceModel, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(previous.FirmwareVersion, snapshot.FirmwareVersion, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(previous.ChannelVersion, snapshot.ChannelVersion, StringComparison.OrdinalIgnoreCase) ||
+                previous.UpdateAvailable != snapshot.UpdateAvailable ||
+                !string.Equals(previous.NetworkAddress, snapshot.NetworkAddress, StringComparison.OrdinalIgnoreCase);
+        }
+
+        _registeredDisplays[deviceId] = snapshot;
+
+        if (changed)
+        {
+            AppLog.Write(
+                "Roku",
+                string.Format(
+                    "TV promovida via input-log: id={0}, modelo={1}, firmware={2}, canal={3}, esperado={4}, ip={5}",
+                    snapshot.DeviceId,
+                    snapshot.DeviceModel,
+                    snapshot.FirmwareVersion,
+                    snapshot.ChannelVersion,
+                    snapshot.ExpectedChannelVersion,
+                    snapshot.NetworkAddress));
+        }
+
+        if (snapshot.UpdateAvailable)
+        {
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "TV desatualizada detectada via input-log: id={0}, atual={1}, esperado={2}",
+                    snapshot.DeviceId,
+                    snapshot.ChannelVersion,
+                    snapshot.ExpectedChannelVersion));
+
+            _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+        }
     }
 
     private async Task<byte[]> HandleControlRequestAsync(string requestTarget, CancellationToken cancellationToken)

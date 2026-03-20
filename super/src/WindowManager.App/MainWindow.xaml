@@ -173,6 +173,10 @@
                                     Content="Instalar atualizacao"
                                     Command="{Binding InstallUpdateCommand}" />
                         </Grid>
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Atualizar TVs conectadas"
+                                Command="{Binding UpdateConnectedTvsCommand}" />
                     </StackPanel>
                 </GroupBox>
 

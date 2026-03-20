@@ -16,11 +16,19 @@ sub execute()
     end if
 
     selectedValue = m.top.selectedIndex.ToStr()
+    deviceId = m.top.deviceId
+    deviceModel = m.top.deviceModel
+    firmwareVersion = m.top.firmwareVersion
+    channelVersion = m.top.channelVersion
 
     url = "http://" + bridgeHost + "/api/input-log"
     url = url + "?key=" + urlEncode(keyName)
     url = url + "&fullscreen=" + fullscreenValue
     url = url + "&selected=" + urlEncode(selectedValue)
+    url = url + "&deviceId=" + urlEncode(deviceId)
+    url = url + "&deviceModel=" + urlEncode(deviceModel)
+    url = url + "&firmwareVersion=" + urlEncode(firmwareVersion)
+    url = url + "&channelVersion=" + urlEncode(channelVersion)
 
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)

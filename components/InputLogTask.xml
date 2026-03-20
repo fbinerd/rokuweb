@@ -5,6 +5,10 @@
     <field id="keyName" type="string" />
     <field id="fullscreen" type="boolean" />
     <field id="selectedIndex" type="integer" />
+    <field id="deviceId" type="string" />
+    <field id="deviceModel" type="string" />
+    <field id="firmwareVersion" type="string" />
+    <field id="channelVersion" type="string" />
   </interface>
   <script type="text/brightscript" uri="pkg:/components/InputLogTask.brs" />
 </component>
