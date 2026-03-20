@@ -139,9 +139,14 @@ function Write-BuildInfoFile {
     }
 
     $releaseId = Get-RokuReleaseId
+    $currentChannel = $resolvedChannel
     $content = @"
 function GetRokuChannelReleaseId() as string
     return "$releaseId"
+end function
+
+function GetRokuChannelName() as string
+    return "$currentChannel"
 end function
 "@
 

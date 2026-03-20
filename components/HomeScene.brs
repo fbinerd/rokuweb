@@ -93,7 +93,7 @@ sub init()
     m.titleLabel.text = GetRokuAppShortName()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
     m.subtitleLabel.text = "Procurando automaticamente o super..."
-    m.versionLabel.text = "Canal " + GetRokuChannelReleaseId()
+    m.versionLabel.text = "Canal " + GetRokuChannelName() + " | " + GetRokuChannelReleaseId()
     hideGrid()
     beginAutoConnect()
 end sub

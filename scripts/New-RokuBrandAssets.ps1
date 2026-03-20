@@ -139,6 +139,18 @@ New-BrandImage `
     -SubtitleSize 26
 
 New-BrandImage `
+    -Path (Join-Path $imagesDir "mm_icon_focus_sd.png") `
+    -Width 290 `
+    -Height 174 `
+    -TopHex "#0F172A" `
+    -BottomHex "#123C5A" `
+    -AccentHex "#38BDF8" `
+    -TitleText "SUPER" `
+    -SubtitleText "PAINEL TV" `
+    -TitleSize 47 `
+    -SubtitleSize 21
+
+New-BrandImage `
     -Path (Join-Path $imagesDir "mm_icon_side_hd.png") `
     -Width 108 `
     -Height 69 `
@@ -149,3 +161,39 @@ New-BrandImage `
     -SubtitleText "TV" `
     -TitleSize 20 `
     -SubtitleSize 11
+
+New-BrandImage `
+    -Path (Join-Path $imagesDir "mm_icon_side_sd.png") `
+    -Width 88 `
+    -Height 56 `
+    -TopHex "#0F172A" `
+    -BottomHex "#123C5A" `
+    -AccentHex "#38BDF8" `
+    -TitleText "SUPER" `
+    -SubtitleText "TV" `
+    -TitleSize 15 `
+    -SubtitleSize 9
+
+New-BrandImage `
+    -Path (Join-Path $imagesDir "splash_screen_hd.png") `
+    -Width 1280 `
+    -Height 720 `
+    -TopHex "#0B1120" `
+    -BottomHex "#0F3B5B" `
+    -AccentHex "#38BDF8" `
+    -TitleText "SUPER" `
+    -SubtitleText "PAINEL TV" `
+    -TitleSize 148 `
+    -SubtitleSize 54
+
+New-BrandImage `
+    -Path (Join-Path $imagesDir "splash_screen_sd.png") `
+    -Width 720 `
+    -Height 480 `
+    -TopHex "#0B1120" `
+    -BottomHex "#0F3B5B" `
+    -AccentHex "#38BDF8" `
+    -TitleText "SUPER" `
+    -SubtitleText "PAINEL TV" `
+    -TitleSize 102 `
+    -SubtitleSize 38
