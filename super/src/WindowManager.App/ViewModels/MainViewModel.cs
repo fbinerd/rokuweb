@@ -102,6 +102,7 @@ public sealed class MainViewModel : ViewModelBase
         SearchUpdatesCommand = new AsyncRelayCommand(SearchUpdatesAsync, CanSearchUpdates);
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, CanInstallUpdate);
         UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
+        UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
 
         UpdateBridgeSnapshot();
     }
@@ -135,6 +136,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand SearchUpdatesCommand { get; }
     public AsyncRelayCommand InstallUpdateCommand { get; }
     public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
+    public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -170,6 +172,7 @@ public sealed class MainViewModel : ViewModelBase
                 MarkSelectedTargetStaticCommand.RaiseCanExecuteChanged();
                 DeleteSelectedTargetCommand.RaiseCanExecuteChanged();
                 CreateStaticPanelCommand.RaiseCanExecuteChanged();
+                UpdateSelectedTargetCommand.RaiseCanExecuteChanged();
                 QueueAutoSave();
             }
         }
@@ -521,6 +524,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool CanSearchUpdates() => !IsCheckingForUpdates;
 
     private bool CanInstallUpdate() => !IsCheckingForUpdates && IsUpdateAvailable && _lastUpdateCheckResult is not null;
+    private bool CanUpdateSelectedTarget() => SelectedTarget is not null && !string.IsNullOrWhiteSpace(SelectedTarget.NetworkAddress);
 
     private async Task SearchUpdatesAsync()
     {
@@ -564,6 +568,26 @@ public sealed class MainViewModel : ViewModelBase
         UpdateStatusMessage = updatedCount <= 0
             ? "Nenhuma TV conectada precisava de atualizacao."
             : string.Format("{0} TV(s) receberam sideload de atualizacao.", updatedCount);
+    }
+
+    private async Task UpdateSelectedTargetAsync()
+    {
+        if (SelectedTarget is null)
+        {
+            StatusMessage = "Selecione uma TV descoberta primeiro.";
+            return;
+        }
+
+        StatusMessage = string.Format("Enviando atualizacao para a TV '{0}'...", SelectedTarget.Name);
+        var result = await _webRtcPublisherService.ForceUpdateDisplayTargetAsync(SelectedTarget, CancellationToken.None);
+        StatusMessage = string.Format("Resultado da atualizacao da TV '{0}': {1}", SelectedTarget.Name, result);
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Resultado da atualizacao direta da TV descoberta '{0}' ({1}): {2}",
+                SelectedTarget.Name,
+                SelectedTarget.NetworkAddress,
+                result));
     }
 
     private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()

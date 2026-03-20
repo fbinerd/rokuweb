@@ -368,6 +368,10 @@
                                     Content="Excluir TV"
                                     Command="{Binding DeleteSelectedTargetCommand}" />
                         </Grid>
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Enviar atualizacao para TV selecionada"
+                                Command="{Binding UpdateSelectedTargetCommand}" />
                     </StackPanel>
                 </GroupBox>
 

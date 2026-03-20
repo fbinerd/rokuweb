@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using WindowManager.App.Runtime;
@@ -89,9 +90,6 @@ public sealed class RokuDevDeploymentService
 
             using (var handler = new HttpClientHandler())
             using (var client = new HttpClient(handler))
-            using (var form = new MultipartFormDataContent())
-            using (var fileStream = File.OpenRead(package.PackagePath))
-            using (var fileContent = new StreamContent(fileStream))
             {
                 var username = string.IsNullOrWhiteSpace(deviceConfig.Username) ? "rokudev" : deviceConfig.Username;
                 var password = string.IsNullOrWhiteSpace(deviceConfig.Password) ? "1234" : deviceConfig.Password;
@@ -102,11 +100,6 @@ public sealed class RokuDevDeploymentService
                     new AuthenticationHeaderValue(
                         "Basic",
                         Convert.ToBase64String(Encoding.ASCII.GetBytes(username + ":" + password)));
-
-                fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                form.Add(new StringContent("Install"), "mysubmit");
-                form.Add(new StringContent(password), "passwd");
-                form.Add(fileContent, "archive", Path.GetFileName(package.PackagePath));
 
                 AppLog.Write(
                     "RokuDeploy",
@@ -119,28 +112,51 @@ public sealed class RokuDevDeploymentService
                         package.Source));
 
                 var pluginInstallUri = new Uri(string.Format("http://{0}/plugin_install", host));
-                var response = await client.PostAsync(pluginInstallUri, form).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
+                var requestBody = BuildPluginInstallPayload(package.PackagePath, password);
+                using (var requestContent = new ByteArrayContent(requestBody.Body))
                 {
+                    requestContent.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=" + requestBody.Boundary);
+                    var response = await client.PostAsync(pluginInstallUri, requestContent).ConfigureAwait(false);
+                    var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    var responseDumpPath = TryWriteResponseDump("plugin_install", host, responseBody);
                     AppLog.Write(
                         "RokuDeploy",
                         string.Format(
-                            "Falha no upload do pacote Roku: host={0}, status={1}",
+                            "Resposta do plugin_install: host={0}, status={1}, body={2}, dump={3}",
                             host,
-                            (int)response.StatusCode));
-                    return "upload_falhou_" + (int)response.StatusCode;
+                            (int)response.StatusCode,
+                            SummarizePluginInstallBody(responseBody),
+                            responseDumpPath));
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        AppLog.Write(
+                            "RokuDeploy",
+                            string.Format(
+                                "Falha no upload do pacote Roku: host={0}, status={1}",
+                                host,
+                                (int)response.StatusCode));
+                        return "upload_falhou_" + (int)response.StatusCode;
+                    }
                 }
 
                 try
                 {
+                    var homeUri = new Uri(string.Format("http://{0}:8060/keypress/Home", host));
+                    await client.PostAsync(homeUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                    await Task.Delay(600).ConfigureAwait(false);
+
                     var launchUri = new Uri(string.Format("http://{0}:8060/launch/dev", host));
                     var launchResponse = await client.PostAsync(launchUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                    var launchBody = await launchResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    var launchDumpPath = TryWriteResponseDump("launch_dev", host, launchBody);
                     AppLog.Write(
                         "RokuDeploy",
                         string.Format(
-                            "Canal Roku relancado apos sideload: host={0}, status={1}",
+                            "Canal Roku relancado apos sideload: host={0}, status={1}, body={2}, dump={3}",
                             host,
-                            (int)launchResponse.StatusCode));
+                            (int)launchResponse.StatusCode,
+                            SummarizeResponseBody(launchBody),
+                            launchDumpPath));
                 }
                 catch
                 {
@@ -255,6 +271,126 @@ public sealed class RokuDevDeploymentService
         return Path.Combine(root, "hello-roku.zip");
     }
 
+    private static string SummarizeResponseBody(string responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return "(vazio)";
+        }
+
+        var compact = responseBody
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Replace("\t", " ")
+            .Trim();
+
+        if (compact.Length > 280)
+        {
+            return compact.Substring(0, 280) + "...";
+        }
+
+        return compact;
+    }
+
+    private static string SummarizePluginInstallBody(string responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return "(vazio)";
+        }
+
+        try
+        {
+            var patterns = new[]
+            {
+                "Application\\s+Received\\s*:\\s*([^<]+)",
+                "Install\\s+Success\\s*:?\\s*([^<]+)",
+                "Install\\s+Failure\\s*:?\\s*([^<]+)",
+                "Identical\\s+to\\s+previous\\s+version\\s*--\\s*not\\s+replacing\\.?[^<]*"
+            };
+
+            foreach (var pattern in patterns)
+            {
+                var match = Regex.Match(responseBody, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (match.Success)
+                {
+                    var text = match.Groups.Count > 1 ? match.Groups[1].Value : match.Value;
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return CollapseWhitespace(text);
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return SummarizeResponseBody(responseBody);
+    }
+
+    private static string CollapseWhitespace(string value)
+    {
+        var compact = Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
+        if (compact.Length > 280)
+        {
+            return compact.Substring(0, 280) + "...";
+        }
+
+        return compact;
+    }
+
+    private static string TryWriteResponseDump(string prefix, string host, string body)
+    {
+        try
+        {
+            var safeHost = string.IsNullOrWhiteSpace(host) ? "unknown" : host.Replace(":", "_").Replace(".", "_");
+            var root = Path.Combine(Path.GetTempPath(), "WindowManagerBroadcast", "roku-sideload-responses");
+            Directory.CreateDirectory(root);
+            var path = Path.Combine(root, string.Format("{0}-{1}-{2:yyyyMMdd-HHmmssfff}.html", prefix, safeHost, DateTime.Now));
+            File.WriteAllText(path, body ?? string.Empty, Encoding.UTF8);
+            return path;
+        }
+        catch
+        {
+            return "(nao foi possivel salvar dump)";
+        }
+    }
+
+    private static RokuMultipartPayload BuildPluginInstallPayload(string packagePath, string password)
+    {
+        var boundary = "---------------------------" + DateTime.UtcNow.Ticks.ToString();
+        var newLine = "\r\n";
+        var headerBuilder = new StringBuilder();
+
+        headerBuilder.Append("--").Append(boundary).Append(newLine);
+        headerBuilder.Append("Content-Disposition: form-data; name=\"mysubmit\"").Append(newLine).Append(newLine);
+        headerBuilder.Append("Install").Append(newLine);
+
+        headerBuilder.Append("--").Append(boundary).Append(newLine);
+        headerBuilder.Append("Content-Disposition: form-data; name=\"passwd\"").Append(newLine).Append(newLine);
+        headerBuilder.Append(password ?? string.Empty).Append(newLine);
+
+        headerBuilder.Append("--").Append(boundary).Append(newLine);
+        headerBuilder.Append("Content-Disposition: form-data; name=\"archive\"; filename=\"").Append(Path.GetFileName(packagePath)).Append("\"").Append(newLine);
+        headerBuilder.Append("Content-Type: application/octet-stream").Append(newLine).Append(newLine);
+
+        var headerBytes = Encoding.UTF8.GetBytes(headerBuilder.ToString());
+        var fileBytes = File.ReadAllBytes(packagePath);
+        var footerBytes = Encoding.UTF8.GetBytes(newLine + "--" + boundary + "--" + newLine);
+        var body = new byte[headerBytes.Length + fileBytes.Length + footerBytes.Length];
+
+        Buffer.BlockCopy(headerBytes, 0, body, 0, headerBytes.Length);
+        Buffer.BlockCopy(fileBytes, 0, body, headerBytes.Length, fileBytes.Length);
+        Buffer.BlockCopy(footerBytes, 0, body, headerBytes.Length + fileBytes.Length, footerBytes.Length);
+
+        return new RokuMultipartPayload
+        {
+            Boundary = boundary,
+            Body = body
+        };
+    }
+
     private static RokuDevDeploymentConfig LoadConfig(string configPath)
     {
         using (var stream = File.OpenRead(configPath))
@@ -365,4 +501,10 @@ public sealed class RokuResolvedPackage
 {
     public string PackagePath { get; set; } = string.Empty;
     public string Source { get; set; } = string.Empty;
+}
+
+public sealed class RokuMultipartPayload
+{
+    public string Boundary { get; set; } = string.Empty;
+    public byte[] Body { get; set; } = Array.Empty<byte>();
 }

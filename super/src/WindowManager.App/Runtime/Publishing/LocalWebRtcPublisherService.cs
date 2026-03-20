@@ -122,6 +122,55 @@ public sealed class LocalWebRtcPublisherService
         return updatedCount;
     }
 
+    public async Task<string> ForceUpdateDisplayTargetAsync(DisplayTarget target, CancellationToken cancellationToken)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return "tv_sem_ip";
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var expectedVersion = GetExpectedRokuChannelVersion();
+        RegisteredDisplaySnapshot display;
+
+        var registered = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase));
+
+        if (registered is not null)
+        {
+            display = registered;
+        }
+        else
+        {
+            display = new RegisteredDisplaySnapshot
+            {
+                DeviceId = "roku-target-" + target.NetworkAddress.Replace(".", "-"),
+                DeviceType = "roku",
+                DeviceModel = target.Name,
+                ChannelVersion = string.Empty,
+                NetworkAddress = target.NetworkAddress,
+                LastSeenUtc = DateTime.UtcNow.ToString("O")
+            };
+        }
+
+        display.ExpectedChannelVersion = expectedVersion;
+        display.UpdateAvailable =
+            !string.IsNullOrWhiteSpace(display.ExpectedChannelVersion) &&
+            !string.Equals(display.ChannelVersion, display.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
+
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Atualizacao solicitada para TV descoberta: nome={0}, ip={1}, atual={2}, esperado={3}",
+                target.Name,
+                target.NetworkAddress,
+                display.ChannelVersion,
+                display.ExpectedChannelVersion));
+
+        return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+    }
+
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
