@@ -63,6 +63,17 @@ jobs:
         shell: pwsh
         run: ./scripts/New-ReleaseArtifacts.ps1
 
+      - name: Prepare patch artifact content
+        shell: pwsh
+        run: |
+          $patchRoot = Join-Path $PWD "patch-artifacts"
+          if (Test-Path $patchRoot) {
+            Remove-Item -Recurse -Force $patchRoot
+          }
+          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
+          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
+
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
         with:
@@ -81,9 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
-          path: |
-            dist/*-delta-from-*.zip
-            dist/*-changes.json
+          path: patch-artifacts/**
           if-no-files-found: error
 
       - name: Upload latest rokuweb manifest
