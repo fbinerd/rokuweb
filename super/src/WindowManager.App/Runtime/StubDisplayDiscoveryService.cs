@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -43,6 +44,11 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             .Where(x => !IsLegacyFakeRecord(x))
             .ToList();
         var liveCandidates = await DiscoverLiveCandidatesAsync(cancellationToken);
+        if (liveCandidates.Count == 0)
+        {
+            var fallbackCandidates = await DiscoverAlternativeCandidatesAsync(knownDisplays, cancellationToken);
+            liveCandidates.AddRange(fallbackCandidates);
+        }
 
         var prioritizedCandidates = liveCandidates
             .OrderByDescending(candidate => knownDisplays.Any(known =>
@@ -100,6 +106,34 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             .ToList();
         await _knownDisplayStore.SaveAsync(results.Select(ToKnownRecord), cancellationToken);
         return results;
+    }
+
+    private static async Task<List<DisplayTarget>> DiscoverAlternativeCandidatesAsync(
+        IReadOnlyList<KnownDisplayRecord> knownDisplays,
+        CancellationToken cancellationToken)
+    {
+        var addresses = BuildAlternativeProbeAddresses(knownDisplays);
+        var results = new List<DisplayTarget>();
+
+        foreach (var batch in Batch(addresses, 24))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var tasks = batch.Select(address => TryProbeRokuAsync(address, cancellationToken)).ToArray();
+            var found = await Task.WhenAll(tasks);
+            foreach (var target in found)
+            {
+                if (target is not null)
+                {
+                    results.Add(target);
+                }
+            }
+        }
+
+        return results
+            .GroupBy(x => x.NetworkAddress, StringComparer.OrdinalIgnoreCase)
+            .Select(ChooseBestTarget)
+            .ToList();
     }
 
     private static async Task<List<DisplayTarget>> DiscoverLiveCandidatesAsync(CancellationToken cancellationToken)
@@ -531,6 +565,183 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty));
             return new Guid(hash);
         }
+    }
+
+    private static IEnumerable<string> BuildAlternativeProbeAddresses(IReadOnlyList<KnownDisplayRecord> knownDisplays)
+    {
+        var addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var known in knownDisplays)
+        {
+            if (IPAddress.TryParse(known.NetworkAddress, out _))
+            {
+                addresses.Add(known.NetworkAddress);
+            }
+
+            if (IPAddress.TryParse(known.LastKnownNetworkAddress, out _))
+            {
+                addresses.Add(known.LastKnownNetworkAddress);
+            }
+        }
+
+        foreach (var network in GetLocalIpv4Networks())
+        {
+            for (var host = 1; host <= 254; host++)
+            {
+                addresses.Add(network + host.ToString());
+            }
+        }
+
+        return addresses;
+    }
+
+    private static IEnumerable<string> GetLocalIpv4Networks()
+    {
+        var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up)
+            {
+                continue;
+            }
+
+            var properties = nic.GetIPProperties();
+            foreach (var address in properties.UnicastAddresses)
+            {
+                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
+                {
+                    continue;
+                }
+
+                var bytes = address.Address.GetAddressBytes();
+                if (bytes.Length != 4)
+                {
+                    continue;
+                }
+
+                results.Add(string.Format("{0}.{1}.{2}.", bytes[0], bytes[1], bytes[2]));
+            }
+        }
+
+        return results;
+    }
+
+    private static async Task<DisplayTarget?> TryProbeRokuAsync(string address, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = WebRequest.CreateHttp("http://" + address + ":8060/query/device-info");
+            request.Method = "GET";
+            request.Timeout = 600;
+            request.ReadWriteTimeout = 600;
+
+            using (cancellationToken.Register(() => request.Abort()))
+            using (var response = (HttpWebResponse)await request.GetResponseAsync())
+            using (var stream = response.GetResponseStream())
+            {
+                if (stream is null)
+                {
+                    return null;
+                }
+
+                var document = new XmlDocument();
+                document.Load(stream);
+
+                var root = document.DocumentElement;
+                if (root is null || !string.Equals(root.Name, "device-info", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                var vendorName = GetChildNodeValue(root, "vendor-name");
+                var modelName = GetChildNodeValue(root, "model-name");
+                var modelNumber = GetChildNodeValue(root, "model-number");
+                var friendlyDeviceName = GetChildNodeValue(root, "friendly-device-name");
+                var serialNumber = GetChildNodeValue(root, "serial-number");
+                var deviceId = GetChildNodeValue(root, "device-id");
+                var wifiMac = GetChildNodeValue(root, "wifi-mac");
+                var ethernetMac = GetChildNodeValue(root, "ethernet-mac");
+                var uiResolution = GetChildNodeValue(root, "ui-resolution");
+
+                var uniqueId = FirstNonEmpty(deviceId, serialNumber, address);
+                var friendlyName = FirstNonEmpty(
+                    friendlyDeviceName,
+                    modelName,
+                    modelNumber,
+                    "Roku TV");
+
+                return new DisplayTarget
+                {
+                    Id = CreateDeterministicGuid("roku:" + uniqueId),
+                    Name = friendlyName,
+                    NetworkAddress = address,
+                    LastKnownNetworkAddress = address,
+                    MacAddress = FirstNonEmpty(wifiMac, ethernetMac, TryResolveMacAddress(IPAddress.Parse(address))),
+                    DeviceUniqueId = uniqueId,
+                    DiscoverySource = string.Format("TV detectada por varredura HTTP ({0} {1})", vendorName, modelName).Trim(),
+                    TransportKind = DisplayTransportKind.LanStreaming,
+                    IsOnline = true,
+                    WasPreviouslyKnown = false,
+                    IsStaticTarget = false,
+                    NativeWidth = ResolveResolutionWidth(uiResolution),
+                    NativeHeight = ResolveResolutionHeight(uiResolution)
+                };
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<T[]> Batch<T>(IEnumerable<T> source, int batchSize)
+    {
+        var bucket = new List<T>(batchSize);
+        foreach (var item in source)
+        {
+            bucket.Add(item);
+            if (bucket.Count >= batchSize)
+            {
+                yield return bucket.ToArray();
+                bucket.Clear();
+            }
+        }
+
+        if (bucket.Count > 0)
+        {
+            yield return bucket.ToArray();
+        }
+    }
+
+    private static int ResolveResolutionWidth(string uiResolution)
+    {
+        if (ContainsIgnoreCase(uiResolution, "4k") || ContainsIgnoreCase(uiResolution, "2160"))
+        {
+            return 3840;
+        }
+
+        if (ContainsIgnoreCase(uiResolution, "1080") || ContainsIgnoreCase(uiResolution, "fhd"))
+        {
+            return 1920;
+        }
+
+        return 1280;
+    }
+
+    private static int ResolveResolutionHeight(string uiResolution)
+    {
+        if (ContainsIgnoreCase(uiResolution, "4k") || ContainsIgnoreCase(uiResolution, "2160"))
+        {
+            return 2160;
+        }
+
+        if (ContainsIgnoreCase(uiResolution, "1080") || ContainsIgnoreCase(uiResolution, "fhd"))
+        {
+            return 1080;
+        }
+
+        return 720;
     }
 
     private sealed class SsdpResponse
