@@ -391,6 +391,50 @@ function New-JsonArray {
     return $list
 }
 
+function Get-PublishedManifestDocument {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$AppName
+    )
+
+    $manifestName = if ($AppName -eq "super") { "latest-super.json" } else { "latest-rokuweb.json" }
+    $manifestUrl = "$BaseUrl$manifestName"
+
+    try {
+        $response = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 15
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300 -or [string]::IsNullOrWhiteSpace($response.Content)) {
+            return $null
+        }
+
+        return $response.Content | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-ShortShaFromReleaseId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReleaseId,
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReleaseId) -or [string]::IsNullOrWhiteSpace($Version)) {
+        return ""
+    }
+
+    $prefix = "$Version-"
+    if (-not $ReleaseId.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return ""
+    }
+
+    return $ReleaseId.Substring($prefix.Length).Trim()
+}
+
 function Get-ReleaseHistory {
     param(
         [Parameter(Mandatory = $true)]
@@ -416,26 +460,6 @@ function Get-ReleaseHistory {
         [string]$BaseUrl
     )
 
-    $packagePrefix = if ($AppName -eq "super") { "$Channel-super" } else { "$Channel-rokuweb" }
-
-    $pathspecs = if ($AppName -eq "super") {
-        @("--", "super")
-    }
-    else {
-        @("--", "manifest", "components", "source", "package.ps1")
-    }
-
-    $historyCommits = @()
-    $logOutput = & git -C $RepositoryRoot log --format=%H @pathspecs
-    if ($LASTEXITCODE -eq 0 -and $logOutput) {
-        foreach ($line in $logOutput) {
-            $commit = $line.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($commit)) {
-                $historyCommits += $commit
-            }
-        }
-    }
-
     $seenReleaseIds = @{}
     $releases = @()
 
@@ -460,57 +484,21 @@ function Get-ReleaseHistory {
     $releases += $currentEntry
     $seenReleaseIds[$CurrentReleaseId] = $true
 
-    for ($i = 0; $i -lt $historyCommits.Count; $i++) {
-        $commit = $historyCommits[$i]
-        $shortSha = Get-GitShortSha -RepositoryRoot $RepositoryRoot -Revision $commit
-        $version = Get-RokuVersionAtRevision -RepositoryRoot $RepositoryRoot -Revision $commit
-        if ([string]::IsNullOrWhiteSpace($version)) {
-            continue
-        }
-
-        $releaseId = "$version-$shortSha"
-        if ($seenReleaseIds.ContainsKey($releaseId)) {
-            continue
-        }
-
-        $parentVersion = ""
-        $parentReleaseId = ""
-        $parentRef = "$commit^"
-        if (Test-GitRevisionExists -RepositoryRoot $RepositoryRoot -Revision $parentRef) {
-            $parentVersion = Get-RokuVersionAtRevision -RepositoryRoot $RepositoryRoot -Revision $parentRef
-            if (-not [string]::IsNullOrWhiteSpace($parentVersion)) {
-                $parentShortSha = Get-GitShortSha -RepositoryRoot $RepositoryRoot -Revision $parentRef
-                $parentReleaseId = "$parentVersion-$parentShortSha"
+    $publishedManifest = Get-PublishedManifestDocument -BaseUrl $BaseUrl -AppName $AppName
+    if ($publishedManifest -and $publishedManifest.releases) {
+        foreach ($release in @($publishedManifest.releases)) {
+            if ($null -eq $release -or [string]::IsNullOrWhiteSpace($release.releaseId)) {
+                continue
             }
-        }
 
-        $publishedAtUtc = Get-GitCommitTimestampUtc -RepositoryRoot $RepositoryRoot -Revision $commit
-        $deltaPackage = if ($parentReleaseId) {
-            "$packagePrefix-$releaseId-delta-from-$parentReleaseId.zip"
-        }
-        else {
-            $null
-        }
+            $existingReleaseId = [string]$release.releaseId
+            if ($seenReleaseIds.ContainsKey($existingReleaseId)) {
+                continue
+            }
 
-        $releases += [pscustomobject]@{
-            version = $version
-            releaseId = $releaseId
-            commit = $commit
-            publishedAtUtc = $publishedAtUtc
-            fullPackage = "$packagePrefix-$releaseId-full.zip"
-            fullPackageUrl = $BaseUrl + "$packagePrefix-$releaseId-full.zip"
-            deltaPackage = $deltaPackage
-            deltaPackageUrl = if ($deltaPackage) { $BaseUrl + $deltaPackage } else { $null }
-            deltaSupportedFromVersions = if ($parentVersion) { (New-JsonArray $parentVersion) } else { (New-JsonArray) }
-            deltaSupportedFromReleases = if ($parentReleaseId) { (New-JsonArray $parentReleaseId) } else { (New-JsonArray) }
-            fullPackageRequiredIfCurrentVersionOlderThan = $parentVersion
-            fullPackageRequiredIfCurrentReleaseOlderThan = $parentReleaseId
-            changedFiles = (New-JsonArray)
-            deletedFiles = (New-JsonArray)
-            files = (New-JsonArray)
-            deltaFiles = (New-JsonArray)
+            $releases += $release
+            $seenReleaseIds[$existingReleaseId] = $true
         }
-        $seenReleaseIds[$releaseId] = $true
     }
 
     return [object[]]$releases
@@ -545,6 +533,7 @@ try {
 
     $previousVersion = ""
     $previousReleaseId = ""
+    $deltaBaseRef = $BaseRef
     $rokuDeltaZip = $null
     $superDeltaZip = $null
     $rokuChanged = @()
@@ -555,28 +544,60 @@ try {
     $superDeltaFileEntries = @()
 
     $canCreateDelta = $true
+    $publishedSuperManifest = Get-PublishedManifestDocument -BaseUrl $BaseUrl -AppName "super"
+    if ($publishedSuperManifest) {
+        $publishedPreviousReleaseId = ""
+        $publishedPreviousVersion = ""
+
+        if (-not [string]::IsNullOrWhiteSpace($publishedSuperManifest.currentRelease) -and
+            -not [string]::Equals([string]$publishedSuperManifest.currentRelease, $releaseId, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $publishedPreviousReleaseId = [string]$publishedSuperManifest.currentRelease
+            $publishedPreviousVersion = [string]$publishedSuperManifest.currentVersion
+        }
+        elseif ($publishedSuperManifest.releases) {
+            foreach ($release in @($publishedSuperManifest.releases)) {
+                if ($null -eq $release -or [string]::IsNullOrWhiteSpace($release.releaseId)) {
+                    continue
+                }
+
+                if ([string]::Equals([string]$release.releaseId, $releaseId, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    continue
+                }
+
+                $publishedPreviousReleaseId = [string]$release.releaseId
+                $publishedPreviousVersion = [string]$release.version
+                break
+            }
+        }
+
+        $publishedPreviousSha = Get-ShortShaFromReleaseId -ReleaseId $publishedPreviousReleaseId -Version $publishedPreviousVersion
+        if (-not [string]::IsNullOrWhiteSpace($publishedPreviousSha) -and (Test-GitRevisionExists -RepositoryRoot $repoRoot -Revision $publishedPreviousSha)) {
+            $deltaBaseRef = $publishedPreviousSha
+        }
+    }
+
     try {
-        if (-not (Test-GitRevisionExists -RepositoryRoot $repoRoot -Revision $BaseRef)) {
+        if (-not (Test-GitRevisionExists -RepositoryRoot $repoRoot -Revision $deltaBaseRef)) {
             $canCreateDelta = $false
             $deltaStatus = "skipped"
-            $deltaMessage = "Base ref '$BaseRef' nao esta disponivel neste checkout."
+            $deltaMessage = "Base ref '$deltaBaseRef' nao esta disponivel neste checkout."
         }
     }
     catch {
         $canCreateDelta = $false
         $deltaStatus = "skipped"
-        $deltaMessage = "Falha ao verificar base ref '$BaseRef': $($_.Exception.Message)"
+        $deltaMessage = "Falha ao verificar base ref '$deltaBaseRef': $($_.Exception.Message)"
     }
 
     if ($canCreateDelta) {
         try {
-            & git -C $repoRoot worktree add --detach $tempWorktree $BaseRef | Out-Null
+            & git -C $repoRoot worktree add --detach $tempWorktree $deltaBaseRef | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 throw "Falha ao criar worktree temporario para delta."
             }
 
             $previousVersion = Get-RokuVersion -ManifestPath (Join-Path $tempWorktree "manifest")
-            $previousShortSha = Get-GitShortSha -RepositoryRoot $repoRoot -Revision $BaseRef
+            $previousShortSha = Get-GitShortSha -RepositoryRoot $repoRoot -Revision $deltaBaseRef
             $previousReleaseId = "$previousVersion-$previousShortSha"
 
             $previousRokuFiles = Get-RokuPackageFiles -Root $tempWorktree
@@ -647,7 +668,7 @@ try {
         releaseId = $releaseId
         previousVersion = $previousVersion
         previousReleaseId = $previousReleaseId
-        baseRef = $BaseRef
+        baseRef = $deltaBaseRef
         generatedAtUtc = $generatedAtUtc
         fullPackage = "$Channel-rokuweb-$releaseId-full.zip"
         fullPackageUrl = "$BaseUrl" + "$Channel-rokuweb-$releaseId-full.zip"
@@ -672,7 +693,7 @@ try {
         releaseId = $releaseId
         previousVersion = $previousVersion
         previousReleaseId = $previousReleaseId
-        baseRef = $BaseRef
+        baseRef = $deltaBaseRef
         generatedAtUtc = $generatedAtUtc
         fullPackage = "$Channel-super-$releaseId-full.zip"
         fullPackageUrl = if ([string]::IsNullOrWhiteSpace($SuperCurrentFullPackageUrl)) { "$BaseUrl" + "$Channel-super-$releaseId-full.zip" } else { $SuperCurrentFullPackageUrl }
