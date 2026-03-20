@@ -21,7 +21,6 @@ public sealed class Bootstrapper
 
         var browserHost = new StubBrowserInstanceHost();
         var knownDisplayStore = new KnownDisplayStore();
-        var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore);
         var captureSessionFactory = new InMemoryCaptureSessionFactory();
         var transportResolver = new DefaultDisplayTransportResolver(transports);
         var routingService = new RoutingService(captureSessionFactory, transportResolver);
@@ -30,6 +29,7 @@ public sealed class Bootstrapper
         var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService);
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
+        var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();
         var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);

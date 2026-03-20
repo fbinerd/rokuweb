@@ -334,6 +334,13 @@
                 <GroupBox Header="Descoberta de TVs" Margin="0,12,0,0">
                     <StackPanel Margin="8">
                         <TextBlock Text="Busca TVs na rede priorizando IPs historicos. Se o IP mudar, a reconciliacao usa MAC/ID unico e atualiza o endereco armazenado." TextWrapping="Wrap" />
+                        <TextBlock Margin="0,12,0,0"
+                                   Text="Faixas extras para fallback HTTP (ex.: 10.0.4.0/24). Separe por virgula, espaco ou linha."
+                                   TextWrapping="Wrap" />
+                        <TextBox Margin="0,8,0,0"
+                                 Height="34"
+                                 VerticalContentAlignment="Center"
+                                 Text="{Binding AdditionalDiscoveryCidrs, UpdateSourceTrigger=PropertyChanged}" />
                         <ListBox Margin="0,8,0,0"
                                  Height="220"
                                  ItemsSource="{Binding Targets}"

@@ -54,4 +54,7 @@ public sealed class AppUpdatePreferences
 {
     [DataMember(Order = 1)]
     public bool AutoUpdateEnabled { get; set; } = true;
+
+    [DataMember(Order = 2)]
+    public string AdditionalDiscoveryCidrs { get; set; } = string.Empty;
 }

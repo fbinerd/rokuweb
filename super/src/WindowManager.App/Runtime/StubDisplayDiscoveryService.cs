@@ -29,13 +29,15 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
     };
 
     private readonly KnownDisplayStore _knownDisplayStore;
+    private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
 
     [DllImport("iphlpapi.dll", ExactSpelling = true)]
     private static extern int SendARP(int destIp, int srcIp, byte[] macAddr, ref int physicalAddrLen);
 
-    public StubDisplayDiscoveryService(KnownDisplayStore knownDisplayStore)
+    public StubDisplayDiscoveryService(KnownDisplayStore knownDisplayStore, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _knownDisplayStore = knownDisplayStore;
+        _appUpdatePreferenceStore = appUpdatePreferenceStore;
     }
 
     public async Task<IReadOnlyList<DisplayTarget>> DiscoverAsync(CancellationToken cancellationToken)
@@ -43,10 +45,14 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
         var knownDisplays = (await _knownDisplayStore.LoadAsync(cancellationToken))
             .Where(x => !IsLegacyFakeRecord(x))
             .ToList();
+        var preferences = await _appUpdatePreferenceStore.LoadAsync(cancellationToken);
         var liveCandidates = await DiscoverLiveCandidatesAsync(cancellationToken);
         if (liveCandidates.Count == 0)
         {
-            var fallbackCandidates = await DiscoverAlternativeCandidatesAsync(knownDisplays, cancellationToken);
+            var fallbackCandidates = await DiscoverAlternativeCandidatesAsync(
+                knownDisplays,
+                preferences.AdditionalDiscoveryCidrs,
+                cancellationToken);
             liveCandidates.AddRange(fallbackCandidates);
         }
 
@@ -110,9 +116,10 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
 
     private static async Task<List<DisplayTarget>> DiscoverAlternativeCandidatesAsync(
         IReadOnlyList<KnownDisplayRecord> knownDisplays,
+        string additionalDiscoveryCidrs,
         CancellationToken cancellationToken)
     {
-        var addresses = BuildAlternativeProbeAddresses(knownDisplays);
+        var addresses = BuildAlternativeProbeAddresses(knownDisplays, additionalDiscoveryCidrs);
         var results = new List<DisplayTarget>();
 
         foreach (var batch in Batch(addresses, 24))
@@ -567,7 +574,9 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
         }
     }
 
-    private static IEnumerable<string> BuildAlternativeProbeAddresses(IReadOnlyList<KnownDisplayRecord> knownDisplays)
+    private static IEnumerable<string> BuildAlternativeProbeAddresses(
+        IReadOnlyList<KnownDisplayRecord> knownDisplays,
+        string additionalDiscoveryCidrs)
     {
         var addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -592,7 +601,102 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             }
         }
 
+        foreach (var address in ExpandConfiguredCidrRanges(additionalDiscoveryCidrs))
+        {
+            addresses.Add(address);
+        }
+
         return addresses;
+    }
+
+    private static IEnumerable<string> ExpandConfiguredCidrRanges(string additionalDiscoveryCidrs)
+    {
+        if (string.IsNullOrWhiteSpace(additionalDiscoveryCidrs))
+        {
+            yield break;
+        }
+
+        var entries = additionalDiscoveryCidrs
+            .Split(new[] { '\r', '\n', ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in entries)
+        {
+            foreach (var address in ExpandSingleCidrRange(entry))
+            {
+                yield return address;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExpandSingleCidrRange(string cidr)
+    {
+        var separatorIndex = cidr.IndexOf('/');
+        if (separatorIndex <= 0 || separatorIndex >= cidr.Length - 1)
+        {
+            yield break;
+        }
+
+        if (!IPAddress.TryParse(cidr.Substring(0, separatorIndex), out var baseAddress) ||
+            baseAddress.AddressFamily != AddressFamily.InterNetwork)
+        {
+            yield break;
+        }
+
+        if (!int.TryParse(cidr.Substring(separatorIndex + 1), out var prefixLength) ||
+            prefixLength < 0 ||
+            prefixLength > 32)
+        {
+            yield break;
+        }
+
+        var hostBits = 32 - prefixLength;
+        if (hostBits > 10)
+        {
+            yield break;
+        }
+
+        var baseValue = ToUInt32(baseAddress);
+        var mask = prefixLength == 0 ? 0u : uint.MaxValue << hostBits;
+        var networkValue = baseValue & mask;
+        var addressCount = 1u << hostBits;
+
+        if (addressCount <= 2)
+        {
+            for (uint offset = 0; offset < addressCount; offset++)
+            {
+                yield return FromUInt32(networkValue + offset).ToString();
+            }
+
+            yield break;
+        }
+
+        for (uint offset = 1; offset < addressCount - 1; offset++)
+        {
+            yield return FromUInt32(networkValue + offset).ToString();
+        }
+    }
+
+    private static uint ToUInt32(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return ((uint)bytes[0] << 24) |
+               ((uint)bytes[1] << 16) |
+               ((uint)bytes[2] << 8) |
+               bytes[3];
+    }
+
+    private static IPAddress FromUInt32(uint value)
+    {
+        return new IPAddress(new[]
+        {
+            (byte)((value >> 24) & 0xFF),
+            (byte)((value >> 16) & 0xFF),
+            (byte)((value >> 8) & 0xFF),
+            (byte)(value & 0xFF)
+        });
     }
 
     private static IEnumerable<string> GetLocalIpv4Networks()

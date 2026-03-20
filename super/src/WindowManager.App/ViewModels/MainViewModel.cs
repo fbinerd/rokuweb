@@ -56,6 +56,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isCheckingForUpdates;
     private bool _autoUpdateEnabled;
     private AppUpdateCheckResult? _lastUpdateCheckResult;
+    private string _additionalDiscoveryCidrs = string.Empty;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -342,6 +343,18 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public string AdditionalDiscoveryCidrs
+    {
+        get => _additionalDiscoveryCidrs;
+        set
+        {
+            if (SetProperty(ref _additionalDiscoveryCidrs, value?.Trim() ?? string.Empty))
+            {
+                _ = PersistUpdatePreferencesAsync();
+            }
+        }
+    }
+
     public string PreviewTitle =>
         SelectedWindow is null ? "Nenhuma janela selecionada" : SelectedWindow.Title;
 
@@ -476,6 +489,7 @@ public sealed class MainViewModel : ViewModelBase
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
         AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
 
     private async Task ReloadPersistedStateAsync()
@@ -636,7 +650,8 @@ public sealed class MainViewModel : ViewModelBase
             await _appUpdatePreferenceStore.SaveAsync(
                 new AppUpdatePreferences
                 {
-                    AutoUpdateEnabled = AutoUpdateEnabled
+                    AutoUpdateEnabled = AutoUpdateEnabled,
+                    AdditionalDiscoveryCidrs = AdditionalDiscoveryCidrs
                 },
                 CancellationToken.None);
         }
