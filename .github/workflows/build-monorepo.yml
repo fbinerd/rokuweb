@@ -127,6 +127,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             $ghPagesExists = $true
           }
+          $global:LASTEXITCODE = 0
 
           if ($ghPagesExists) {
             $ghPagesRoot = Join-Path $PWD "gh-pages-current"
@@ -138,7 +139,8 @@ jobs:
               $originUrl = (git remote get-url origin).Trim()
               if (-not [string]::IsNullOrWhiteSpace($originUrl)) {
                 git clone --depth 1 --branch gh-pages $originUrl $ghPagesRoot
-                if ($LASTEXITCODE -eq 0 -and (Test-Path $ghPagesRoot)) {
+                $cloneExitCode = $LASTEXITCODE
+                if ($cloneExitCode -eq 0 -and (Test-Path $ghPagesRoot)) {
                   $items = Get-ChildItem -Force -Path $ghPagesRoot
                   foreach ($item in $items) {
                     if ($item.Name -eq '.git') {
@@ -148,12 +150,16 @@ jobs:
                     Copy-Item -Path $item.FullName -Destination $pagesRoot -Recurse -Force
                   }
                 }
+                else {
+                  Write-Host "Nao foi possivel clonar gh-pages. exit=$cloneExitCode"
+                }
               }
             }
             catch {
               Write-Host "Nao foi possivel reutilizar o conteudo anterior de gh-pages: $($_.Exception.Message)"
             }
             finally {
+              $global:LASTEXITCODE = 0
               if (Test-Path $ghPagesRoot) {
                 Remove-Item -Recurse -Force $ghPagesRoot
               }
@@ -183,6 +189,7 @@ jobs:
           </body>
           </html>
           "@ | Set-Content -Path (Join-Path $pagesRoot "index.html") -Encoding UTF8
+          exit 0
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
