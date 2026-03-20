@@ -13,6 +13,8 @@ $outputRoot = Join-Path $repoRoot $OutputDirectory
 $superRoot = Join-Path $repoRoot "super"
 $superReleaseRoot = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481"
 $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-base-" + [Guid]::NewGuid().ToString("N"))
+$deltaStatus = "not_attempted"
+$deltaMessage = ""
 
 function Get-GitShortSha {
     param(
@@ -289,55 +291,76 @@ try {
 
     $canCreateDelta = $true
     try {
-        & git -C $repoRoot rev-parse --verify $BaseRef *> $null
+        & git -C $repoRoot cat-file -e "$BaseRef^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) {
             $canCreateDelta = $false
+            $deltaStatus = "skipped"
+            $deltaMessage = "Base ref '$BaseRef' nao esta disponivel neste checkout."
         }
     }
     catch {
         $canCreateDelta = $false
+        $deltaStatus = "skipped"
+        $deltaMessage = "Falha ao verificar base ref '$BaseRef': $($_.Exception.Message)"
     }
 
     if ($canCreateDelta) {
-        & git -C $repoRoot worktree add --detach $tempWorktree $BaseRef | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao criar worktree temporario para delta."
-        }
-
-        $previousVersion = Get-RokuVersion -ManifestPath (Join-Path $tempWorktree "manifest")
-        $previousShortSha = Get-GitShortSha -RepositoryRoot $repoRoot -Revision $BaseRef
-        $previousReleaseId = "$previousVersion-$previousShortSha"
-
-        $previousRokuFiles = Get-RokuPackageFiles -Root $tempWorktree
-        $rokuPreviousMap = Get-HashDictionary -Root $tempWorktree -Files $previousRokuFiles
-
-        Push-Location (Join-Path $tempWorktree "super")
         try {
-            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\build.ps1" -Restore -Build
+            & git -C $repoRoot worktree add --detach $tempWorktree $BaseRef | Out-Null
             if ($LASTEXITCODE -ne 0) {
-                throw "Falha ao compilar versao base do super para delta."
+                throw "Falha ao criar worktree temporario para delta."
             }
+
+            $previousVersion = Get-RokuVersion -ManifestPath (Join-Path $tempWorktree "manifest")
+            $previousShortSha = Get-GitShortSha -RepositoryRoot $repoRoot -Revision $BaseRef
+            $previousReleaseId = "$previousVersion-$previousShortSha"
+
+            $previousRokuFiles = Get-RokuPackageFiles -Root $tempWorktree
+            $rokuPreviousMap = Get-HashDictionary -Root $tempWorktree -Files $previousRokuFiles
+
+            Push-Location (Join-Path $tempWorktree "super")
+            try {
+                & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\build.ps1" -Restore -Build
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Falha ao compilar versao base do super para delta."
+                }
+            }
+            finally {
+                Pop-Location
+            }
+
+            $superPreviousRoot = Join-Path $tempWorktree "super\src\WindowManager.App\bin\Release\net481"
+            $superPreviousFiles = Get-SuperPackageFiles -Root $superPreviousRoot
+            $superPreviousMap = Get-HashDictionary -Root $superPreviousRoot -Files $superPreviousFiles
+
+            $rokuChanged = Get-ChangedRelativeFiles -Current $rokuCurrentMap -Previous $rokuPreviousMap
+            $rokuDeleted = Get-DeletedRelativeFiles -Current $rokuCurrentMap -Previous $rokuPreviousMap
+            $superChanged = Get-ChangedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
+            $superDeleted = Get-DeletedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
+
+            $rokuDeltaFiles = $rokuChanged | ForEach-Object { Join-Path $repoRoot $_ }
+            $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+            New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
+
+            $superDeltaFiles = $superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ }
+            $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
+            New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
+
+            $deltaStatus = "created"
+            $deltaMessage = ""
         }
-        finally {
-            Pop-Location
+        catch {
+            $deltaStatus = "skipped"
+            $deltaMessage = $_.Exception.Message
+            $previousVersion = ""
+            $previousReleaseId = ""
+            $rokuDeltaZip = $null
+            $superDeltaZip = $null
+            $rokuChanged = @()
+            $rokuDeleted = @()
+            $superChanged = @()
+            $superDeleted = @()
         }
-
-        $superPreviousRoot = Join-Path $tempWorktree "super\src\WindowManager.App\bin\Release\net481"
-        $superPreviousFiles = Get-SuperPackageFiles -Root $superPreviousRoot
-        $superPreviousMap = Get-HashDictionary -Root $superPreviousRoot -Files $superPreviousFiles
-
-        $rokuChanged = Get-ChangedRelativeFiles -Current $rokuCurrentMap -Previous $rokuPreviousMap
-        $rokuDeleted = Get-DeletedRelativeFiles -Current $rokuCurrentMap -Previous $rokuPreviousMap
-        $superChanged = Get-ChangedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
-        $superDeleted = Get-DeletedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
-
-        $rokuDeltaFiles = $rokuChanged | ForEach-Object { Join-Path $repoRoot $_ }
-        $rokuDeltaZip = Join-Path $outputRoot ("rokuweb-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
-        New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
-
-        $superDeltaFiles = $superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ }
-        $superDeltaZip = Join-Path $outputRoot ("super-{0}-delta-from-{1}.zip" -f $releaseId, $previousReleaseId)
-        New-ZipFromFiles -Root $superReleaseRoot -Files $superDeltaFiles -ZipPath $superDeltaZip
     }
 
     Write-JsonFile -Path (Join-Path $outputRoot ("rokuweb-{0}-changes.json" -f $releaseId)) -Data ([pscustomobject]@{
@@ -352,6 +375,8 @@ try {
         deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
         deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
+        deltaStatus = $deltaStatus
+        deltaMessage = $deltaMessage
         fullPackageRequiredIfCurrentVersionOlderThan = $previousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($rokuChanged)
@@ -370,6 +395,8 @@ try {
         deltaPackage = if ($superDeltaZip) { Split-Path -Leaf $superDeltaZip } else { $null }
         deltaSupportedFromVersions = if ($previousVersion) { [object[]]@($previousVersion) } else { [object[]]@() }
         deltaSupportedFromReleases = if ($previousReleaseId) { [object[]]@($previousReleaseId) } else { [object[]]@() }
+        deltaStatus = $deltaStatus
+        deltaMessage = $deltaMessage
         fullPackageRequiredIfCurrentVersionOlderThan = $previousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($superChanged)
