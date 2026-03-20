@@ -132,7 +132,7 @@ jobs:
       - name: Build release artifacts
         shell: pwsh
         run: |
-          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/stable-super-full-latest/stable-super-latest-full.zip'
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/stable-super-full-latest/stable-super-${{ steps.meta.outputs.release_id }}-full.zip'
           ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/' -SuperCurrentFullPackageUrl $fullUrl
 
       - name: Publish stable super full package
@@ -149,10 +149,10 @@ jobs:
 
           gh release view $releaseTag --repo '${{ github.repository }}' *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $releaseTag $assetPath#stable-super-latest-full.zip --title $releaseTitle --notes 'Pacote full mais recente do canal stable.' --repo '${{ github.repository }}'
+            gh release create $releaseTag $assetPath --title $releaseTitle --notes 'Pacote full mais recente do canal stable.' --repo '${{ github.repository }}'
           }
           else {
-            gh release upload $releaseTag $assetPath#stable-super-latest-full.zip --clobber --repo '${{ github.repository }}'
+            gh release upload $releaseTag $assetPath --clobber --repo '${{ github.repository }}'
           }
 
       - name: Remove stable super full package from Pages payload
@@ -260,7 +260,7 @@ jobs:
       - name: Build release artifacts
         shell: pwsh
         run: |
-          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/develop-super-full-latest/develop-super-latest-full.zip'
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/develop-super-full-latest/develop-super-${{ steps.meta.outputs.release_id }}-full.zip'
           ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/' -SuperCurrentFullPackageUrl $fullUrl
 
       - name: Publish develop super full package
@@ -277,10 +277,10 @@ jobs:
 
           gh release view $releaseTag --repo '${{ github.repository }}' *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $releaseTag $assetPath#develop-super-latest-full.zip --title $releaseTitle --notes 'Pacote full mais recente do canal develop.' --repo '${{ github.repository }}'
+            gh release create $releaseTag $assetPath --title $releaseTitle --notes 'Pacote full mais recente do canal develop.' --repo '${{ github.repository }}'
           }
           else {
-            gh release upload $releaseTag $assetPath#develop-super-latest-full.zip --clobber --repo '${{ github.repository }}'
+            gh release upload $releaseTag $assetPath --clobber --repo '${{ github.repository }}'
           }
 
       - name: Remove develop super full package from Pages payload
