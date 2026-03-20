@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,8 +25,25 @@ public sealed class AppUpdateManifestService
         {
             using (var response = await HttpClient.GetAsync(manifestUrl, cancellationToken).ConfigureAwait(false))
             {
+                var content = response.Content;
+                var contentType = content?.Headers?.ContentType?.ToString() ?? string.Empty;
+                var body = content is null
+                    ? string.Empty
+                    : await content.ReadAsStringAsync().ConfigureAwait(false);
+                var preview = BuildPreview(body);
+
+                AppLog.Write(
+                    "Updater",
+                    string.Format(
+                        "Manifest fetch => url={0}, status={1}, contentType={2}, preview={3}",
+                        manifestUrl,
+                        (int)response.StatusCode,
+                        contentType,
+                        preview));
+
                 response.EnsureSuccessStatusCode();
-                using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+
+                using (var stream = new System.IO.MemoryStream(Encoding.UTF8.GetBytes(body)))
                 {
                     var serializer = new DataContractJsonSerializer(typeof(UpdateManifestDocument));
                     var document = serializer.ReadObject(stream) as UpdateManifestDocument;
@@ -71,10 +89,34 @@ public sealed class AppUpdateManifestService
         }
         catch (Exception ex)
         {
+            AppLog.Write(
+                "Updater",
+                string.Format("Manifest parse/check failed => url={0}, error={1}", manifestUrl, ex.Message));
+
             return AppUpdateCheckResult.Failure(
                 manifestUrl,
                 string.Format("Falha ao consultar atualizacoes: {0}", ex.Message));
         }
+    }
+
+    private static string BuildPreview(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return "<empty>";
+        }
+
+        var normalized = body
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Trim();
+
+        if (normalized.Length > 180)
+        {
+            normalized = normalized.Substring(0, 180) + "...";
+        }
+
+        return normalized;
     }
 
     private static UpdatePackagePlan SelectRecommendedPackagePlan(string currentReleaseId, UpdateManifestDocument document, UpdateReleaseEntry latestRelease)
