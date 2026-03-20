@@ -146,7 +146,8 @@
                 <GroupBox Header="Atualizacoes" Margin="0,12,0,0">
                     <StackPanel Margin="12">
                         <CheckBox Content="Baixar e aplicar atualizacoes automaticamente ao iniciar"
-                                  IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                                  IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding IsAutomaticUpdateToggleEnabled}" />
                         <TextBlock Margin="0,8,0,0"
                                    Text="Canal de atualizacao"
                                    FontWeight="SemiBold" />

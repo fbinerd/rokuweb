@@ -36,6 +36,7 @@ $version = "$major.$minor.$build"
 $shortSha = "local"
 $fullSha = "local"
 $currentChannel = "stable"
+$channelOverride = $env:SUPER_BUILD_CHANNEL
 
 try {
     $resolvedShortSha = (& git -C $repoRoot rev-parse --short HEAD 2>$null).Trim()
@@ -48,13 +49,18 @@ try {
         $fullSha = $resolvedFullSha
     }
 
-    $resolvedBranch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
-    if (-not [string]::IsNullOrWhiteSpace($resolvedBranch)) {
-        if ($resolvedBranch -eq "develop") {
-            $currentChannel = "develop"
-        }
-        elseif ($resolvedBranch -eq "stable") {
-            $currentChannel = "stable"
+    if (-not [string]::IsNullOrWhiteSpace($channelOverride)) {
+        $currentChannel = $channelOverride.Trim().ToLowerInvariant()
+    }
+    else {
+        $resolvedBranch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($resolvedBranch)) {
+            if ($resolvedBranch -eq "develop") {
+                $currentChannel = "develop"
+            }
+            elseif ($resolvedBranch -eq "stable") {
+                $currentChannel = "stable"
+            }
         }
     }
 }

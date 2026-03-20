@@ -123,6 +123,10 @@ public sealed class MainViewModel : ViewModelBase
 
     public IReadOnlyList<string> UpdateChannels { get; } = new[] { UpdateChannelNames.Stable, UpdateChannelNames.Develop };
 
+    public bool IsLocalDevelopmentBuild => string.Equals(BuildVersionInfo.CurrentBuildChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsAutomaticUpdateToggleEnabled => !IsLocalDevelopmentBuild;
+
     public AsyncRelayCommand CreateWindowCommand { get; }
     public AsyncRelayCommand NavigateSelectedWindowCommand { get; }
     public AsyncRelayCommand RefreshTargetsCommand { get; }
@@ -339,6 +343,16 @@ public sealed class MainViewModel : ViewModelBase
         get => _autoUpdateEnabled;
         set
         {
+            if (IsLocalDevelopmentBuild)
+            {
+                if (SetProperty(ref _autoUpdateEnabled, false))
+                {
+                    _ = PersistUpdatePreferencesAsync();
+                }
+
+                return;
+            }
+
             if (SetProperty(ref _autoUpdateEnabled, value))
             {
                 _ = PersistUpdatePreferencesAsync();
@@ -504,7 +518,7 @@ public sealed class MainViewModel : ViewModelBase
     private async Task LoadPreferencesAsync()
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
-        AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : preferences.AutoUpdateEnabled;
         SelectedUpdateChannel = preferences.UpdateChannel;
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
@@ -524,7 +538,9 @@ public sealed class MainViewModel : ViewModelBase
         try
         {
             IsCheckingForUpdates = true;
-            UpdateStatusMessage = "Consultando atualizacoes do super...";
+            UpdateStatusMessage = IsLocalDevelopmentBuild
+                ? "Build local detectado. Auto-update automatico desabilitado."
+                : "Consultando atualizacoes do super...";
             var result = await RefreshUpdateInfoAsync();
 
             AppLog.Write(
@@ -623,6 +639,18 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()
     {
+        if (IsLocalDevelopmentBuild)
+        {
+            AppVersionStatus = string.Format("Versao local: {0} ({1})", BuildVersionInfo.Version, BuildVersionInfo.ReleaseId);
+            LatestAvailableVersion = "Build local";
+            IsUpdateAvailable = false;
+            RecommendedUpdatePackageUrl = string.Empty;
+            UpdateStatusMessage = "Build local detectado. Use o script local para compilar e fazer sideload.";
+            _lastUpdateCheckResult = AppUpdateCheckResult.Failure(string.Empty, UpdateStatusMessage);
+            InstallUpdateCommand.RaiseCanExecuteChanged();
+            return _lastUpdateCheckResult;
+        }
+
         var result = await _appUpdateManifestService.CheckForUpdateAsync(SelectedUpdateChannel, CancellationToken.None);
 
         AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
