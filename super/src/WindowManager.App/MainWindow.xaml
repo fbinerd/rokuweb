@@ -158,10 +158,21 @@
                                    Foreground="#0F766E"
                                    Text="{Binding RecommendedUpdatePackageUrl}"
                                    TextWrapping="Wrap" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Buscar e baixar atualizacao"
-                                Command="{Binding CheckAndDownloadUpdateCommand}" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Height="34"
+                                    Content="Buscar atualizacoes"
+                                    Command="{Binding SearchUpdatesCommand}" />
+                            <Button Grid.Column="2"
+                                    Height="34"
+                                    Content="Instalar atualizacao"
+                                    Command="{Binding InstallUpdateCommand}" />
+                        </Grid>
                     </StackPanel>
                 </GroupBox>
 

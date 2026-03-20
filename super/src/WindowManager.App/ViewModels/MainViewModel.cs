@@ -55,6 +55,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isUpdateAvailable;
     private bool _isCheckingForUpdates;
     private bool _autoUpdateEnabled;
+    private AppUpdateCheckResult? _lastUpdateCheckResult;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -98,7 +99,8 @@ public sealed class MainViewModel : ViewModelBase
         DeleteSelectedTargetCommand = new AsyncRelayCommand(DeleteSelectedTargetAsync, CanManageSelectedTarget);
         CreateStaticPanelCommand = new AsyncRelayCommand(CreateStaticPanelAsync, CanManageSelectedTarget);
         DeleteSelectedPanelCommand = new AsyncRelayCommand(DeleteSelectedPanelAsync, CanDeleteSelectedPanel);
-        CheckAndDownloadUpdateCommand = new AsyncRelayCommand(CheckAndDownloadUpdateAsync, CanCheckAndDownloadUpdate);
+        SearchUpdatesCommand = new AsyncRelayCommand(SearchUpdatesAsync, CanSearchUpdates);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, CanInstallUpdate);
 
         UpdateBridgeSnapshot();
     }
@@ -129,7 +131,8 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand DeleteSelectedTargetCommand { get; }
     public AsyncRelayCommand CreateStaticPanelCommand { get; }
     public AsyncRelayCommand DeleteSelectedPanelCommand { get; }
-    public AsyncRelayCommand CheckAndDownloadUpdateCommand { get; }
+    public AsyncRelayCommand SearchUpdatesCommand { get; }
+    public AsyncRelayCommand InstallUpdateCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -316,7 +319,8 @@ public sealed class MainViewModel : ViewModelBase
         {
             if (SetProperty(ref _isCheckingForUpdates, value))
             {
-                CheckAndDownloadUpdateCommand.RaiseCanExecuteChanged();
+                SearchUpdatesCommand.RaiseCanExecuteChanged();
+                InstallUpdateCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -485,15 +489,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             IsCheckingForUpdates = true;
             UpdateStatusMessage = "Consultando atualizacoes do super...";
-            var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
-
-            AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
-            LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
-                ? "Sem informacao remota"
-                : string.Format("{0} ({1})", result.LatestVersion, result.LatestReleaseId);
-            IsUpdateAvailable = result.UpdateAvailable;
-            RecommendedUpdatePackageUrl = result.RecommendedPackageUrl;
-            UpdateStatusMessage = result.StatusMessage;
+            var result = await RefreshUpdateInfoAsync();
 
             AppLog.Write(
                 "Updater",
@@ -520,35 +516,57 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
-    private bool CanCheckAndDownloadUpdate() => !IsCheckingForUpdates;
+    private bool CanSearchUpdates() => !IsCheckingForUpdates;
 
-    private async Task CheckAndDownloadUpdateAsync()
+    private bool CanInstallUpdate() => !IsCheckingForUpdates && IsUpdateAvailable && _lastUpdateCheckResult is not null;
+
+    private async Task SearchUpdatesAsync()
     {
         IsCheckingForUpdates = true;
         try
         {
             UpdateStatusMessage = "Buscando atualizacao mais recente do super...";
-            var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
-
-            AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
-            LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
-                ? "Sem informacao remota"
-                : string.Format("{0} ({1})", result.LatestVersion, result.LatestReleaseId);
-            IsUpdateAvailable = result.UpdateAvailable;
-            RecommendedUpdatePackageUrl = result.RecommendedPackageUrl;
-            UpdateStatusMessage = result.StatusMessage;
-
-            if (!result.UpdateAvailable)
-            {
-                return;
-            }
-
-            await DownloadAndApplyUpdateAsync(result, automatic: false);
+            await RefreshUpdateInfoAsync();
         }
         finally
         {
             IsCheckingForUpdates = false;
         }
+    }
+
+    private async Task InstallUpdateAsync()
+    {
+        IsCheckingForUpdates = true;
+        try
+        {
+            if (_lastUpdateCheckResult is null || !_lastUpdateCheckResult.UpdateAvailable)
+            {
+                UpdateStatusMessage = "Nenhuma atualizacao pendente para instalar.";
+                return;
+            }
+
+            await DownloadAndApplyUpdateAsync(_lastUpdateCheckResult, automatic: false);
+        }
+        finally
+        {
+            IsCheckingForUpdates = false;
+        }
+    }
+
+    private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()
+    {
+        var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
+
+        AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
+        LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
+            ? "Sem informacao remota"
+            : string.Format("{0} ({1})", result.LatestVersion, result.LatestReleaseId);
+        IsUpdateAvailable = result.UpdateAvailable;
+        RecommendedUpdatePackageUrl = result.RecommendedPackageUrl;
+        UpdateStatusMessage = result.StatusMessage;
+        _lastUpdateCheckResult = result;
+        InstallUpdateCommand.RaiseCanExecuteChanged();
+        return result;
     }
 
     private async Task DownloadAndApplyUpdateAsync(AppUpdateCheckResult result, bool automatic)
