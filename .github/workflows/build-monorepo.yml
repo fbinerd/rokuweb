@@ -15,8 +15,48 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  resolve-builds:
+    runs-on: ubuntu-latest
+    outputs:
+      build_stable: ${{ steps.flags.outputs.build_stable }}
+      build_develop: ${{ steps.flags.outputs.build_develop }}
+    steps:
+      - name: Resolve channel builds
+        id: flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_stable=false
+          build_develop=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            build_stable=true
+            build_develop=true
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.ref_name }}" = "stable" ]; then
+              build_stable=true
+            fi
+            if [ "${{ github.ref_name }}" = "develop" ]; then
+              build_develop=true
+            fi
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            if [ "${{ github.base_ref }}" = "stable" ]; then
+              build_stable=true
+            fi
+            if [ "${{ github.base_ref }}" = "develop" ]; then
+              build_develop=true
+            fi
+          fi
+
+          echo "build_stable=$build_stable" >> "$GITHUB_OUTPUT"
+          echo "build_develop=$build_develop" >> "$GITHUB_OUTPUT"
+
   build-channel:
     runs-on: windows-latest
+    needs: resolve-builds
+    if: |
+      (matrix.channel == 'stable' && needs.resolve-builds.outputs.build_stable == 'true') ||
+      (matrix.channel == 'develop' && needs.resolve-builds.outputs.build_develop == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +133,7 @@ jobs:
       - name: Upload versioned release patch artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.channel }}-versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
+          name: ${{ matrix.channel }}-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
           path: patch-artifacts/**
           if-no-files-found: error
 
@@ -120,7 +160,9 @@ jobs:
 
   publish-pages:
     runs-on: ubuntu-latest
-    needs: build-channel
+    needs:
+      - resolve-builds
+      - build-channel
     if: github.event_name != 'pull_request'
 
     permissions:
@@ -133,13 +175,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Install git
+        run: git --version
+
       - name: Download stable pages source
+        if: needs.resolve-builds.outputs.build_stable == 'true'
         uses: actions/download-artifact@v4
         with:
           name: pages-source-stable
           path: pages-source-stable
 
       - name: Download develop pages source
+        if: needs.resolve-builds.outputs.build_develop == 'true'
         uses: actions/download-artifact@v4
         with:
           name: pages-source-develop
@@ -151,17 +198,36 @@ jobs:
           set -euo pipefail
           pages_root="$PWD/pages-content"
           updates_root="$pages_root/updates"
+          origin_url="https://github.com/${{ github.repository }}.git"
 
           rm -rf "$pages_root"
           mkdir -p "$updates_root/stable" "$updates_root/develop"
 
-          if [ ! -f "pages-source-stable/latest-super.json" ] || [ ! -f "pages-source-develop/latest-super.json" ]; then
+          if git ls-remote --exit-code --heads "$origin_url" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$origin_url" gh-pages-current >/dev/null 2>&1 || true
+            if [ -d gh-pages-current ]; then
+              cp -a gh-pages-current/. "$pages_root/" || true
+              rm -rf "$pages_root/.git" gh-pages-current
+              mkdir -p "$updates_root/stable" "$updates_root/develop"
+            fi
+          fi
+
+          if [ -d "pages-source-stable" ]; then
+            rm -rf "$updates_root/stable"
+            mkdir -p "$updates_root/stable"
+            cp -a pages-source-stable/. "$updates_root/stable/"
+          fi
+
+          if [ -d "pages-source-develop" ]; then
+            rm -rf "$updates_root/develop"
+            mkdir -p "$updates_root/develop"
+            cp -a pages-source-develop/. "$updates_root/develop/"
+          fi
+
+          if [ ! -f "$updates_root/stable/latest-super.json" ] || [ ! -f "$updates_root/develop/latest-super.json" ]; then
             echo "Artifacts de Pages dos canais stable/develop nao foram encontrados."
             exit 1
           fi
-
-          cp -a pages-source-stable/. "$updates_root/stable/"
-          cp -a pages-source-develop/. "$updates_root/develop/"
 
           cp "$updates_root/stable/latest-rokuweb.json" "$updates_root/latest-rokuweb.json"
           cp "$updates_root/stable/latest-super.json" "$updates_root/latest-super.json"
