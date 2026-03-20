@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 
 namespace WindowManager.App.Runtime;
@@ -253,11 +254,47 @@ public sealed class UpdateReleaseEntry
 
     public string DeltaPackageUrl { get; set; } = string.Empty;
 
+    [JsonConverter(typeof(SingleOrArrayConverter<string>))]
     public string[] DeltaSupportedFromReleases { get; set; } = Array.Empty<string>();
 
     public string FullPackageRequiredIfCurrentVersionOlderThan { get; set; } = string.Empty;
 
     public string FullPackageRequiredIfCurrentReleaseOlderThan { get; set; } = string.Empty;
+}
+
+internal sealed class SingleOrArrayConverter<T> : JsonConverter
+{
+    public override bool CanConvert(Type objectType)
+    {
+        return objectType == typeof(T[]);
+    }
+
+    public override object? ReadJson(JsonReader reader, Type objectType, object? existingValue, JsonSerializer serializer)
+    {
+        if (reader.TokenType == JsonToken.Null)
+        {
+            return Array.Empty<T>();
+        }
+
+        var token = JToken.Load(reader);
+        if (token.Type == JTokenType.Array)
+        {
+            return token.ToObject<T[]>(serializer) ?? Array.Empty<T>();
+        }
+
+        var singleValue = token.ToObject<T>(serializer);
+        if (singleValue is null)
+        {
+            return Array.Empty<T>();
+        }
+
+        return new[] { singleValue };
+    }
+
+    public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
+    {
+        serializer.Serialize(writer, value);
+    }
 }
 
 internal sealed class UpdatePackagePlan
