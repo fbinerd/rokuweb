@@ -312,23 +312,7 @@ jobs:
             mkdir -p "$channel_root"
 
             if curl --fail --silent --show-error "$index_url" -o "$channel_root/channel-file-index.json"; then
-              python3 - "$channel_root/channel-file-index.json" "$channel_root" "$channel_url" <<'PY'
-              import json
-              import pathlib
-              import sys
-              import urllib.request
-
-              index_path = pathlib.Path(sys.argv[1])
-              channel_root = pathlib.Path(sys.argv[2])
-              channel_url = sys.argv[3].rstrip("/")
-
-              data = json.loads(index_path.read_text(encoding="utf-8"))
-              for relative in data.get("files", []):
-                  relative = relative.strip("/")
-                  destination = channel_root / relative
-                  destination.parent.mkdir(parents=True, exist_ok=True)
-                  urllib.request.urlretrieve(f"{channel_url}/{relative}", destination)
-              PY
+              python3 -c "import json, pathlib, sys, urllib.request; index_path = pathlib.Path(sys.argv[1]); channel_root = pathlib.Path(sys.argv[2]); channel_url = sys.argv[3].rstrip('/'); data = json.loads(index_path.read_text(encoding='utf-8')); [urllib.request.urlretrieve(f'{channel_url}/{relative.strip(\"/\")}', (channel_root / relative.strip('/')).parent.mkdir(parents=True, exist_ok=True) or (channel_root / relative.strip('/'))) for relative in data.get('files', [])]" "$channel_root/channel-file-index.json" "$channel_root" "$channel_url"
               return 0
             fi
 
@@ -346,22 +330,7 @@ jobs:
             channel="$1"
             channel_root="$updates_root/$channel"
 
-            python3 - "$channel_root" <<'PY'
-            import json
-            import pathlib
-            import sys
-
-            channel_root = pathlib.Path(sys.argv[1])
-            files = []
-            for path in sorted(channel_root.rglob("*")):
-                if path.is_file():
-                    files.append(path.relative_to(channel_root).as_posix())
-
-            (channel_root / "channel-file-index.json").write_text(
-                json.dumps({"files": files}, indent=2),
-                encoding="utf-8"
-            )
-            PY
+            python3 -c "import json, pathlib, sys; channel_root = pathlib.Path(sys.argv[1]); files = [path.relative_to(channel_root).as_posix() for path in sorted(channel_root.rglob('*')) if path.is_file()]; (channel_root / 'channel-file-index.json').write_text(json.dumps({'files': files}, indent=2), encoding='utf-8')" "$channel_root"
           }
 
           rm -rf "$pages_root"
