@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$internalSuperRoot = Join-Path $scriptRoot "superWebRTCStream"
-$externalSuperRoot = Join-Path $scriptRoot "..\superWebRTCStream"
+$internalSuperRoot = Join-Path $scriptRoot "super"
+$externalSuperRoot = Join-Path $scriptRoot "..\super"
 $superRoot = $null
 
 if (Test-Path $internalSuperRoot) {
@@ -10,25 +10,25 @@ if (Test-Path $internalSuperRoot) {
 } elseif (Test-Path $externalSuperRoot) {
     $superRoot = Resolve-Path $externalSuperRoot
 } else {
-    throw "Nao encontrei a pasta do superWebRTCStream nem dentro nem ao lado do rokuweb."
+    throw "Nao encontrei a pasta do super nem dentro nem ao lado do rokuweb."
 }
 
 $superBuildScript = Join-Path $superRoot "Abrir-App.ps1"
 $rokuBuildScript = Join-Path $scriptRoot "Abrir-App.ps1"
 
 if (-not (Test-Path $superBuildScript)) {
-    throw "Script do superWebRTCStream nao encontrado em '$superBuildScript'."
+    throw "Script do super nao encontrado em '$superBuildScript'."
 }
 
 if (-not (Test-Path $rokuBuildScript)) {
     throw "Script do rokuweb nao encontrado em '$rokuBuildScript'."
 }
 
-Write-Host "Compilando superWebRTCStream..."
+Write-Host "Compilando super..."
 & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $superBuildScript
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Falha ao compilar o superWebRTCStream."
+    throw "Falha ao compilar o super."
 }
 
 Write-Host "Empacotando rokuweb..."

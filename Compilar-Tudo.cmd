@@ -6,6 +6,6 @@ if errorlevel 1 (
     echo Falha ao compilar os projetos.
 ) else (
     echo.
-    echo Compilacao conjunta concluida.
+    echo Compilacao conjunta do rokuweb + super concluida.
 )
 pause

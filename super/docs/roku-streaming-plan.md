@@ -2,20 +2,20 @@
 
 ## Objetivo
 
-Permitir que o `superWebRTCStream` carregue `https://emei.lovable.app` em uma janela CEF no Windows e disponibilize esse conteudo para o `rokuweb` em um formato que a Roku consiga reproduzir.
+Permitir que o `super` carregue `https://emei.lovable.app` em uma janela CEF no Windows e disponibilize esse conteudo para o `rokuweb` em um formato que a Roku consiga reproduzir.
 
 ## Situacao Atual
 
 Hoje ja existe:
 
-- navegador embutido com CEF no `superWebRTCStream`
+- navegador embutido com CEF no `super`
 - servidor HTTP local simples via `TcpListener`
 - publicacao de rotas HTML por janela
 - app `rokuweb` capaz de buscar JSON por HTTP
 
 Hoje ainda nao existe:
 
-- endpoint `/api/windows` no `superWebRTCStream`
+- endpoint `/api/windows` no `super`
 - endpoint de stream para Roku
 - pipeline real de captura de video
 - HLS (`.m3u8` + segmentos`)
@@ -27,7 +27,7 @@ Hoje ainda nao existe:
 emei.lovable.app
         |
         v
-CEF Window no superWebRTCStream
+CEF Window no super
         |
         v
 Captura da janela
@@ -36,7 +36,7 @@ Captura da janela
 Encoder H.264 + geracao HLS
         |
         v
-Servidor HTTP local no superWebRTCStream
+Servidor HTTP local no super
         |-- GET /api/windows
         |-- GET /streams/{slug}/index.m3u8
         |-- GET /streams/{slug}/{segment}.ts
@@ -86,7 +86,7 @@ Formato minimo recomendado:
 - audio opcional no MVP
 - segmentos curtos, por exemplo `2s`
 
-## Mudancas Necessarias No `superWebRTCStream`
+## Mudancas Necessarias No `super`
 
 ### Fase 1: API para o Roku
 
@@ -151,7 +151,7 @@ O app Roku precisa deixar de ser so uma lista textual e passar a:
 
 ## Requisitos Que Ainda Faltam
 
-- API JSON real no `superWebRTCStream`
+- API JSON real no `super`
 - pipeline de captura por janela
 - encoder H.264
 - geracao e hospedagem HLS
@@ -160,7 +160,7 @@ O app Roku precisa deixar de ser so uma lista textual e passar a:
 
 ## Caminho Mais Direto Para O MVP
 
-1. Criar `/api/windows` no `superWebRTCStream`.
+1. Criar `/api/windows` no `super`.
 2. Fazer o `rokuweb` exibir e selecionar streams reais.
 3. Publicar apenas uma janela fixa: `https://emei.lovable.app`.
 4. Implementar HLS so para essa janela.

@@ -1,6 +1,6 @@
 # Roku Web Viewer
 
-Aplicativo Roku para consumir dados e streams publicados pelo `superWebRTCStream`.
+Aplicativo Roku para consumir dados e streams publicados pelo `super`.
 
 ## Estado Atual
 
@@ -19,9 +19,9 @@ Hoje o app ainda nao:
 
 O fluxo desejado e:
 
-1. o `superWebRTCStream` abre `https://emei.lovable.app` no CEF
-2. o `superWebRTCStream` captura essa janela
-3. o `superWebRTCStream` publica um stream HLS
+1. o `super` abre `https://emei.lovable.app` no CEF
+2. o `super` captura essa janela
+3. o `super` publica um stream HLS
 4. o `rokuweb` toca esse stream
 
 ## Endpoint Esperado
@@ -63,7 +63,7 @@ Isso gera `hello-roku.zip`.
 
 ## Como testar na TV
 
-1. Abra o `superWebRTCStream` no Windows.
+1. Abra o `super` no Windows.
 2. Crie uma janela com `https://emei.lovable.app`.
 3. Confirme que o servidor Windows responde em `http://10.1.0.10:8090/api/windows`.
 4. Gere o pacote com `Abrir-App.cmd`.
@@ -73,7 +73,7 @@ Isso gera `hello-roku.zip`.
 Resultado esperado:
 
 - o app Roku conecta em `10.1.0.10:8090`
-- a TV mostra a lista de janelas publicadas pelo `superWebRTCStream`
+- a TV mostra a lista de janelas publicadas pelo `super`
 - o item da `emei.lovable.app` aparece na lista
 
 Observacao:
