@@ -15,7 +15,6 @@ sub init()
     m.cursorX = 640
     m.cursorY = 360
     m.autoConnectAttempts = 0
-    m.autoConnectMaxAttempts = 10
     m.isAutoConnecting = true
     m.keyboardPurpose = ""
     deviceInfo = CreateObject("roDeviceInfo")
@@ -207,7 +206,7 @@ end sub
 sub loadWindows(silent = false as boolean)
     if not silent and m.isAutoConnecting
         m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
-        m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " de " + m.autoConnectMaxAttempts.ToStr()
+        m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " em andamento. Tentando automaticamente..."
     else if not silent
         m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
         m.subtitleLabel.text = "Aguarde a resposta do servidor"
@@ -234,15 +233,9 @@ sub applyBridgeResponse()
     if responseCode <> 200 or responseBody = invalid or responseBody = ""
         if m.isAutoConnecting
             m.autoConnectAttempts = m.autoConnectAttempts + 1
-            if m.autoConnectAttempts < m.autoConnectMaxAttempts
-                scheduleAutoConnectRetry()
-            else
-                m.isAutoConnecting = false
-                startPanelRefresh()
-                m.statusLabel.text = "Nao foi possivel encontrar " + m.defaultBridgeHost
-                m.subtitleLabel.text = "Informe o IP do super para conectar"
-                promptForBridgeHost()
-            end if
+            m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
+            m.subtitleLabel.text = "Ainda nao foi possivel conectar. Tentando novamente automaticamente..."
+            scheduleAutoConnectRetry()
         else
             startPanelRefresh()
             m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
@@ -329,7 +322,7 @@ sub stopPanelRefresh()
 end sub
 
 sub onPanelRefreshTimerFire()
-    if m.isAutoConnecting or m.isKeyboardOpen or m.isFullscreen
+    if m.isKeyboardOpen or m.isFullscreen
         return
     end if
 
@@ -343,7 +336,7 @@ sub scheduleAutoConnectRetry()
     end if
 
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
-    m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente..."
+    m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente automaticamente..."
     m.autoConnectTimer.control = "stop"
     m.autoConnectTimer.control = "start"
 end sub

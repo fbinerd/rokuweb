@@ -9,6 +9,8 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+Add-Type -AssemblyName System.Net.Http
+
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
@@ -71,7 +73,7 @@ function New-MultipartBody {
 function Invoke-RokuSideload {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Host,
+        [string]$RokuHost,
         [Parameter(Mandatory = $true)]
         [string]$Username,
         [Parameter(Mandatory = $true)]
@@ -93,7 +95,7 @@ function Invoke-RokuSideload {
         $content = [System.Net.Http.ByteArrayContent]::new($payload.Body)
         $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("multipart/form-data; boundary=" + $payload.Boundary)
 
-        $installUri = "http://$Host/plugin_install"
+        $installUri = "http://$RokuHost/plugin_install"
         $installResponse = $client.PostAsync($installUri, $content).GetAwaiter().GetResult()
         $installBody = $installResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Write-Host ("plugin_install => status={0}" -f [int]$installResponse.StatusCode)
@@ -102,9 +104,9 @@ function Invoke-RokuSideload {
         }
 
         Start-Sleep -Milliseconds 600
-        $null = $client.PostAsync("http://$Host:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+        $null = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
         Start-Sleep -Milliseconds 600
-        $launchResponse = $client.PostAsync("http://$Host:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+        $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
         Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
     }
     finally {
@@ -151,7 +153,7 @@ if (-not $SkipSideload) {
     }
 
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {
-        Invoke-RokuSideload -Host $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip
+        Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip
     }
 }
 
