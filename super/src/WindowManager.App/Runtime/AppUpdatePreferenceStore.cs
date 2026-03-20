@@ -14,9 +14,7 @@ public sealed class AppUpdatePreferenceStore
 
     public AppUpdatePreferenceStore()
     {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowManagerBroadcast");
+        var root = AppDataPaths.Root;
 
         _settingsFilePath = Path.Combine(root, "update-settings.json");
     }

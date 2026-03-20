@@ -14,9 +14,7 @@ public sealed class KnownDisplayStore
 
     public KnownDisplayStore()
     {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowManagerBroadcast");
+        var root = AppDataPaths.Root;
 
         _filePath = Path.Combine(root, "known-displays.json");
     }

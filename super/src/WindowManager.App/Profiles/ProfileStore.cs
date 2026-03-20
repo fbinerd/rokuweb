@@ -17,9 +17,7 @@ public sealed class ProfileStore
 
     public ProfileStore()
     {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowManagerBroadcast");
+        var root = Runtime.AppDataPaths.Root;
 
         _profilesDirectory = Path.Combine(root, "Profiles");
         _lastProfileFilePath = Path.Combine(root, "last-profile.txt");

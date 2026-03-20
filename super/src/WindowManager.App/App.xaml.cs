@@ -91,10 +91,7 @@ public partial class App : Application
         }
 
         var baseDirectory = AppContext.BaseDirectory;
-        var appDataRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowManagerBroadcast",
-            "cef");
+        var appDataRoot = AppDataPaths.CefRoot;
 
         Directory.CreateDirectory(appDataRoot);
         Directory.CreateDirectory(Path.Combine(appDataRoot, "cache"));

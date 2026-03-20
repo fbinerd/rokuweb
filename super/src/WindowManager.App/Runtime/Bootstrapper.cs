@@ -31,7 +31,8 @@ public sealed class Bootstrapper
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
         var appSelfUpdateService = new AppSelfUpdateService();
-        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService);
+        var appDataMaintenanceService = new AppDataMaintenanceService();
+        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);
 
         return new MainWindow(viewModel, browserSnapshotService);
     }

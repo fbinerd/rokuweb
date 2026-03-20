@@ -12,6 +12,7 @@ using WindowManager.App.Runtime.Publishing;
 using WindowManager.App.ViewModels;
 using WindowManager.Core.Models;
 using CefSharp.Wpf;
+using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
 namespace WindowManager.App;
@@ -373,6 +374,92 @@ public partial class MainWindow : Window
 
         _logWindow.Closed += (_, __) => _logWindow = null;
         _logWindow.Show();
+    }
+
+    private async void OnExportApplicationDataClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Salvar backup da base do super",
+            Filter = "Arquivo zip (*.zip)|*.zip",
+            DefaultExt = ".zip",
+            AddExtension = true,
+            FileName = string.Format("super-base-{0:yyyyMMdd-HHmmss}.zip", DateTime.Now)
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.ExportApplicationDataAsync(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Falha ao salvar backup", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void OnImportApplicationDataClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Restaurar backup da base do super",
+            Filter = "Arquivo zip (*.zip)|*.zip",
+            CheckFileExists = true
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        var result = MessageBox.Show(
+            this,
+            "A restauracao vai substituir a base local atual. Deseja continuar?",
+            "Restaurar backup",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.ImportApplicationDataAsync(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Falha ao restaurar backup", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void OnResetApplicationDataClick(object sender, RoutedEventArgs e)
+    {
+        var result = MessageBox.Show(
+            this,
+            "Isso vai apagar perfis, TVs conhecidas e preferencias locais do aplicativo. Deseja continuar?",
+            "Resetar base local",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.ResetApplicationDataAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Falha ao resetar base", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void OnDeleteWindowClick(object sender, RoutedEventArgs e)

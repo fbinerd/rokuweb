@@ -33,6 +33,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly AppUpdateManifestService _appUpdateManifestService;
     private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
     private readonly AppSelfUpdateService _appSelfUpdateService;
+    private readonly AppDataMaintenanceService _appDataMaintenanceService;
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
@@ -64,7 +65,8 @@ public sealed class MainViewModel : ViewModelBase
         KnownDisplayStore knownDisplayStore,
         AppUpdateManifestService appUpdateManifestService,
         AppUpdatePreferenceStore appUpdatePreferenceStore,
-        AppSelfUpdateService appSelfUpdateService)
+        AppSelfUpdateService appSelfUpdateService,
+        AppDataMaintenanceService appDataMaintenanceService)
     {
         _browserInstanceHost = browserInstanceHost;
         _displayDiscoveryService = displayDiscoveryService;
@@ -75,6 +77,7 @@ public sealed class MainViewModel : ViewModelBase
         _appUpdateManifestService = appUpdateManifestService;
         _appUpdatePreferenceStore = appUpdatePreferenceStore;
         _appSelfUpdateService = appSelfUpdateService;
+        _appDataMaintenanceService = appDataMaintenanceService;
 
         ResolutionModes = Enum.GetValues(typeof(RenderResolutionMode)).Cast<RenderResolutionMode>().ToArray();
         WebRtcBindModes = Enum.GetValues(typeof(WebRtcBindMode)).Cast<WebRtcBindMode>().ToArray();
@@ -431,17 +434,49 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task InitializeAfterStartupAsync()
     {
+        await LoadPreferencesAsync();
+        await ReloadPersistedStateAsync();
+        _ = CheckForAppUpdatesAsync();
+    }
+
+    public async Task ExportApplicationDataAsync(string destinationZipPath)
+    {
+        await _appDataMaintenanceService.ExportAsync(destinationZipPath, CancellationToken.None);
+        StatusMessage = string.Format("Backup salvo em '{0}'.", destinationZipPath);
+    }
+
+    public async Task ImportApplicationDataAsync(string sourceZipPath)
+    {
+        await ResetRuntimeStateAsync();
+        await _appDataMaintenanceService.ImportAsync(sourceZipPath, CancellationToken.None);
+        await LoadPreferencesAsync();
+        await ReloadPersistedStateAsync();
+        StatusMessage = string.Format("Backup restaurado de '{0}'.", sourceZipPath);
+    }
+
+    public async Task ResetApplicationDataAsync()
+    {
+        await ResetRuntimeStateAsync();
+        await _appDataMaintenanceService.ResetAsync(CancellationToken.None);
+        await LoadPreferencesAsync();
+        await ReloadPersistedStateAsync();
+        StatusMessage = "Base local do aplicativo resetada com sucesso.";
+    }
+
+    private async Task LoadPreferencesAsync()
+    {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
         AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+    }
 
+    private async Task ReloadPersistedStateAsync()
+    {
+        await RefreshTargetsAsync();
         await RefreshProfileNamesAsync();
 
         var startupProfileName = await _profileStore.GetStartupProfileNameAsync(CancellationToken.None);
         ProfileName = startupProfileName;
         await LoadProfileAsync();
-
-        _ = CheckForAppUpdatesAsync();
-        _ = RefreshTargetsAfterStartupAsync();
     }
 
     private async Task CheckForAppUpdatesAsync()
@@ -685,6 +720,37 @@ public sealed class MainViewModel : ViewModelBase
                 SelectedWindow.State));
         await SaveProfileInternalAsync(updateStatus: false);
         UpdateBridgeSnapshot();
+    }
+
+    private async Task ResetRuntimeStateAsync()
+    {
+        foreach (var window in Windows.ToList())
+        {
+            try
+            {
+                await _webRtcPublisherService.UnpublishAsync(window, CancellationToken.None);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await _browserInstanceHost.CloseAsync(window.Id, CancellationToken.None);
+            }
+            catch
+            {
+            }
+        }
+
+        Windows.Clear();
+        Targets.Clear();
+        StaticPanels.Clear();
+        AvailableProfiles.Clear();
+        SelectedWindow = null;
+        SelectedTarget = null;
+        SelectedStaticPanel = null;
+        CurrentBrowserAddress = "about:blank";
     }
 
     private async Task DeleteSelectedWindowAsync()
