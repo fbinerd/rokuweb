@@ -32,6 +32,36 @@ function Get-GitShortSha {
     return $sha
 }
 
+function Get-GitCommitTimestampUtc {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$Revision
+    )
+
+    $timestamp = (& git -C $RepositoryRoot show -s --format=%cI $Revision).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($timestamp)) {
+        throw "Falha ao obter timestamp para '$Revision'."
+    }
+
+    return $timestamp
+}
+
+function Test-GitRevisionExists {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$Revision
+    )
+
+    $escapedRoot = $RepositoryRoot.Replace('"', '\"')
+    $escapedRevision = $Revision.Replace('"', '\"')
+    cmd /c "git -C ""$escapedRoot"" rev-parse --verify ""$escapedRevision"" >nul 2>nul"
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Get-ManifestValue {
     param(
         [Parameter(Mandatory = $true)]
@@ -48,6 +78,22 @@ function Get-ManifestValue {
     return $line.Substring($Key.Length + 1).Trim()
 }
 
+function Get-ManifestValueFromContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Content,
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $line = $Content | Where-Object { $_ -like "$Key=*" } | Select-Object -First 1
+    if (-not $line) {
+        return ""
+    }
+
+    return $line.Substring($Key.Length + 1).Trim()
+}
+
 function Get-RokuVersion {
     param(
         [Parameter(Mandatory = $true)]
@@ -57,6 +103,30 @@ function Get-RokuVersion {
     $major = Get-ManifestValue -ManifestPath $ManifestPath -Key "major_version"
     $minor = Get-ManifestValue -ManifestPath $ManifestPath -Key "minor_version"
     $build = Get-ManifestValue -ManifestPath $ManifestPath -Key "build_version"
+    return "$major.$minor.$build"
+}
+
+function Get-RokuVersionAtRevision {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$Revision
+    )
+
+    $content = & git -C $RepositoryRoot show "$Revision`:manifest" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $content) {
+        return ""
+    }
+
+    $major = Get-ManifestValueFromContent -Content $content -Key "major_version"
+    $minor = Get-ManifestValueFromContent -Content $content -Key "minor_version"
+    $build = Get-ManifestValueFromContent -Content $content -Key "build_version"
+
+    if ([string]::IsNullOrWhiteSpace($major) -or [string]::IsNullOrWhiteSpace($minor) -or [string]::IsNullOrWhiteSpace($build)) {
+        return ""
+    }
+
     return "$major.$minor.$build"
 }
 
@@ -255,6 +325,116 @@ function Write-JsonFile {
     $Data | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Get-ReleaseHistory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentReleaseId,
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentGeneratedAtUtc,
+        [string]$CurrentPreviousVersion,
+        [string]$CurrentPreviousReleaseId,
+        [string]$CurrentFullPackage,
+        [string]$CurrentDeltaPackage,
+        [string[]]$CurrentChangedFiles,
+        [string[]]$CurrentDeletedFiles
+    )
+
+    $pathspecs = if ($AppName -eq "super") {
+        @("--", "super")
+    }
+    else {
+        @("--", "manifest", "components", "source", "package.ps1")
+    }
+
+    $historyCommits = @()
+    $logOutput = & git -C $RepositoryRoot log --format=%H @pathspecs
+    if ($LASTEXITCODE -eq 0 -and $logOutput) {
+        foreach ($line in $logOutput) {
+            $commit = $line.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($commit)) {
+                $historyCommits += $commit
+            }
+        }
+    }
+
+    $seenReleaseIds = @{}
+    $releases = @()
+
+    $currentEntry = [pscustomobject]@{
+        version = $CurrentVersion
+        releaseId = $CurrentReleaseId
+        commit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+        publishedAtUtc = $CurrentGeneratedAtUtc
+        fullPackage = $CurrentFullPackage
+        deltaPackage = $CurrentDeltaPackage
+        deltaSupportedFromVersions = if ($CurrentPreviousVersion) { [object[]]@($CurrentPreviousVersion) } else { [object[]]@() }
+        deltaSupportedFromReleases = if ($CurrentPreviousReleaseId) { [object[]]@($CurrentPreviousReleaseId) } else { [object[]]@() }
+        fullPackageRequiredIfCurrentVersionOlderThan = $CurrentPreviousVersion
+        fullPackageRequiredIfCurrentReleaseOlderThan = $CurrentPreviousReleaseId
+        changedFiles = [object[]]@($CurrentChangedFiles)
+        deletedFiles = [object[]]@($CurrentDeletedFiles)
+    }
+    $releases += $currentEntry
+    $seenReleaseIds[$CurrentReleaseId] = $true
+
+    for ($i = 0; $i -lt $historyCommits.Count; $i++) {
+        $commit = $historyCommits[$i]
+        $shortSha = Get-GitShortSha -RepositoryRoot $RepositoryRoot -Revision $commit
+        $version = Get-RokuVersionAtRevision -RepositoryRoot $RepositoryRoot -Revision $commit
+        if ([string]::IsNullOrWhiteSpace($version)) {
+            continue
+        }
+
+        $releaseId = "$version-$shortSha"
+        if ($seenReleaseIds.ContainsKey($releaseId)) {
+            continue
+        }
+
+        $parentVersion = ""
+        $parentReleaseId = ""
+        $parentRef = "$commit^"
+        if (Test-GitRevisionExists -RepositoryRoot $RepositoryRoot -Revision $parentRef) {
+            $parentVersion = Get-RokuVersionAtRevision -RepositoryRoot $RepositoryRoot -Revision $parentRef
+            if (-not [string]::IsNullOrWhiteSpace($parentVersion)) {
+                $parentShortSha = Get-GitShortSha -RepositoryRoot $RepositoryRoot -Revision $parentRef
+                $parentReleaseId = "$parentVersion-$parentShortSha"
+            }
+        }
+
+        $publishedAtUtc = Get-GitCommitTimestampUtc -RepositoryRoot $RepositoryRoot -Revision $commit
+        $deltaPackage = if ($parentReleaseId) {
+            "$AppName-$releaseId-delta-from-$parentReleaseId.zip"
+        }
+        else {
+            $null
+        }
+
+        $releases += [pscustomobject]@{
+            version = $version
+            releaseId = $releaseId
+            commit = $commit
+            publishedAtUtc = $publishedAtUtc
+            fullPackage = "$AppName-$releaseId-full.zip"
+            deltaPackage = $deltaPackage
+            deltaSupportedFromVersions = if ($parentVersion) { [object[]]@($parentVersion) } else { [object[]]@() }
+            deltaSupportedFromReleases = if ($parentReleaseId) { [object[]]@($parentReleaseId) } else { [object[]]@() }
+            fullPackageRequiredIfCurrentVersionOlderThan = $parentVersion
+            fullPackageRequiredIfCurrentReleaseOlderThan = $parentReleaseId
+            changedFiles = [object[]]@()
+            deletedFiles = [object[]]@()
+        }
+        $seenReleaseIds[$releaseId] = $true
+    }
+
+    return [object[]]$releases
+}
+
 try {
     if (Test-Path $outputRoot) {
         Remove-Item $outputRoot -Recurse -Force
@@ -291,8 +471,7 @@ try {
 
     $canCreateDelta = $true
     try {
-        & git -C $repoRoot cat-file -e "$BaseRef^{commit}" 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        if (-not (Test-GitRevisionExists -RepositoryRoot $repoRoot -Revision $BaseRef)) {
             $canCreateDelta = $false
             $deltaStatus = "skipped"
             $deltaMessage = "Base ref '$BaseRef' nao esta disponivel neste checkout."
@@ -363,7 +542,7 @@ try {
         }
     }
 
-    Write-JsonFile -Path (Join-Path $outputRoot ("rokuweb-{0}-changes.json" -f $releaseId)) -Data ([pscustomobject]@{
+    $rokuChangesData = [pscustomobject]@{
         app = "rokuweb"
         version = $rokuVersion
         releaseId = $releaseId
@@ -381,9 +560,10 @@ try {
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($rokuChanged)
         deletedFiles = @($rokuDeleted)
-    })
+    }
+    Write-JsonFile -Path (Join-Path $outputRoot ("rokuweb-{0}-changes.json" -f $releaseId)) -Data $rokuChangesData
 
-    Write-JsonFile -Path (Join-Path $outputRoot ("super-{0}-changes.json" -f $releaseId)) -Data ([pscustomobject]@{
+    $superChangesData = [pscustomobject]@{
         app = "super"
         version = $rokuVersion
         releaseId = $releaseId
@@ -401,6 +581,53 @@ try {
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = @($superChanged)
         deletedFiles = @($superDeleted)
+    }
+    Write-JsonFile -Path (Join-Path $outputRoot ("super-{0}-changes.json" -f $releaseId)) -Data $superChangesData
+
+    $rokuHistory = Get-ReleaseHistory `
+        -RepositoryRoot $repoRoot `
+        -AppName "rokuweb" `
+        -CurrentVersion $rokuVersion `
+        -CurrentReleaseId $releaseId `
+        -CurrentGeneratedAtUtc $generatedAtUtc `
+        -CurrentPreviousVersion $previousVersion `
+        -CurrentPreviousReleaseId $previousReleaseId `
+        -CurrentFullPackage $rokuChangesData.fullPackage `
+        -CurrentDeltaPackage $rokuChangesData.deltaPackage `
+        -CurrentChangedFiles $rokuChanged `
+        -CurrentDeletedFiles $rokuDeleted
+
+    $superHistory = Get-ReleaseHistory `
+        -RepositoryRoot $repoRoot `
+        -AppName "super" `
+        -CurrentVersion $rokuVersion `
+        -CurrentReleaseId $releaseId `
+        -CurrentGeneratedAtUtc $generatedAtUtc `
+        -CurrentPreviousVersion $previousVersion `
+        -CurrentPreviousReleaseId $previousReleaseId `
+        -CurrentFullPackage $superChangesData.fullPackage `
+        -CurrentDeltaPackage $superChangesData.deltaPackage `
+        -CurrentChangedFiles $superChanged `
+        -CurrentDeletedFiles $superDeleted
+
+    Write-JsonFile -Path (Join-Path $outputRoot "latest-rokuweb.json") -Data ([pscustomobject]@{
+        app = "rokuweb"
+        currentRelease = $releaseId
+        currentVersion = $rokuVersion
+        publishedAtUtc = $generatedAtUtc
+        minimumSupportedVersion = if ($previousVersion) { $previousVersion } else { $rokuVersion }
+        minimumSupportedRelease = if ($previousReleaseId) { $previousReleaseId } else { $releaseId }
+        releases = [object[]]$rokuHistory
+    })
+
+    Write-JsonFile -Path (Join-Path $outputRoot "latest-super.json") -Data ([pscustomobject]@{
+        app = "super"
+        currentRelease = $releaseId
+        currentVersion = $rokuVersion
+        publishedAtUtc = $generatedAtUtc
+        minimumSupportedVersion = if ($previousVersion) { $previousVersion } else { $rokuVersion }
+        minimumSupportedRelease = if ($previousReleaseId) { $previousReleaseId } else { $releaseId }
+        releases = [object[]]$superHistory
     })
 }
 finally {
