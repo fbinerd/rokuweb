@@ -1,2 +1,12 @@
 hello-roku.zip
 roku-dev.config.clixml
+
+# Monorepo do super
+super/.dotnet/
+super/.nuget/
+super/**/bin/
+super/**/obj/
+super/**/*.log
+super/**/*.tmp
+super/**/*.cache
+super/.vs/

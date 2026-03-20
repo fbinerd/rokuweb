@@ -51,22 +51,30 @@ Resposta esperada:
 
 Para gerar o pacote `.zip`, basta dar dois cliques em:
 
-- `Abrir-App.cmd`
+- `Gerar-Pacote-Roku.cmd`
+- compatibilidade: `Abrir-App.cmd`
 
 Ou no PowerShell:
 
 ```powershell
-.\Abrir-App.ps1
+.\Gerar-Pacote-Roku.ps1
 ```
 
 Isso gera `hello-roku.zip`.
+
+## Monorepo
+
+Para compilar o monorepo inteiro de uma vez:
+
+- `Compilar-Projetos.cmd`
+- compatibilidade: `Compilar-Tudo.cmd`
 
 ## Como testar na TV
 
 1. Abra o `super` no Windows.
 2. Crie uma janela com `https://emei.lovable.app`.
 3. Confirme que o servidor Windows responde em `http://10.1.0.10:8090/api/windows`.
-4. Gere o pacote com `Abrir-App.cmd`.
+4. Gere o pacote com `Gerar-Pacote-Roku.cmd`.
 5. Envie `hello-roku.zip` para a Roku em modo desenvolvedor.
 6. Abra o canal na TV.
 
