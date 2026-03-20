@@ -612,6 +612,9 @@ try {
 
     Write-JsonFile -Path (Join-Path $outputRoot "latest-rokuweb.json") -Data ([pscustomobject]@{
         app = "rokuweb"
+        distributionChannel = "github-pages"
+        manifestPath = "updates/latest-rokuweb.json"
+        assetBasePath = "updates/"
         currentRelease = $releaseId
         currentVersion = $rokuVersion
         publishedAtUtc = $generatedAtUtc
@@ -622,6 +625,9 @@ try {
 
     Write-JsonFile -Path (Join-Path $outputRoot "latest-super.json") -Data ([pscustomobject]@{
         app = "super"
+        distributionChannel = "github-pages"
+        manifestPath = "updates/latest-super.json"
+        assetBasePath = "updates/"
         currentRelease = $releaseId
         currentVersion = $rokuVersion
         publishedAtUtc = $generatedAtUtc

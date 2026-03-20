@@ -11,6 +11,11 @@ on:
       - stable
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -38,6 +43,9 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Build super
         shell: pwsh
@@ -86,3 +94,47 @@ jobs:
           name: latest-super-json-${{ steps.meta.outputs.release_id }}
           path: dist/latest-super.json
           if-no-files-found: error
+
+      - name: Prepare Pages content
+        shell: pwsh
+        run: |
+          $pagesRoot = Join-Path $PWD "pages-content"
+          $updatesRoot = Join-Path $pagesRoot "updates"
+          if (Test-Path $pagesRoot) {
+            Remove-Item -Recurse -Force $pagesRoot
+          }
+          New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
+          Copy-Item -Path dist\* -Destination $updatesRoot -Recurse -Force
+          @"
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <title>rokuweb updates</title>
+          </head>
+          <body>
+            <h1>rokuweb updates</h1>
+            <ul>
+              <li><a href="./updates/latest-rokuweb.json">latest-rokuweb.json</a></li>
+              <li><a href="./updates/latest-super.json">latest-super.json</a></li>
+            </ul>
+          </body>
+          </html>
+          "@ | Set-Content -Path (Join-Path $pagesRoot "index.html") -Encoding UTF8
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages-content
+
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
