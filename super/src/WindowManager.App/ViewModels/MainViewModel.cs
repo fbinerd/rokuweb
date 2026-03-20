@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using WindowManager.App.Commands;
 using WindowManager.App.Profiles;
 using WindowManager.App.Runtime;
@@ -30,6 +31,8 @@ public sealed class MainViewModel : ViewModelBase
     private readonly LocalWebRtcPublisherService _webRtcPublisherService;
     private readonly KnownDisplayStore _knownDisplayStore;
     private readonly AppUpdateManifestService _appUpdateManifestService;
+    private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
+    private readonly AppSelfUpdateService _appSelfUpdateService;
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
@@ -50,6 +53,7 @@ public sealed class MainViewModel : ViewModelBase
     private string _recommendedUpdatePackageUrl = string.Empty;
     private bool _isUpdateAvailable;
     private bool _isCheckingForUpdates;
+    private bool _autoUpdateEnabled;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -58,7 +62,9 @@ public sealed class MainViewModel : ViewModelBase
         ProfileStore profileStore,
         LocalWebRtcPublisherService webRtcPublisherService,
         KnownDisplayStore knownDisplayStore,
-        AppUpdateManifestService appUpdateManifestService)
+        AppUpdateManifestService appUpdateManifestService,
+        AppUpdatePreferenceStore appUpdatePreferenceStore,
+        AppSelfUpdateService appSelfUpdateService)
     {
         _browserInstanceHost = browserInstanceHost;
         _displayDiscoveryService = displayDiscoveryService;
@@ -67,6 +73,8 @@ public sealed class MainViewModel : ViewModelBase
         _webRtcPublisherService = webRtcPublisherService;
         _knownDisplayStore = knownDisplayStore;
         _appUpdateManifestService = appUpdateManifestService;
+        _appUpdatePreferenceStore = appUpdatePreferenceStore;
+        _appSelfUpdateService = appSelfUpdateService;
 
         ResolutionModes = Enum.GetValues(typeof(RenderResolutionMode)).Cast<RenderResolutionMode>().ToArray();
         WebRtcBindModes = Enum.GetValues(typeof(WebRtcBindMode)).Cast<WebRtcBindMode>().ToArray();
@@ -87,6 +95,7 @@ public sealed class MainViewModel : ViewModelBase
         DeleteSelectedTargetCommand = new AsyncRelayCommand(DeleteSelectedTargetAsync, CanManageSelectedTarget);
         CreateStaticPanelCommand = new AsyncRelayCommand(CreateStaticPanelAsync, CanManageSelectedTarget);
         DeleteSelectedPanelCommand = new AsyncRelayCommand(DeleteSelectedPanelAsync, CanDeleteSelectedPanel);
+        CheckAndDownloadUpdateCommand = new AsyncRelayCommand(CheckAndDownloadUpdateAsync, CanCheckAndDownloadUpdate);
 
         UpdateBridgeSnapshot();
     }
@@ -117,6 +126,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand DeleteSelectedTargetCommand { get; }
     public AsyncRelayCommand CreateStaticPanelCommand { get; }
     public AsyncRelayCommand DeleteSelectedPanelCommand { get; }
+    public AsyncRelayCommand CheckAndDownloadUpdateCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -299,7 +309,25 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsCheckingForUpdates
     {
         get => _isCheckingForUpdates;
-        private set => SetProperty(ref _isCheckingForUpdates, value);
+        private set
+        {
+            if (SetProperty(ref _isCheckingForUpdates, value))
+            {
+                CheckAndDownloadUpdateCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool AutoUpdateEnabled
+    {
+        get => _autoUpdateEnabled;
+        set
+        {
+            if (SetProperty(ref _autoUpdateEnabled, value))
+            {
+                _ = PersistUpdatePreferencesAsync();
+            }
+        }
     }
 
     public string PreviewTitle =>
@@ -403,6 +431,9 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task InitializeAfterStartupAsync()
     {
+        var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
+        AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+
         await RefreshProfileNamesAsync();
 
         var startupProfileName = await _profileStore.GetStartupProfileNameAsync(CancellationToken.None);
@@ -437,6 +468,11 @@ public sealed class MainViewModel : ViewModelBase
                     result.UpdateAvailable,
                     result.CurrentReleaseId,
                     result.LatestReleaseId));
+
+            if (AutoUpdateEnabled && result.UpdateAvailable)
+            {
+                await DownloadAndApplyUpdateAsync(result, automatic: true);
+            }
         }
         catch (Exception ex)
         {
@@ -446,6 +482,77 @@ public sealed class MainViewModel : ViewModelBase
         finally
         {
             IsCheckingForUpdates = false;
+        }
+    }
+
+    private bool CanCheckAndDownloadUpdate() => !IsCheckingForUpdates;
+
+    private async Task CheckAndDownloadUpdateAsync()
+    {
+        IsCheckingForUpdates = true;
+        try
+        {
+            UpdateStatusMessage = "Buscando atualizacao mais recente do super...";
+            var result = await _appUpdateManifestService.CheckForUpdateAsync(CancellationToken.None);
+
+            AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
+            LatestAvailableVersion = string.IsNullOrWhiteSpace(result.LatestReleaseId)
+                ? "Sem informacao remota"
+                : string.Format("{0} ({1})", result.LatestVersion, result.LatestReleaseId);
+            IsUpdateAvailable = result.UpdateAvailable;
+            RecommendedUpdatePackageUrl = result.RecommendedPackageUrl;
+            UpdateStatusMessage = result.StatusMessage;
+
+            if (!result.UpdateAvailable)
+            {
+                return;
+            }
+
+            await DownloadAndApplyUpdateAsync(result, automatic: false);
+        }
+        finally
+        {
+            IsCheckingForUpdates = false;
+        }
+    }
+
+    private async Task DownloadAndApplyUpdateAsync(AppUpdateCheckResult result, bool automatic)
+    {
+        var actionLabel = automatic ? "Auto-update" : "Atualizacao manual";
+        UpdateStatusMessage = string.Format("{0}: baixando pacote {1}...", actionLabel, result.RecommendedPackageUrl);
+        AppLog.Write("Updater", UpdateStatusMessage);
+
+        var applyResult = await _appSelfUpdateService.DownloadAndPrepareAsync(result, CancellationToken.None);
+        if (!applyResult.Succeeded)
+        {
+            UpdateStatusMessage = applyResult.Message;
+            AppLog.Write("Updater", applyResult.Message);
+            return;
+        }
+
+        UpdateStatusMessage = string.Format("{0}: pacote preparado. Reiniciando para aplicar a release {1}.", actionLabel, result.LatestReleaseId);
+        AppLog.Write("Updater", UpdateStatusMessage);
+
+        Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            Application.Current.Shutdown();
+        }));
+    }
+
+    private async Task PersistUpdatePreferencesAsync()
+    {
+        try
+        {
+            await _appUpdatePreferenceStore.SaveAsync(
+                new AppUpdatePreferences
+                {
+                    AutoUpdateEnabled = AutoUpdateEnabled
+                },
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Updater", string.Format("Falha ao salvar preferencia de auto-update: {0}", ex.Message));
         }
     }
 
