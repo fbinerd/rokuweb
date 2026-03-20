@@ -72,3 +72,17 @@ jobs:
           name: versioned-release-artifacts-${{ steps.meta.outputs.release_id }}
           path: dist/**
           if-no-files-found: error
+
+      - name: Upload latest rokuweb manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
+          path: dist/latest-rokuweb.json
+          if-no-files-found: error
+
+      - name: Upload latest super manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-super-json-${{ steps.meta.outputs.release_id }}
+          path: dist/latest-super.json
+          if-no-files-found: error
