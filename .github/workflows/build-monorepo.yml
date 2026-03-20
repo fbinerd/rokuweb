@@ -114,6 +114,7 @@ jobs:
       - name: Prepare Pages content
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $pagesRoot = Join-Path $PWD "pages-content"
           $updatesRoot = Join-Path $pagesRoot "updates"
           $channelRoot = Join-Path $updatesRoot "${{ steps.meta.outputs.channel }}"
@@ -121,15 +122,34 @@ jobs:
             Remove-Item -Recurse -Force $pagesRoot
           }
           New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
-          if ((git ls-remote --exit-code origin gh-pages) 2>$null) {
-            git fetch origin gh-pages
+          $ghPagesExists = $false
+          git ls-remote --exit-code origin gh-pages *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $ghPagesExists = $true
+          }
+
+          if ($ghPagesExists) {
             $ghPagesRoot = Join-Path $PWD "gh-pages-current"
             if (Test-Path $ghPagesRoot) {
               Remove-Item -Recurse -Force $ghPagesRoot
             }
-            git worktree add $ghPagesRoot origin/gh-pages
-            Copy-Item -Path (Join-Path $ghPagesRoot '*') -Destination $pagesRoot -Recurse -Force
-            git worktree remove $ghPagesRoot --force
+
+            try {
+              git clone --depth 1 --branch gh-pages .git $ghPagesRoot
+              $items = Get-ChildItem -Force -Path $ghPagesRoot
+              foreach ($item in $items) {
+                if ($item.Name -eq '.git') {
+                  continue
+                }
+
+                Copy-Item -Path $item.FullName -Destination $pagesRoot -Recurse -Force
+              }
+            }
+            finally {
+              if (Test-Path $ghPagesRoot) {
+                Remove-Item -Recurse -Force $ghPagesRoot
+              }
+            }
           }
           New-Item -ItemType Directory -Path $channelRoot -Force | Out-Null
           Copy-Item -Path dist\* -Destination $channelRoot -Recurse -Force
