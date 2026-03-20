@@ -117,60 +117,73 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $pagesRoot = Join-Path $PWD "pages-content"
           $updatesRoot = Join-Path $pagesRoot "updates"
-          $channelRoot = Join-Path $updatesRoot "${{ steps.meta.outputs.channel }}"
+          $currentChannel = '${{ steps.meta.outputs.channel }}'
+          $currentDistRoot = Join-Path $PWD "dist"
+          $channels = @('stable', 'develop')
+
+          function Copy-ChannelDist {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$SourceDist,
+              [Parameter(Mandatory = $true)]
+              [string]$ChannelName
+            )
+
+            $targetRoot = Join-Path $updatesRoot $ChannelName
+            New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
+            Copy-Item -Path (Join-Path $SourceDist '*') -Destination $targetRoot -Recurse -Force
+          }
+
           if (Test-Path $pagesRoot) {
             Remove-Item -Recurse -Force $pagesRoot
           }
           New-Item -ItemType Directory -Path $updatesRoot -Force | Out-Null
-          $ghPagesExists = $false
-          git ls-remote --exit-code origin gh-pages *> $null
-          if ($LASTEXITCODE -eq 0) {
-            $ghPagesExists = $true
-          }
-          $global:LASTEXITCODE = 0
 
-          if ($ghPagesExists) {
-            $ghPagesRoot = Join-Path $PWD "gh-pages-current"
-            if (Test-Path $ghPagesRoot) {
-              Remove-Item -Recurse -Force $ghPagesRoot
+          foreach ($channel in $channels) {
+            if ($channel -eq $currentChannel) {
+              Copy-ChannelDist -SourceDist $currentDistRoot -ChannelName $channel
+              continue
             }
 
+            $tempRepo = Join-Path $PWD ("pages-channel-" + $channel)
             try {
-              $originUrl = (git remote get-url origin).Trim()
-              if (-not [string]::IsNullOrWhiteSpace($originUrl)) {
-                git clone --depth 1 --branch gh-pages $originUrl $ghPagesRoot
-                $cloneExitCode = $LASTEXITCODE
-                if ($cloneExitCode -eq 0 -and (Test-Path $ghPagesRoot)) {
-                  $items = Get-ChildItem -Force -Path $ghPagesRoot
-                  foreach ($item in $items) {
-                    if ($item.Name -eq '.git') {
-                      continue
-                    }
+              if (Test-Path $tempRepo) {
+                Remove-Item -Recurse -Force $tempRepo
+              }
 
-                    Copy-Item -Path $item.FullName -Destination $pagesRoot -Recurse -Force
-                  }
-                }
-                else {
-                  Write-Host "Nao foi possivel clonar gh-pages. exit=$cloneExitCode"
+              $originUrl = (git remote get-url origin).Trim()
+              if ([string]::IsNullOrWhiteSpace($originUrl)) {
+                throw "Nao foi possivel resolver a URL do remoto origin."
+              }
+
+              git clone --depth 1 --branch $channel $originUrl $tempRepo
+              if ($LASTEXITCODE -ne 0) {
+                throw "Falha ao clonar a branch '$channel' para gerar o feed do Pages."
+              }
+
+              Push-Location $tempRepo
+              try {
+                powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\New-ReleaseArtifacts.ps1 -Channel $channel -BaseUrl ("https://fbinerd.github.io/rokuweb/updates/{0}/" -f $channel)
+                if ($LASTEXITCODE -ne 0) {
+                  throw "Falha ao gerar artefatos para o canal '$channel'."
                 }
               }
-            }
-            catch {
-              Write-Host "Nao foi possivel reutilizar o conteudo anterior de gh-pages: $($_.Exception.Message)"
+              finally {
+                Pop-Location
+              }
+
+              Copy-ChannelDist -SourceDist (Join-Path $tempRepo 'dist') -ChannelName $channel
             }
             finally {
-              $global:LASTEXITCODE = 0
-              if (Test-Path $ghPagesRoot) {
-                Remove-Item -Recurse -Force $ghPagesRoot
+              if (Test-Path $tempRepo) {
+                Remove-Item -Recurse -Force $tempRepo
               }
             }
           }
-          New-Item -ItemType Directory -Path $channelRoot -Force | Out-Null
-          Copy-Item -Path dist\* -Destination $channelRoot -Recurse -Force
-          if ('${{ steps.meta.outputs.channel }}' -eq 'stable') {
-            Copy-Item -Path dist\latest-rokuweb.json -Destination (Join-Path $updatesRoot 'latest-rokuweb.json') -Force
-            Copy-Item -Path dist\latest-super.json -Destination (Join-Path $updatesRoot 'latest-super.json') -Force
-          }
+
+          Copy-Item -Path (Join-Path $updatesRoot 'stable\latest-rokuweb.json') -Destination (Join-Path $updatesRoot 'latest-rokuweb.json') -Force
+          Copy-Item -Path (Join-Path $updatesRoot 'stable\latest-super.json') -Destination (Join-Path $updatesRoot 'latest-super.json') -Force
+
           @"
           <!doctype html>
           <html lang="en">
