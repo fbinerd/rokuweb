@@ -2,11 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace WindowManager.App.Runtime;
 
@@ -44,48 +42,44 @@ public sealed class AppUpdateManifestService
 
                 response.EnsureSuccessStatusCode();
 
-                using (var stream = new System.IO.MemoryStream(Encoding.UTF8.GetBytes(body)))
+                var document = JsonConvert.DeserializeObject<UpdateManifestDocument>(body);
+
+                if (document is null || string.IsNullOrWhiteSpace(document.CurrentRelease))
                 {
-                    var serializer = new DataContractJsonSerializer(typeof(UpdateManifestDocument));
-                    var document = serializer.ReadObject(stream) as UpdateManifestDocument;
-
-                    if (document is null || string.IsNullOrWhiteSpace(document.CurrentRelease))
-                    {
-                        return AppUpdateCheckResult.Failure(
-                            manifestUrl,
-                            "Manifesto de atualizacao invalido ou vazio.");
-                    }
-
-                    var currentReleaseId = BuildVersionInfo.ReleaseId;
-                    var currentVersion = BuildVersionInfo.Version;
-                    var latestRelease = document.Releases?.FirstOrDefault(x => string.Equals(x.ReleaseId, document.CurrentRelease, StringComparison.OrdinalIgnoreCase));
-                    if (latestRelease is null)
-                    {
-                        latestRelease = new UpdateReleaseEntry
-                        {
-                            ReleaseId = document.CurrentRelease,
-                            Version = document.CurrentVersion
-                        };
-                    }
-
-                    var updateAvailable = !string.Equals(currentReleaseId, document.CurrentRelease, StringComparison.OrdinalIgnoreCase);
-                    var packagePlan = SelectRecommendedPackagePlan(currentReleaseId, document, latestRelease);
-                    var message = updateAvailable
-                        ? string.Format("Atualizacao disponivel: {0} ({1}). Plano: {2}.", latestRelease.Version, latestRelease.ReleaseId, packagePlan.Description)
-                        : string.Format("Aplicativo atualizado em {0} ({1}).", currentVersion, currentReleaseId);
-
-                    return AppUpdateCheckResult.Success(
+                    return AppUpdateCheckResult.Failure(
                         manifestUrl,
-                        currentVersion,
-                        currentReleaseId,
-                        latestRelease.Version,
-                        latestRelease.ReleaseId,
-                        updateAvailable,
-                        packagePlan.PrimaryUrl,
-                        packagePlan.PackageUrls,
-                        packagePlan.Description,
-                        message);
+                        "Manifesto de atualizacao invalido ou vazio.");
                 }
+
+                var currentReleaseId = BuildVersionInfo.ReleaseId;
+                var currentVersion = BuildVersionInfo.Version;
+                var latestRelease = document.Releases?.FirstOrDefault(x => string.Equals(x.ReleaseId, document.CurrentRelease, StringComparison.OrdinalIgnoreCase));
+                if (latestRelease is null)
+                {
+                    latestRelease = new UpdateReleaseEntry
+                    {
+                        ReleaseId = document.CurrentRelease,
+                        Version = document.CurrentVersion
+                    };
+                }
+
+                var updateAvailable = !string.Equals(currentReleaseId, document.CurrentRelease, StringComparison.OrdinalIgnoreCase);
+                var packagePlan = SelectRecommendedPackagePlan(currentReleaseId, document, latestRelease);
+                var message = updateAvailable
+                    ? string.Format("Atualizacao disponivel: {0} ({1}). Plano: {2}.", latestRelease.Version, latestRelease.ReleaseId, packagePlan.Description)
+                    : string.Format("Aplicativo atualizado em {0} ({1}).", currentVersion, currentReleaseId);
+
+                return AppUpdateCheckResult.Success(
+                    manifestUrl,
+                    currentVersion,
+                    currentReleaseId,
+                    latestRelease.Version,
+                    latestRelease.ReleaseId,
+                    updateAvailable,
+                    packagePlan.PrimaryUrl,
+                    packagePlan.PackageUrls,
+                    packagePlan.Description,
+                    message);
             }
         }
         catch (Exception ex)
@@ -240,41 +234,29 @@ public sealed class AppUpdateCheckResult
     }
 }
 
-[DataContract]
 public sealed class UpdateManifestDocument
 {
-    [DataMember(Name = "currentRelease")]
     public string CurrentRelease { get; set; } = string.Empty;
 
-    [DataMember(Name = "currentVersion")]
     public string CurrentVersion { get; set; } = string.Empty;
 
-    [DataMember(Name = "releases")]
     public UpdateReleaseEntry[] Releases { get; set; } = Array.Empty<UpdateReleaseEntry>();
 }
 
-[DataContract]
 public sealed class UpdateReleaseEntry
 {
-    [DataMember(Name = "releaseId")]
     public string ReleaseId { get; set; } = string.Empty;
 
-    [DataMember(Name = "version")]
     public string Version { get; set; } = string.Empty;
 
-    [DataMember(Name = "fullPackageUrl")]
     public string FullPackageUrl { get; set; } = string.Empty;
 
-    [DataMember(Name = "deltaPackageUrl")]
     public string DeltaPackageUrl { get; set; } = string.Empty;
 
-    [DataMember(Name = "deltaSupportedFromReleases")]
     public string[] DeltaSupportedFromReleases { get; set; } = Array.Empty<string>();
 
-    [DataMember(Name = "fullPackageRequiredIfCurrentVersionOlderThan")]
     public string FullPackageRequiredIfCurrentVersionOlderThan { get; set; } = string.Empty;
 
-    [DataMember(Name = "fullPackageRequiredIfCurrentReleaseOlderThan")]
     public string FullPackageRequiredIfCurrentReleaseOlderThan { get; set; } = string.Empty;
 }
 
