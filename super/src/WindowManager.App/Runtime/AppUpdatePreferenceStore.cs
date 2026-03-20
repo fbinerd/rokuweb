@@ -55,5 +55,5 @@ public sealed class AppUpdatePreferenceStore
 public sealed class AppUpdatePreferences
 {
     [DataMember(Order = 1)]
-    public bool AutoUpdateEnabled { get; set; }
+    public bool AutoUpdateEnabled { get; set; } = true;
 }
