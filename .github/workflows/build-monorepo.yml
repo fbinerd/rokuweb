@@ -307,7 +307,7 @@ jobs:
           mkdir -p "$updates_root/stable" "$updates_root/develop"
 
           if git ls-remote --exit-code --heads "$origin_url" gh-pages >/dev/null 2>&1; then
-            git clone --depth 1 --branch gh-pages "$origin_url" gh-pages-current >/dev/null 2>&1 || true
+            git clone --depth 1 --branch gh-pages "$origin_url" gh-pages-current || true
             if [ -d gh-pages-current ]; then
               cp -a gh-pages-current/. "$pages_root/" || true
               rm -rf "$pages_root/.git" gh-pages-current
@@ -327,7 +327,17 @@ jobs:
             cp -a pages-source-develop/. "$updates_root/develop/"
           fi
 
-          if [ ! -f "$updates_root/stable/latest-super.json" ] || [ ! -f "$updates_root/develop/latest-super.json" ]; then
+          if [ ! -f "$updates_root/stable/latest-super.json" ]; then
+            echo "Canal stable ausente no conteudo montado do Pages."
+            exit 1
+          fi
+
+          if [ ! -f "$updates_root/develop/latest-super.json" ]; then
+            echo "Canal develop ausente no conteudo montado do Pages."
+            exit 1
+          fi
+
+          if [ ! -f "$updates_root/stable/latest-rokuweb.json" ] || [ ! -f "$updates_root/develop/latest-rokuweb.json" ]; then
             echo "Artifacts de Pages dos canais stable/develop nao foram encontrados."
             exit 1
           fi
