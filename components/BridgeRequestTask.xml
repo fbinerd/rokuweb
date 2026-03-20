@@ -7,5 +7,6 @@
     <field id="errorMessage" type="string" />
     <field id="completedToken" type="string" />
   </interface>
+  <script type="text/brightscript" uri="pkg:/source/BuildInfo.brs" />
   <script type="text/brightscript" uri="pkg:/components/BridgeRequestTask.brs" />
 </component>
