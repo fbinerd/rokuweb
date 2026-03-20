@@ -42,6 +42,15 @@
       color="0xEAB308FF"
       font="font:SmallSystemFont"
       text="Carregando..." />
+    <Label
+      id="versionLabel"
+      width="340"
+      height="28"
+      translation="[900, 34]"
+      color="0x94A3B8FF"
+      horizAlign="right"
+      font="font:SmallSystemFont"
+      text="Canal -" />
 
     <Group id="panel0" translation="[50, 170]" visible="false">
       <Rectangle id="panelFrame0" width="360" height="210" color="0x334155FF" />

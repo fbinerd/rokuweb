@@ -17,6 +17,7 @@ sub init()
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
+    m.versionLabel = m.top.findNode("versionLabel")
     m.fullscreenPosterA = m.top.findNode("fullscreenPosterA")
     m.fullscreenPosterB = m.top.findNode("fullscreenPosterB")
     m.activeFullscreenPoster = m.fullscreenPosterA
@@ -79,6 +80,7 @@ sub init()
 
     m.statusLabel.text = "Canal iniciado"
     m.subtitleLabel.text = "Pressione OK para consultar o servidor"
+    m.versionLabel.text = "Canal " + GetRokuChannelReleaseId()
     hideGrid()
 end sub
 
