@@ -135,15 +135,23 @@ jobs:
             }
 
             try {
-              git clone --depth 1 --branch gh-pages .git $ghPagesRoot
-              $items = Get-ChildItem -Force -Path $ghPagesRoot
-              foreach ($item in $items) {
-                if ($item.Name -eq '.git') {
-                  continue
-                }
+              $originUrl = (git remote get-url origin).Trim()
+              if (-not [string]::IsNullOrWhiteSpace($originUrl)) {
+                git clone --depth 1 --branch gh-pages $originUrl $ghPagesRoot
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $ghPagesRoot)) {
+                  $items = Get-ChildItem -Force -Path $ghPagesRoot
+                  foreach ($item in $items) {
+                    if ($item.Name -eq '.git') {
+                      continue
+                    }
 
-                Copy-Item -Path $item.FullName -Destination $pagesRoot -Recurse -Force
+                    Copy-Item -Path $item.FullName -Destination $pagesRoot -Recurse -Force
+                  }
+                }
               }
+            }
+            catch {
+              Write-Host "Nao foi possivel reutilizar o conteudo anterior de gh-pages: $($_.Exception.Message)"
             }
             finally {
               if (Test-Path $ghPagesRoot) {
