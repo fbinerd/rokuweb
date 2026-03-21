@@ -37,7 +37,6 @@ sub init()
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
-    m.handoffTask = m.top.findNode("handoffTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
@@ -90,9 +89,6 @@ sub init()
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
-    if m.handoffTask <> invalid
-        m.handoffTask.observeField("completedToken", "onHandoffTaskCompleted")
-    end if
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -271,9 +267,6 @@ sub applyBridgeResponse()
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
-            renderMode: getString(window.renderMode, "stream")
-            handoffType: getString(window.handoffType, "")
-            handoffUrl: getString(window.handoffUrl, "")
         })
     end for
 
@@ -426,12 +419,6 @@ sub showFullscreen()
     end if
 
     entry = m.windowEntries[m.selectedIndex]
-    if entry.handoffType = "youtube" and entry.handoffUrl <> invalid and entry.handoffUrl <> ""
-        if beginYouTubeHandoff(entry)
-            return
-        end if
-    end if
-
     if entry.thumbnailUrl = invalid or entry.thumbnailUrl = ""
         m.statusLabel.text = "Preview indisponivel para o painel selecionado"
         return
@@ -458,31 +445,6 @@ sub showFullscreen()
     m.top.setFocus(true)
 end sub
 
-function beginYouTubeHandoff(entry as object) as boolean
-    if m.handoffTask = invalid
-        return false
-    end if
-
-    m.isFullscreen = true
-    hideGrid()
-    stopPanelRefresh()
-    m.titleLabel.visible = false
-    m.subtitleLabel.visible = false
-    m.statusLabel.visible = true
-    m.statusLabel.text = "Abrindo YouTube na TV..."
-    m.fullscreenPosterA.visible = false
-    m.fullscreenPosterB.visible = false
-    m.cursorMarker.visible = false
-    stopFullscreenStream()
-    stopHeldDirection()
-
-    m.handoffTask.bridgeHost = m.bridgeHost
-    m.handoffTask.handoffType = entry.handoffType
-    m.handoffTask.handoffUrl = entry.handoffUrl
-    m.handoffTask.control = "RUN"
-    return true
-end function
-
 sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
@@ -496,31 +458,6 @@ sub hideFullscreen()
     startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
-end sub
-
-sub onHandoffTaskCompleted()
-    if m.handoffTask = invalid
-        return
-    end if
-
-    if m.handoffTask.responseCode = 200
-        m.statusLabel.text = "YouTube aberto na TV."
-        return
-    end if
-
-    m.statusLabel.text = "Falha no handoff do YouTube. Voltando ao stream..."
-    m.statusLabel.visible = true
-    m.titleLabel.visible = true
-    m.subtitleLabel.visible = true
-    m.isFullscreen = false
-    if m.windowEntries.Count() > 0
-        currentEntry = m.windowEntries[m.selectedIndex]
-        currentEntry.handoffType = ""
-        currentEntry.renderMode = "stream"
-        showFullscreen()
-    else
-        hideFullscreen()
-    end if
 end sub
 
 sub moveCursor(command as string)

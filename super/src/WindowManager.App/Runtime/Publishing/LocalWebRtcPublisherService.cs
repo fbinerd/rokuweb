@@ -3,14 +3,12 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Linq;
 using WindowManager.App.Runtime;
 using WindowManager.Core.Models;
 
@@ -18,7 +16,6 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class LocalWebRtcPublisherService
 {
-    private const string RokuYouTubeAppId = "837";
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
@@ -349,11 +346,6 @@ public sealed class LocalWebRtcPublisherService
             return await HandleControlRequestAsync(requestTarget, cancellationToken);
         }
 
-        if (string.Equals(normalizedPath, "/api/handoff", StringComparison.OrdinalIgnoreCase))
-        {
-            return await HandleHandoffRequestAsync(requestTarget, remoteAddress, cancellationToken);
-        }
-
         var rawSegment = Uri.UnescapeDataString(normalizedPath.Trim('/'));
         var slug = LinkRtcAddressBuilder.NormalizeRouteSegment(rawSegment, string.Empty);
 
@@ -576,46 +568,6 @@ public sealed class LocalWebRtcPublisherService
         return BuildHttpResponse(result.Ok ? 200 : 404, body, "application/json; charset=utf-8");
     }
 
-    private async Task<byte[]> HandleHandoffRequestAsync(string requestTarget, string remoteAddress, CancellationToken cancellationToken)
-    {
-        var queryIndex = requestTarget.IndexOf('?');
-        if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
-        {
-            return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"missing_query\"}", "application/json; charset=utf-8");
-        }
-
-        var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-        var handoffType = GetValue(values, "type");
-        if (!string.Equals(handoffType, "youtube", StringComparison.OrdinalIgnoreCase))
-        {
-            return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"unsupported_handoff\"}", "application/json; charset=utf-8");
-        }
-
-        var handoffUrl = GetValue(values, "url");
-        var videoId = TryExtractYouTubeVideoId(handoffUrl);
-        if (string.IsNullOrWhiteSpace(videoId))
-        {
-            AppLog.Write("RokuHandoff", string.Format("Falha ao extrair videoId do YouTube: url={0}", handoffUrl));
-            return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"invalid_youtube_url\"}", "application/json; charset=utf-8");
-        }
-
-        var display = _registeredDisplays.Values.FirstOrDefault(x =>
-            !string.IsNullOrWhiteSpace(x.NetworkAddress) &&
-            string.Equals(x.NetworkAddress, remoteAddress, StringComparison.OrdinalIgnoreCase));
-
-        if (display is null || string.IsNullOrWhiteSpace(display.NetworkAddress))
-        {
-            AppLog.Write("RokuHandoff", string.Format("TV nao encontrada para handoff YouTube. remoteAddress={0}", remoteAddress));
-            return BuildHttpResponse(404, "{\"ok\":false,\"error\":\"display_not_found\"}", "application/json; charset=utf-8");
-        }
-
-        var launched = await LaunchYouTubeOnRokuAsync(display.NetworkAddress, videoId, cancellationToken).ConfigureAwait(false);
-        var json = launched
-            ? string.Format("{{\"ok\":true,\"app\":\"youtube\",\"videoId\":\"{0}\"}}", videoId)
-            : "{\"ok\":false,\"error\":\"launch_failed\"}";
-        return BuildHttpResponse(launched ? 200 : 502, json, "application/json; charset=utf-8");
-    }
-
     private async Task<byte[]> BuildThumbnailResponseAsync(string normalizedPath, CancellationToken cancellationToken)
     {
         var fileName = normalizedPath.Substring("/thumbnails/".Length);
@@ -773,7 +725,6 @@ public sealed class LocalWebRtcPublisherService
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
-        var handoff = AnalyzeHandoff(window.InitialUri);
 
         return new BridgeWindowSnapshot
         {
@@ -785,115 +736,8 @@ public sealed class LocalWebRtcPublisherService
             StreamUrl = publishedUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            RenderMode = handoff.RenderMode,
-            HandoffType = handoff.HandoffType,
-            HandoffUrl = handoff.HandoffUrl
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
         };
-    }
-
-    private static HandoffMetadata AnalyzeHandoff(Uri? initialUri)
-    {
-        if (initialUri is null)
-        {
-            return HandoffMetadata.StreamOnly();
-        }
-
-        if (IsYouTubeUrl(initialUri))
-        {
-            return new HandoffMetadata
-            {
-                RenderMode = "youtube-handoff",
-                HandoffType = "youtube",
-                HandoffUrl = initialUri.ToString()
-            };
-        }
-
-        return HandoffMetadata.StreamOnly();
-    }
-
-    private static bool IsYouTubeUrl(Uri uri)
-    {
-        var host = uri.Host ?? string.Empty;
-        return host.IndexOf("youtube.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               host.IndexOf("youtu.be", StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private static string TryExtractYouTubeVideoId(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
-        {
-            return string.Empty;
-        }
-
-        var host = (uri.Host ?? string.Empty).ToLowerInvariant();
-        if (host.Contains("youtu.be"))
-        {
-            return (uri.AbsolutePath ?? string.Empty).Trim('/').Split('/').FirstOrDefault() ?? string.Empty;
-        }
-
-        if (!host.Contains("youtube.com"))
-        {
-            return string.Empty;
-        }
-
-        var path = (uri.AbsolutePath ?? string.Empty).Trim('/');
-        if (path.StartsWith("watch", StringComparison.OrdinalIgnoreCase))
-        {
-            var values = ParseQueryString(uri.Query.TrimStart('?'));
-            return GetValue(values, "v");
-        }
-
-        if (path.StartsWith("embed/", StringComparison.OrdinalIgnoreCase))
-        {
-            return path.Substring("embed/".Length).Split('/').FirstOrDefault() ?? string.Empty;
-        }
-
-        if (path.StartsWith("shorts/", StringComparison.OrdinalIgnoreCase))
-        {
-            return path.Substring("shorts/".Length).Split('/').FirstOrDefault() ?? string.Empty;
-        }
-
-        return string.Empty;
-    }
-
-    private static async Task<bool> LaunchYouTubeOnRokuAsync(string host, string videoId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using (var client = new HttpClient())
-            {
-                client.Timeout = TimeSpan.FromSeconds(8);
-                var launchUrl = string.Format(
-                    "http://{0}:8060/launch/{1}?contentID={2}&mediaType=video",
-                    host,
-                    RokuYouTubeAppId,
-                    Uri.EscapeDataString(videoId));
-
-                var response = await client.PostAsync(launchUrl, new StringContent(string.Empty), cancellationToken).ConfigureAwait(false);
-                var ok = response.IsSuccessStatusCode;
-                AppLog.Write(
-                    "RokuHandoff",
-                    string.Format(
-                        "Handoff YouTube para Roku: host={0}, videoId={1}, status={2}, ok={3}",
-                        host,
-                        videoId,
-                        (int)response.StatusCode,
-                        ok));
-                return ok;
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Write(
-                "RokuHandoff",
-                string.Format(
-                    "Falha ao abrir YouTube na Roku: host={0}, videoId={1}, erro={2}",
-                    host,
-                    videoId,
-                    ex.Message));
-            return false;
-        }
     }
 
     private void RemoveExistingRoute(Guid windowId)
@@ -1001,15 +845,6 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
-
-    [DataMember(Name = "renderMode", Order = 10)]
-    public string RenderMode { get; set; } = "stream";
-
-    [DataMember(Name = "handoffType", Order = 11)]
-    public string HandoffType { get; set; } = string.Empty;
-
-    [DataMember(Name = "handoffUrl", Order = 12)]
-    public string HandoffUrl { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -1047,19 +882,5 @@ public sealed class RegisteredDisplaySnapshot
 
     [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
-}
-
-internal sealed class HandoffMetadata
-{
-    public string RenderMode { get; set; } = "stream";
-
-    public string HandoffType { get; set; } = string.Empty;
-
-    public string HandoffUrl { get; set; } = string.Empty;
-
-    public static HandoffMetadata StreamOnly()
-    {
-        return new HandoffMetadata();
-    }
 }
 

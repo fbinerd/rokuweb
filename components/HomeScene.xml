@@ -12,7 +12,6 @@
     <ControlTask id="controlTask" />
     <ControlTask id="clickControlTask" />
     <ControlTask id="textControlTask" />
-    <HandoffTask id="handoffTask" />
     <Timer id="panelRefreshTimer" repeat="true" duration="5.0" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
