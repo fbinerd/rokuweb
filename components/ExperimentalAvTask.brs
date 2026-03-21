@@ -29,10 +29,27 @@ sub execute()
         responseBody = transfer.GetToString()
     end if
 
-    if responseBody <> invalid and responseBody <> ""
-        m.top.responseCode = 200
-        m.top.errorMessage = ""
-        m.top.responseBody = responseBody
+    responseType = Type(responseBody)
+    if responseType = "roString" or responseType = "String"
+        if responseBody <> ""
+            m.top.responseCode = 200
+            m.top.errorMessage = ""
+            m.top.responseBody = responseBody
+        else
+            m.top.responseCode = 0
+            m.top.errorMessage = "Falha ao chamar " + bridgeUrl
+            m.top.responseBody = ""
+        end if
+    else if responseType = "Integer" or responseType = "roInt" or responseType = "roInteger"
+        if responseBody >= 200 and responseBody < 400
+            m.top.responseCode = responseBody
+            m.top.errorMessage = ""
+            m.top.responseBody = "{}"
+        else
+            m.top.responseCode = responseBody
+            m.top.errorMessage = "Falha ao chamar " + bridgeUrl
+            m.top.responseBody = ""
+        end if
     else
         m.top.responseCode = 0
         m.top.errorMessage = "Falha ao chamar " + bridgeUrl
