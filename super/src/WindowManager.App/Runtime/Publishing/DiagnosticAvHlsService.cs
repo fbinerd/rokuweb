@@ -118,8 +118,9 @@ public sealed class DiagnosticAvHlsService : IDisposable
             try
             {
                 var playlistPath = Path.Combine(_rootDirectory, "index.m3u8");
-                var segmentPattern = Path.Combine(_rootDirectory, "segment-%03d.m4s");
-                var initSegment = Path.Combine(_rootDirectory, "init.mp4");
+                var runId = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+                var segmentPattern = Path.Combine(_rootDirectory, $"segment-{runId}-%03d.m4s");
+                var initSegment = Path.Combine(_rootDirectory, $"init-{runId}.mp4");
                 var args =
                     "-hide_banner -loglevel error -y " +
                     "-re -f lavfi -i testsrc2=size=1280x720:rate=24 " +
@@ -130,7 +131,8 @@ public sealed class DiagnosticAvHlsService : IDisposable
                     "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
                     "-af aresample=async=1:first_pts=0 " +
                     "-fflags +genpts -avoid_negative_ts make_zero " +
-                    "-f hls -hls_time 2 -hls_list_size 12 -hls_playlist_type event -hls_flags independent_segments+append_list+temp_file+program_date_time " +
+                    "-f hls -hls_time 2 -hls_list_size 12 -hls_playlist_type event -hls_start_number_source epoch " +
+                    "-hls_flags independent_segments+append_list+temp_file+program_date_time " +
                     "-hls_segment_type fmp4 " +
                     "-hls_fmp4_init_filename \"" + Path.GetFileName(initSegment) + "\" " +
                     "-hls_segment_filename \"" + segmentPattern + "\" " +
@@ -152,14 +154,11 @@ public sealed class DiagnosticAvHlsService : IDisposable
                     continue;
                 }
 
-                AppLog.Write("DiagAv", "Gerador A/V diagnostico iniciado.");
+                AppLog.Write("DiagAv", $"Gerador A/V diagnostico iniciado. runId={runId}");
 
                 await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
-                if (process.ExitCode != 0)
-                {
-                    var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                    AppLog.Write("DiagAv", "ffmpeg do diagnostico encerrou com erro: " + error);
-                }
+                var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                AppLog.Write("DiagAv", $"ffmpeg do diagnostico encerrou. ExitCode={process.ExitCode}. stderr={error}");
             }
             catch (OperationCanceledException)
             {
