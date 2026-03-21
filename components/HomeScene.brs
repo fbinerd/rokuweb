@@ -23,7 +23,6 @@ sub init()
     m.channelVersion = GetRokuChannelReleaseId()
     m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
     m.audioSessionId = ""
-    m.audioMode = ""
     m.audioChunkUrl = ""
     m.audioPlayer = CreateObject("roAudioPlayer")
 
@@ -48,7 +47,7 @@ sub init()
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
-    m.panelAudioNode = m.top.findNode("panelAudioNode")
+    m.audioPumpTimer = m.top.findNode("audioPumpTimer")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -94,6 +93,7 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
+    m.audioPumpTimer.observeField("fire", "onAudioPumpTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
@@ -492,19 +492,12 @@ sub startPanelAudio(entry as object)
         return
     end if
 
-    content = CreateObject("roSGNode", "ContentNode")
-    content.url = appendCacheBust(audioUrl)
-    content.streamFormat = "wav"
-    content.title = getString(entry.title, "Audio do painel")
     m.audioSessionId = getString(entry.id, "")
     m.audioChunkUrl = audioUrl
-    m.audioMode = "scenegraph"
-    m.panelAudioNode.content = content
-    m.panelAudioNode.control = "stop"
-    m.panelAudioNode.control = "play"
-    if m.audioFallbackTimer <> invalid
-        m.audioFallbackTimer.control = "stop"
-        m.audioFallbackTimer.control = "start"
+    startLegacyPanelAudio()
+    if m.audioPumpTimer <> invalid
+        m.audioPumpTimer.control = "stop"
+        m.audioPumpTimer.control = "start"
     end if
 end sub
 
@@ -514,7 +507,6 @@ sub stopPanelAudio()
     end if
 
     m.audioSessionId = ""
-    m.audioMode = ""
     m.audioChunkUrl = ""
     if m.audioRetryTimer <> invalid
         m.audioRetryTimer.control = "stop"
@@ -522,42 +514,15 @@ sub stopPanelAudio()
     if m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
     end if
-    m.panelAudioNode.control = "stop"
-    m.panelAudioNode.content = invalid
+    if m.audioPumpTimer <> invalid
+        m.audioPumpTimer.control = "stop"
+    end if
     if m.audioPlayer <> invalid
         m.audioPlayer.Stop()
     end if
 end sub
 
 sub onPanelAudioStateChanged()
-    if m.panelAudioNode = invalid
-        return
-    end if
-
-    state = LCase(getString(m.panelAudioNode.state, ""))
-    if state = ""
-        return
-    end if
-
-    if state = "playing"
-        m.audioMode = "scenegraph"
-        if m.audioFallbackTimer <> invalid
-            m.audioFallbackTimer.control = "stop"
-        end if
-        m.statusLabel.text = "Audio do painel em reproducao"
-    else if state = "buffering"
-        m.statusLabel.text = "Bufferizando audio do painel..."
-    else if state = "stopped"
-        if m.isFullscreen and m.audioSessionId <> ""
-            m.statusLabel.text = "Audio do painel parado"
-            scheduleAudioRetry()
-        end if
-    else if state = "error"
-        if m.isFullscreen and m.audioSessionId <> ""
-            m.statusLabel.text = "Falha ao reproduzir audio do painel"
-            scheduleAudioRetry()
-        end if
-    end if
 end sub
 
 sub scheduleAudioRetry()
@@ -571,12 +536,7 @@ sub scheduleAudioRetry()
 end sub
 
 sub onAudioRetryTimerFire()
-    if m.audioMode = "legacy"
-        playLegacyPanelAudioChunk()
-        return
-    end if
-
-    restartPanelAudio()
+    playLegacyPanelAudioChunk()
 end sub
 
 sub restartPanelAudio()
@@ -597,30 +557,12 @@ sub restartPanelAudio()
 end sub
 
 sub onAudioFallbackTimerFire()
-    if not m.isFullscreen or m.audioSessionId = ""
-        return
-    end if
-
-    if m.audioMode = "scenegraph" and m.panelAudioNode <> invalid
-        state = LCase(getString(m.panelAudioNode.state, ""))
-        if state = "playing"
-            return
-        end if
-    end if
-
-    m.statusLabel.text = "Tentando audio legado do painel..."
-    startLegacyPanelAudio()
+    playLegacyPanelAudioChunk()
 end sub
 
 sub startLegacyPanelAudio()
     if m.audioPlayer = invalid or m.audioChunkUrl = ""
         return
-    end if
-
-    m.audioMode = "legacy"
-    if m.panelAudioNode <> invalid
-        m.panelAudioNode.control = "stop"
-        m.panelAudioNode.content = invalid
     end if
 
     playLegacyPanelAudioChunk()
@@ -642,11 +584,10 @@ sub playLegacyPanelAudioChunk()
     m.audioPlayer.AddContent(audioItem)
     m.audioPlayer.Play()
     m.statusLabel.text = "Audio legado do painel em reproducao"
+end sub
 
-    if m.audioRetryTimer <> invalid
-        m.audioRetryTimer.control = "stop"
-        m.audioRetryTimer.control = "start"
-    end if
+sub onAudioPumpTimerFire()
+    playLegacyPanelAudioChunk()
 end sub
 
 sub moveCursor(command as string)
