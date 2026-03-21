@@ -436,7 +436,7 @@ sub showFullscreen()
     m.cursorY = 360
     hideGrid()
     m.titleLabel.visible = false
-    m.statusLabel.visible = false
+    m.statusLabel.visible = true
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
@@ -455,6 +455,7 @@ sub showFullscreen()
         m.bufferFullscreenPoster.visible = false
         m.statusLabel.text = "Iniciando stream continuo do painel..."
     else
+        m.statusLabel.visible = false
         m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
         m.activeFullscreenPoster.visible = true
         m.bufferFullscreenPoster.visible = false
@@ -688,22 +689,38 @@ sub onFullscreenVideoStateChanged()
 
     if state = "playing"
         m.statusLabel.text = "Stream continuo do painel em reproducao"
+        m.statusLabel.visible = false
     else if state = "buffering"
         m.statusLabel.text = "Bufferizando stream continuo do painel..."
+        m.statusLabel.visible = true
     else if state = "error"
-        m.statusLabel.text = "Falha no stream continuo do painel"
+        fallbackToPosterFullscreen("Falha no stream continuo do painel")
     else if state = "finished" or state = "stopped"
-        if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
-            content = CreateObject("roSGNode", "ContentNode")
-            content.url = appendCacheBust(m.videoStreamUrl)
-            content.streamFormat = "hls"
-            content.title = "Painel"
-            m.fullscreenVideo.content = content
-            m.fullscreenVideo.control = "stop"
-            m.fullscreenVideo.control = "play"
-            m.statusLabel.text = "Reiniciando stream continuo do painel..."
-        end if
+        fallbackToPosterFullscreen("Stream continuo interrompido; voltando ao preview")
     end if
+end sub
+
+sub fallbackToPosterFullscreen(message as string)
+    if not m.isFullscreen or m.windowEntries.Count() = 0
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
+
+    m.statusLabel.text = message
+    m.statusLabel.visible = true
+    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+    m.activeFullscreenPoster.visible = true
+    m.bufferFullscreenPoster.visible = false
+    m.bufferFullscreenPoster.uri = ""
+    startFullscreenStream()
 end sub
 
 sub onClickControlTaskCompleted()
