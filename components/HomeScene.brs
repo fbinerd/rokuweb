@@ -48,6 +48,7 @@ sub init()
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.panelAudioTimer = m.top.findNode("panelAudioTimer")
+    m.videoDebugTimer = m.top.findNode("videoDebugTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
     m.panelGroups = [
@@ -92,6 +93,7 @@ sub init()
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.panelAudioTimer.observeField("fire", "onPanelAudioTimerFire")
+    m.videoDebugTimer.observeField("fire", "onVideoDebugTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
@@ -476,6 +478,10 @@ sub showFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
+        if m.videoDebugTimer <> invalid
+            m.videoDebugTimer.control = "stop"
+            m.videoDebugTimer.control = "start"
+        end if
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
     else
@@ -503,6 +509,9 @@ sub hideFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.content = invalid
         m.fullscreenVideo.visible = false
+    end if
+    if m.videoDebugTimer <> invalid
+        m.videoDebugTimer.control = "stop"
     end if
     stopPanelAudio()
     m.fullscreenPosterA.visible = false
@@ -723,6 +732,17 @@ sub onFullscreenVideoStateChanged()
     end if
 end sub
 
+sub onVideoDebugTimerFire()
+    if m.fullscreenVideo = invalid or not m.videoUsesStream or not m.isFullscreen
+        return
+    end if
+
+    state = getString(m.fullscreenVideo.state, "")
+    position = m.fullscreenVideo.position
+    duration = m.fullscreenVideo.duration
+    print "[RokuVideo] state="; state; " position="; position; " duration="; duration
+end sub
+
 sub fallbackToPosterFullscreen(message as string)
     if not m.isFullscreen or m.windowEntries.Count() = 0
         return
@@ -735,6 +755,9 @@ sub fallbackToPosterFullscreen(message as string)
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.content = invalid
         m.fullscreenVideo.visible = false
+    end if
+    if m.videoDebugTimer <> invalid
+        m.videoDebugTimer.control = "stop"
     end if
 
     m.statusLabel.text = message
