@@ -299,7 +299,9 @@ public sealed class LocalWebRtcPublisherService
         using (var stream = client.GetStream())
         using (var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, true))
         {
+            var method = "GET";
             string? requestLine;
+            var contentLength = 0;
             try
             {
                 requestLine = await reader.ReadLineAsync();
@@ -308,10 +310,17 @@ public sealed class LocalWebRtcPublisherService
                     return;
                 }
 
+                method = ParseMethod(requestLine);
+
                 string? headerLine;
                 do
                 {
                     headerLine = await reader.ReadLineAsync();
+                    if (!string.IsNullOrEmpty(headerLine) && headerLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var headerValue = headerLine.Substring("Content-Length:".Length).Trim();
+                        _ = int.TryParse(headerValue, out contentLength);
+                    }
                 }
                 while (!string.IsNullOrEmpty(headerLine));
             }
@@ -320,14 +329,33 @@ public sealed class LocalWebRtcPublisherService
                 return;
             }
 
+            string requestBody = string.Empty;
+            if (contentLength > 0)
+            {
+                var bodyBuffer = new char[contentLength];
+                var totalRead = 0;
+                while (totalRead < contentLength)
+                {
+                    var justRead = await reader.ReadAsync(bodyBuffer, totalRead, contentLength - totalRead);
+                    if (justRead <= 0)
+                    {
+                        break;
+                    }
+
+                    totalRead += justRead;
+                }
+
+                requestBody = new string(bodyBuffer, 0, totalRead);
+            }
+
             var path = ParsePath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
-            var bytes = await BuildResponseAsync(path, remoteAddress, cancellationToken);
+            var bytes = await BuildResponseAsync(method, path, requestBody, remoteAddress, cancellationToken);
             await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
         }
     }
 
-    private async Task<byte[]> BuildResponseAsync(string path, string remoteAddress, CancellationToken cancellationToken)
+    private async Task<byte[]> BuildResponseAsync(string method, string path, string requestBody, string remoteAddress, CancellationToken cancellationToken)
     {
         var requestTarget = path ?? "/";
         var normalizedPath = requestTarget.Split('?')[0];
@@ -361,7 +389,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/api/experimental-av/", StringComparison.OrdinalIgnoreCase))
         {
-            return BuildExperimentalWebRtcResponse(normalizedPath);
+            return BuildExperimentalWebRtcResponse(method, normalizedPath, requestBody);
         }
 
         if (string.Equals(normalizedPath, "/api/control", StringComparison.OrdinalIgnoreCase))
@@ -624,9 +652,26 @@ public sealed class LocalWebRtcPublisherService
         return parts[1];
     }
 
+    private static string ParseMethod(string requestLine)
+    {
+        var parts = requestLine.Split(' ');
+        if (parts.Length < 1 || string.IsNullOrWhiteSpace(parts[0]))
+        {
+            return "GET";
+        }
+
+        return parts[0].Trim().ToUpperInvariant();
+    }
+
     private static byte[] BuildHttpResponse(int statusCode, string body, string contentType)
     {
-        var reason = statusCode == 200 ? "OK" : statusCode == 404 ? "Not Found" : "Error";
+        var reason =
+            statusCode == 200 ? "OK" :
+            statusCode == 201 ? "Created" :
+            statusCode == 400 ? "Bad Request" :
+            statusCode == 404 ? "Not Found" :
+            statusCode == 405 ? "Method Not Allowed" :
+            "Error";
         var bodyBytes = Encoding.UTF8.GetBytes(body);
         var header = string.Format(
             "HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{4}",
@@ -768,33 +813,119 @@ public sealed class LocalWebRtcPublisherService
         };
     }
 
-    private byte[] BuildExperimentalWebRtcResponse(string normalizedPath)
+    private byte[] BuildExperimentalWebRtcResponse(string method, string normalizedPath, string requestBody)
     {
         if (!_experimentalWebRtcAvService.IsEnabled)
         {
             return BuildHttpResponse(404, "Experimento WebRTC A/V desabilitado.", "text/plain; charset=utf-8");
         }
 
-        var windowIdText = normalizedPath.Substring("/api/experimental-av/".Length);
+        var relativePath = normalizedPath.Substring("/api/experimental-av/".Length);
+        var segments = relativePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return BuildHttpResponse(404, "Janela experimental nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowIdText = segments[0];
         if (!Guid.TryParseExact(windowIdText, "N", out var windowId) || !_windowSnapshots.TryGetValue(windowId, out var snapshot))
         {
             return BuildHttpResponse(404, "Janela experimental nao encontrada.", "text/plain; charset=utf-8");
         }
 
-        var payload = new WindowSessionSessionInfo
+        var routeSuffix = segments.Length > 1 ? segments[1] : string.Empty;
+        var sessionState = _experimentalWebRtcAvService.GetOrCreateSession(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl);
+
+        if (string.Equals(routeSuffix, "state", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}", "application/json; charset=utf-8");
+            }
+
+            return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildStateJson(sessionState), "application/json; charset=utf-8");
+        }
+
+        if (string.Equals(routeSuffix, "offer", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}", "application/json; charset=utf-8");
+            }
+
+            ExperimentalWebRtcOfferPayload? payload = null;
+            try
+            {
+                using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(requestBody ?? string.Empty)))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(ExperimentalWebRtcOfferPayload));
+                    payload = serializer.ReadObject(stream) as ExperimentalWebRtcOfferPayload;
+                }
+            }
+            catch
+            {
+                payload = null;
+            }
+
+            if (payload is null || string.IsNullOrWhiteSpace(payload.Type))
+            {
+                return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"invalid_offer\"}", "application/json; charset=utf-8");
+            }
+
+            var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, payload);
+            AppLog.Write(
+                "ExpWebRtc",
+                string.Format(
+                    "Offer experimental recebida: janela={0}, tipo={1}, source={2}, count={3}",
+                    windowId.ToString("N"),
+                    updated.LastOfferType,
+                    updated.LastOfferSource,
+                    updated.OfferCount));
+
+            var accepted = new ExperimentalWebRtcOfferAccepted
+            {
+                Ok = true,
+                Status = updated.Status,
+                WindowId = updated.WindowId,
+                OfferCount = updated.OfferCount,
+                StateUrl = snapshot.ExperimentalAvUrl + "/state",
+                Notes = new List<string>
+                {
+                    "Offer recebida pelo super.",
+                    "Resposta SDP ainda e placeholder; o transporte WebRTC real entra no proximo passo."
+                }
+            };
+
+            return BuildHttpResponse(201, SerializeJson(accepted), "application/json; charset=utf-8");
+        }
+
+        if (!string.IsNullOrWhiteSpace(routeSuffix))
+        {
+            return BuildHttpResponse(404, "Rota experimental nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var sessionInfo = new WindowSessionSessionInfo
         {
             WindowId = snapshot.Id,
             Title = snapshot.Title,
             InitialUrl = snapshot.InitialUrl,
             SignalingUrl = snapshot.ExperimentalAvUrl,
+            OfferUrl = snapshot.ExperimentalAvUrl + "/offer",
+            StateUrl = snapshot.ExperimentalAvUrl + "/state",
+            SupportedTransports = new List<string>
+            {
+                "session-discovery",
+                "offer-post",
+                "state-poll"
+            },
             Notes = new List<string>
             {
-                "Foundation only: esta branch prepara o contrato de sinalizacao/capabilities do experimento WebRTC A/V.",
-                "Ainda nao ha peer connection, SDP ou transporte WebRTC real implementado."
+                "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",
+                "Ainda nao ha peer connection, answer SDP real ou transporte WebRTC A/V implementado."
             }
         };
 
-        return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildSessionJson(payload), "application/json; charset=utf-8");
+        return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildSessionJson(sessionInfo), "application/json; charset=utf-8");
     }
 
     private void RemoveExistingRoute(Guid windowId)
