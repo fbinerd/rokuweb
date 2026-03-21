@@ -2,18 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 using WindowManager.App.ViewModels;
 using WindowManager.Core.Models;
-using CefSharp.Wpf;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace WindowManager.App;
 
@@ -22,10 +24,12 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
-    private readonly Dictionary<Guid, ChromiumWebBrowser> _previewBrowsers = new Dictionary<Guid, ChromiumWebBrowser>();
+    private readonly Dictionary<Guid, Image> _previewImages = new Dictionary<Guid, Image>();
     private readonly Dictionary<Guid, BrowserCaptureWindow> _captureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
-    private readonly Dictionary<Guid, PreviewWindow> _detailWindows = new Dictionary<Guid, PreviewWindow>();
+    private readonly DispatcherTimer _previewRefreshTimer;
     private TransmissionLogWindow? _logWindow;
+    private Guid? _expandedPreviewWindowId;
+    private bool _isRefreshingPreviews;
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService)
     {
@@ -43,6 +47,12 @@ public partial class MainWindow : Window
             AddPreview(window);
         }
 
+        _previewRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(900)
+        };
+        _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
+
         Loaded += OnLoaded;
         UpdateSelectionVisuals();
     }
@@ -54,6 +64,8 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.InitializeAfterStartupAsync();
+            _previewRefreshTimer.Start();
+            _ = RefreshPreviewImagesAsync();
         }
         catch (Exception ex)
         {
@@ -143,7 +155,7 @@ public partial class MainWindow : Window
         header.Children.Add(headerUrl);
         header.Children.Add(headerState);
 
-        var browserHost = new Border
+        var previewHost = new Border
         {
             Margin = new Thickness(12, 0, 12, 12),
             CornerRadius = new CornerRadius(8),
@@ -153,9 +165,9 @@ public partial class MainWindow : Window
         };
 
         Grid.SetRow(header, 0);
-        Grid.SetRow(browserHost, 1);
+        Grid.SetRow(previewHost, 1);
         contentGrid.Children.Add(header);
-        contentGrid.Children.Add(browserHost);
+        contentGrid.Children.Add(previewHost);
 
         var card = new Border
         {
@@ -207,13 +219,15 @@ public partial class MainWindow : Window
     {
         if (AppRuntimeState.BrowserEngineAvailable)
         {
-            var browser = new ChromiumWebBrowser
+            var image = new Image
             {
-                Address = session.InitialUri?.ToString() ?? "about:blank"
+                Stretch = Stretch.Uniform,
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true
             };
 
-            _previewBrowsers[session.Id] = browser;
-            return browser;
+            _previewImages[session.Id] = image;
+            return image;
         }
 
         var stack = new StackPanel
@@ -287,11 +301,7 @@ public partial class MainWindow : Window
             _previewCards.Remove(session.Id);
         }
 
-        if (_previewBrowsers.TryGetValue(session.Id, out var browser))
-        {
-            browser.Dispose();
-            _previewBrowsers.Remove(session.Id);
-        }
+        _previewImages.Remove(session.Id);
 
         if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
         {
@@ -300,10 +310,9 @@ public partial class MainWindow : Window
             _captureWindows.Remove(session.Id);
         }
 
-        if (_detailWindows.TryGetValue(session.Id, out var detailWindow))
+        if (_expandedPreviewWindowId == session.Id)
         {
-            detailWindow.Close();
-            _detailWindows.Remove(session.Id);
+            CloseExpandedPreview();
         }
     }
 
@@ -318,7 +327,7 @@ public partial class MainWindow : Window
 
         if (e.ClickCount >= 2)
         {
-            OpenDetailWindow(session);
+            ToggleExpandedPreview(session);
         }
     }
 
@@ -485,58 +494,38 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void OpenDetailWindow(WindowSession session, bool preferConnectedDisplay = false)
+    private void ToggleExpandedPreview(WindowSession session)
     {
-        if (_detailWindows.TryGetValue(session.Id, out var existingWindow))
+        if (_expandedPreviewWindowId == session.Id)
         {
-            if (preferConnectedDisplay)
-            {
-                MoveDetailWindowToConnectedDisplay(existingWindow);
-            }
-
-            existingWindow.Activate();
+            CloseExpandedPreview();
             return;
         }
 
-        var detailWindow = new PreviewWindow(session);
-        if (!preferConnectedDisplay)
+        if (!AppRuntimeState.BrowserEngineAvailable)
         {
-            detailWindow.Owner = this;
+            return;
         }
 
-        detailWindow.Closed += (_, __) =>
-        {
-            _detailWindows.Remove(session.Id);
-        };
-
-        _detailWindows[session.Id] = detailWindow;
-        if (preferConnectedDisplay)
-        {
-            MoveDetailWindowToConnectedDisplay(detailWindow);
-        }
-
-        detailWindow.Show();
+        CloseExpandedPreview();
+        ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
+        ExpandedPreviewOverlay.Visibility = Visibility.Visible;
+        _expandedPreviewWindowId = session.Id;
+        _ = RefreshPreviewImagesAsync();
     }
 
-    private static void MoveDetailWindowToConnectedDisplay(Window window)
+    private void CloseExpandedPreview()
     {
-        var secondaryScreen = Forms.Screen.AllScreens.FirstOrDefault(screen => !screen.Primary);
-        if (secondaryScreen is null)
+        if (!_expandedPreviewWindowId.HasValue)
         {
             return;
         }
 
-        var bounds = secondaryScreen.Bounds;
-        window.WindowStartupLocation = WindowStartupLocation.Manual;
-        window.WindowStyle = WindowStyle.None;
-        window.ResizeMode = ResizeMode.NoResize;
-        window.ShowInTaskbar = false;
-        window.Topmost = true;
-        window.WindowState = WindowState.Normal;
-        window.Left = bounds.Left;
-        window.Top = bounds.Top;
-        window.Width = bounds.Width;
-        window.Height = bounds.Height;
+        var windowId = _expandedPreviewWindowId.Value;
+        _expandedPreviewWindowId = null;
+        ExpandedPreviewOverlay.Visibility = Visibility.Collapsed;
+        ExpandedPreviewTitle.Text = string.Empty;
+        ExpandedPreviewImage.Source = null;
     }
 
     private void OnWindowSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -546,25 +535,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.PropertyName == nameof(WindowSession.InitialUri) && _previewBrowsers.TryGetValue(session.Id, out var browser))
+        if (e.PropertyName == nameof(WindowSession.InitialUri))
         {
-            var address = session.InitialUri?.ToString() ?? "about:blank";
-            if (!string.Equals(browser.Address, address, StringComparison.OrdinalIgnoreCase))
+            if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
             {
-                browser.Address = address;
+                captureWindow.UpdateAddress(session.InitialUri);
             }
-        }
 
-        if (e.PropertyName == nameof(WindowSession.InitialUri) && _captureWindows.TryGetValue(session.Id, out var captureWindow))
-        {
-            captureWindow.UpdateAddress(session.InitialUri);
-        }
-
-        if ((e.PropertyName == nameof(WindowSession.State) || e.PropertyName == nameof(WindowSession.AssignedTarget)) &&
-            session.State == WindowSessionState.Streaming &&
-            session.AssignedTarget?.TransportKind == DisplayTransportKind.Miracast)
-        {
-            Dispatcher.Invoke(() => OpenDetailWindow(session, preferConnectedDisplay: true));
+            _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
         }
     }
 
@@ -595,33 +573,22 @@ public partial class MainWindow : Window
         Loaded -= OnLoaded;
         _viewModel.Windows.CollectionChanged -= OnWindowsCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _previewRefreshTimer.Stop();
+        _previewRefreshTimer.Tick -= OnPreviewRefreshTimerTick;
 
         foreach (var window in _viewModel.Windows)
         {
             window.PropertyChanged -= OnWindowSessionPropertyChanged;
         }
 
-        foreach (var detailWindow in _detailWindows.Values)
-        {
-            detailWindow.Close();
-        }
+        _logWindow?.Close();
+        CloseExpandedPreview();
 
         foreach (var captureWindow in _captureWindows.Values)
         {
             captureWindow.Close();
         }
-
-        _logWindow?.Close();
-
-        foreach (var browser in _previewBrowsers.Values)
-        {
-            browser.Dispose();
-        }
-
-        foreach (var windowId in _previewBrowsers.Keys)
-        {
-            _browserSnapshotService.Unregister(windowId);
-        }
+        _captureWindows.Clear();
 
         base.OnClosed(e);
     }
@@ -637,6 +604,65 @@ public partial class MainWindow : Window
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
         captureWindow.Show();
+    }
+
+    private void OnCloseExpandedPreviewClick(object sender, RoutedEventArgs e)
+    {
+        CloseExpandedPreview();
+    }
+
+    private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
+    {
+        await RefreshPreviewImagesAsync();
+    }
+
+    private async Task RefreshPreviewImagesAsync()
+    {
+        if (_isRefreshingPreviews || !AppRuntimeState.BrowserEngineAvailable)
+        {
+            return;
+        }
+
+        _isRefreshingPreviews = true;
+        try
+        {
+            foreach (var session in _viewModel.Windows.ToArray())
+            {
+                var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(session.Id, default);
+                if (jpegBytes is null || jpegBytes.Length == 0)
+                {
+                    continue;
+                }
+
+                var imageSource = CreateImageSource(jpegBytes);
+                if (_previewImages.TryGetValue(session.Id, out var image))
+                {
+                    image.Source = imageSource;
+                }
+
+                if (_expandedPreviewWindowId == session.Id)
+                {
+                    ExpandedPreviewImage.Source = imageSource;
+                }
+            }
+        }
+        finally
+        {
+            _isRefreshingPreviews = false;
+        }
+    }
+
+    private static BitmapImage CreateImageSource(byte[] jpegBytes)
+    {
+        using var stream = new MemoryStream(jpegBytes);
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
     }
 }
 
