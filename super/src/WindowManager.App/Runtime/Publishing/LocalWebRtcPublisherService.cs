@@ -18,6 +18,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -29,9 +30,10 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _browserAudioCaptureService = browserAudioCaptureService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -320,6 +322,11 @@ public sealed class LocalWebRtcPublisherService
             return await BuildThumbnailResponseAsync(normalizedPath, cancellationToken);
         }
 
+        if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
+        {
+            return await BuildAudioResponseAsync(normalizedPath, cancellationToken);
+        }
+
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
         {
             return BuildHttpResponse(200, "ok", "text/plain; charset=utf-8");
@@ -591,6 +598,30 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
+    private async Task<byte[]> BuildAudioResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fileName = normalizedPath.Substring("/audio/".Length);
+        if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = fileName.Substring(0, fileName.Length - 4);
+        }
+
+        if (!Guid.TryParseExact(fileName, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Audio nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var wavBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId);
+        if (wavBytes is null || wavBytes.Length == 0)
+        {
+            return BuildHttpResponse(404, "Audio indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        return BuildBinaryHttpResponse(200, wavBytes, "audio/wav");
+    }
+
     private static string ParsePath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -721,7 +752,7 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
-    private static BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
+    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
@@ -737,7 +768,9 @@ public sealed class LocalWebRtcPublisherService
             StreamUrl = publishedUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }
 
@@ -908,6 +941,12 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioStreamUrl", Order = 10)]
+    public string AudioStreamUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioAvailable", Order = 11)]
+    public bool AudioAvailable { get; set; }
 }
 
 [DataContract]
