@@ -15,6 +15,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
+$sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 
 function Invoke-Step {
     param(
@@ -89,6 +90,9 @@ function Invoke-RokuSideload {
     $client = [System.Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(12)
     try {
+        New-Item -ItemType Directory -Force -Path $sideloadLogRoot | Out-Null
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
         $basic = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$Username`:$Password"))
         $client.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Basic", $basic)
 
@@ -99,16 +103,31 @@ function Invoke-RokuSideload {
         $installUri = "http://$RokuHost/plugin_install"
         $installResponse = $client.PostAsync($installUri, $content).GetAwaiter().GetResult()
         $installBody = $installResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $installDumpPath = Join-Path $sideloadLogRoot ("plugin_install-{0}-{1}.html" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+        Set-Content -Path $installDumpPath -Value $installBody -Encoding UTF8
         Write-Host ("plugin_install => status={0}" -f [int]$installResponse.StatusCode)
+        if (-not [string]::IsNullOrWhiteSpace($installBody)) {
+            $compactInstallBody = ($installBody -replace '\s+', ' ').Trim()
+            if ($compactInstallBody.Length -gt 220) {
+                $compactInstallBody = $compactInstallBody.Substring(0, 220) + "..."
+            }
+            Write-Host ("plugin_install body => {0}" -f $compactInstallBody)
+        }
+        Write-Host ("plugin_install dump => {0}" -f $installDumpPath)
         if (-not $installResponse.IsSuccessStatusCode) {
             throw "Falha no plugin_install: $([int]$installResponse.StatusCode) $installBody"
         }
 
-        Start-Sleep -Milliseconds 600
-        $null = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-        Start-Sleep -Milliseconds 600
+        Start-Sleep -Milliseconds 1200
+        $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+        Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+        Start-Sleep -Milliseconds 1200
         $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+        $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+        Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
         Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
+        Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
     }
     catch {
         $message = $_.Exception.Message

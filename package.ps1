@@ -77,6 +77,7 @@ function Get-RokuReleaseId {
     $build = Get-ManifestValue -Path $manifestPath -Key "build_version"
     $version = "$major.$minor.$build"
     $shortSha = "local"
+    $localStamp = ""
 
     try {
         $resolvedShortSha = (& git -C $root rev-parse --short HEAD 2>$null).Trim()
@@ -87,11 +88,23 @@ function Get-RokuReleaseId {
     catch {
     }
 
-    return "$version-$shortSha"
+    if ($resolvedChannel -eq "local") {
+        $localStamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($localStamp)) {
+        return "$version-$shortSha"
+    }
+
+    return "$version-$shortSha-local$localStamp"
 }
 
 function Get-RokuBuildVersion {
     $fallback = Get-ManifestValue -Path (Join-Path $root "manifest") -Key "build_version"
+
+    if ($resolvedChannel -eq "local") {
+        return [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+    }
 
     try {
         $commitCount = (& git -C $root rev-list --count HEAD 2>$null).Trim()
