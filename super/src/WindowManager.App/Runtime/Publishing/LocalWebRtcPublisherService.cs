@@ -621,13 +621,13 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Audio nao encontrado.", "text/plain; charset=utf-8");
         }
 
-        var seconds = 1.5;
+        var seconds = 2.5;
         var queryIndex = requestTarget.IndexOf('?');
         if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
         {
             var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
             if (double.TryParse(GetValue(values, "seconds"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedSeconds) &&
-                parsedSeconds > 0.1 && parsedSeconds < 10)
+                parsedSeconds > 0.25 && parsedSeconds < 10)
             {
                 seconds = parsedSeconds;
             }
@@ -863,7 +863,7 @@ public sealed class LocalWebRtcPublisherService
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav?seconds=1.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
             AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }
