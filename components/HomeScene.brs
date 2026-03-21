@@ -723,6 +723,7 @@ sub runExperimentalAvRequest(task as object, url as string, method as string, bo
     end if
 
     ? "[ExpAV] request => "; method; " "; url
+    task.control = "stop"
     task.bridgeUrl = url
     task.httpMethod = method
     task.requestBody = body
