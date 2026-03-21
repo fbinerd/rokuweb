@@ -843,6 +843,13 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}", "application/json; charset=utf-8");
             }
 
+            AppLog.Write(
+                "ExpWebRtc",
+                string.Format(
+                    "State experimental solicitado: janela={0}, offers={1}, status={2}",
+                    windowId.ToString("N"),
+                    sessionState.OfferCount,
+                    sessionState.Status));
             return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildStateJson(sessionState), "application/json; charset=utf-8");
         }
 
@@ -903,6 +910,13 @@ public sealed class LocalWebRtcPublisherService
         {
             return BuildHttpResponse(404, "Rota experimental nao encontrada.", "text/plain; charset=utf-8");
         }
+
+        AppLog.Write(
+            "ExpWebRtc",
+            string.Format(
+                "Sessao experimental solicitada: janela={0}, titulo={1}",
+                windowId.ToString("N"),
+                snapshot.Title));
 
         var sessionInfo = new WindowSessionSessionInfo
         {

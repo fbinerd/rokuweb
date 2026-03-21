@@ -666,6 +666,10 @@ end sub
 sub maybeStartExperimentalAv(entry as object)
     experimentalAvUrl = getString(entry.experimentalAvUrl, "")
     if experimentalAvUrl = ""
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Painel sem sessao experimental A/V"
+        m.subtitleLabel.text = "Continuando no preview por imagem."
         return
     end if
 
@@ -742,8 +746,8 @@ sub onExperimentalAvTaskCompleted()
         m.experimentalAvLastAction = "offer"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
-        m.statusLabel.text = "Enviando offer experimental..."
-        m.subtitleLabel.text = "Sinalizacao placeholder para a janela selecionada."
+        m.statusLabel.text = "Sessao experimental encontrada"
+        m.subtitleLabel.text = "Enviando offer para " + trimTitle(offerUrl)
         offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
         runExperimentalAvRequest(offerUrl, "POST", offerBody)
         return
@@ -754,7 +758,7 @@ sub onExperimentalAvTaskCompleted()
         m.experimentalAvLastAction = "state"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
-        m.statusLabel.text = "Offer experimental aceita"
+        m.statusLabel.text = "Offer experimental entregue"
         m.subtitleLabel.text = "Acompanhando state da sessao..."
         scheduleExperimentalAvStatePoll()
         return
