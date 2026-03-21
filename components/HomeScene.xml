@@ -17,6 +17,12 @@
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
     <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
+    <Video
+      id="fullscreenVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
     <Rectangle
       id="background"
       width="1280"

@@ -19,6 +19,7 @@ public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
+    private readonly BrowserPanelRollingHlsService _browserPanelRollingHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -30,10 +31,11 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _browserAudioCaptureService = browserAudioCaptureService;
+        _browserPanelRollingHlsService = browserPanelRollingHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -188,6 +190,7 @@ public sealed class LocalWebRtcPublisherService
         {
             var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
+            _browserPanelRollingHlsService.EnsureWindow(window.Id);
             activeIds.Add(window.Id);
         }
 
@@ -196,6 +199,7 @@ public sealed class LocalWebRtcPublisherService
             if (!activeIds.Contains(existingId))
             {
                 _windowSnapshots.TryRemove(existingId, out _);
+                _browserPanelRollingHlsService.Unregister(existingId);
             }
         }
     }
@@ -325,6 +329,11 @@ public sealed class LocalWebRtcPublisherService
         if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
         {
             return await BuildAudioResponseAsync(normalizedPath, cancellationToken);
+        }
+
+        if (normalizedPath.StartsWith("/panel-roll/", StringComparison.OrdinalIgnoreCase))
+        {
+            return await BuildPanelRollingResponseAsync(normalizedPath, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
@@ -622,6 +631,47 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, wavBytes, "audio/wav");
     }
 
+    private async Task<byte[]> BuildPanelRollingResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/panel-roll/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Stream HLS nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Stream HLS nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_browserPanelRollingHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            {
+                AppLog.Write("PanelRollingHls", $"Playlist solicitada e ainda indisponivel: janela={windowId:N}");
+                return BuildHttpResponse(404, "Playlist HLS indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            AppLog.Write("PanelRollingHls", $"Playlist solicitada: janela={windowId:N}");
+            var bytes = await Task.Run(() => File.ReadAllBytes(playlistPath), cancellationToken).ConfigureAwait(false);
+            return BuildBinaryHttpResponse(200, bytes, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserPanelRollingHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        {
+            AppLog.Write("PanelRollingHls", $"Segmento solicitado e ausente: janela={windowId:N}, arquivo={filePart}");
+            return BuildHttpResponse(404, "Segmento HLS indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = await Task.Run(() => File.ReadAllBytes(segmentPath), cancellationToken).ConfigureAwait(false);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
     private static string ParsePath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -757,6 +807,9 @@ public sealed class LocalWebRtcPublisherService
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var rollingStreamUrl = _browserPanelRollingHlsService.IsAvailable
+            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            : publishedUrl;
 
         return new BridgeWindowSnapshot
         {
@@ -765,7 +818,7 @@ public sealed class LocalWebRtcPublisherService
             State = window.State.ToString(),
             InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
             PublishedWebRtcUrl = publishedUrl,
-            StreamUrl = publishedUrl,
+            StreamUrl = rollingStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),

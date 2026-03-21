@@ -11,6 +11,8 @@ sub init()
     m.isClosingKeyboard = false
     m.isFullscreenRefreshInFlight = false
     m.previewRevision = 0
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
@@ -32,6 +34,7 @@ sub init()
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.cursorMarker = m.top.findNode("cursorMarker")
+    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
@@ -87,6 +90,9 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
+    end if
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
@@ -265,6 +271,7 @@ sub applyBridgeResponse()
             id: getString(window.id, "")
             title: getString(window.title, "Janela sem titulo")
             state: getString(window.state, "Desconhecido")
+            streamUrl: getString(window.streamUrl, "")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
         })
@@ -433,10 +440,26 @@ sub showFullscreen()
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
-    m.activeFullscreenPoster.visible = true
-    m.bufferFullscreenPoster.visible = false
-    m.bufferFullscreenPoster.uri = ""
+    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
+    m.videoStreamUrl = getString(entry.streamUrl, "")
+    if m.videoUsesStream and m.fullscreenVideo <> invalid
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(m.videoStreamUrl)
+        content.streamFormat = "hls"
+        content.title = getString(entry.title, "Painel")
+        m.fullscreenVideo.content = content
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.visible = true
+        m.fullscreenVideo.control = "play"
+        m.activeFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.visible = false
+        m.statusLabel.text = "Iniciando stream continuo do painel..."
+    else
+        m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.activeFullscreenPoster.visible = true
+        m.bufferFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.uri = ""
+    end if
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
@@ -449,6 +472,13 @@ sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -639,7 +669,41 @@ sub onPreviewRefreshTimerFire()
 end sub
 
 sub onFullscreenStreamTimerFire()
+    if m.videoUsesStream
+        return
+    end if
+
     refreshFullscreenPreview()
+end sub
+
+sub onFullscreenVideoStateChanged()
+    if m.fullscreenVideo = invalid or not m.videoUsesStream
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.statusLabel.text = "Stream continuo do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando stream continuo do painel..."
+    else if state = "error"
+        m.statusLabel.text = "Falha no stream continuo do painel"
+    else if state = "finished" or state = "stopped"
+        if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
+            content = CreateObject("roSGNode", "ContentNode")
+            content.url = appendCacheBust(m.videoStreamUrl)
+            content.streamFormat = "hls"
+            content.title = "Painel"
+            m.fullscreenVideo.content = content
+            m.fullscreenVideo.control = "stop"
+            m.fullscreenVideo.control = "play"
+            m.statusLabel.text = "Reiniciando stream continuo do painel..."
+        end if
+    end if
 end sub
 
 sub onClickControlTaskCompleted()
