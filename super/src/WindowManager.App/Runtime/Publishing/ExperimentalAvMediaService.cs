@@ -118,7 +118,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
             var stillPath = Path.Combine(windowDirectory, "panel.jpg");
             var wavePath = Path.Combine(windowDirectory, "panel.wav");
             var outputPath = Path.Combine(windowDirectory, "panel-experimental.mp4");
-            var tempPath = outputPath + ".tmp";
+            var tempPath = Path.Combine(windowDirectory, "panel-experimental.tmp.mp4");
 
             File.WriteAllBytes(stillPath, jpegBytes);
             File.WriteAllBytes(wavePath, waveBytes);
@@ -131,6 +131,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
                 "-shortest " +
                 "-c:v libx264 -preset veryfast -tune stillimage -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
                 "-c:a aac -profile:a aac_low -b:a 128k -ar 44100 -ac 2 " +
+                "-f mp4 " +
                 "-movflags +faststart -brand mp42 " +
                 "\"" + tempPath + "\"";
 
