@@ -16,19 +16,30 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserSnapshotService
 {
+    private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(90);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
+    private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();
+    private readonly ConcurrentDictionary<Guid, Task<byte[]?>> _captureTasks = new ConcurrentDictionary<Guid, Task<byte[]?>>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
     {
         _browsers[windowId] = browser;
+        _cachedFrames.TryRemove(windowId, out _);
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
     }
 
     public void Unregister(Guid windowId)
     {
         _browsers.TryRemove(windowId, out _);
+        _cachedFrames.TryRemove(windowId, out _);
+        _captureTasks.TryRemove(windowId, out _);
         _cursorStates.TryRemove(windowId, out _);
+    }
+
+    public void InvalidateCapture(Guid windowId)
+    {
+        _cachedFrames.TryRemove(windowId, out _);
     }
 
     public async Task<byte[]?> CaptureJpegAsync(Guid windowId, CancellationToken cancellationToken)
@@ -40,41 +51,34 @@ public sealed class BrowserSnapshotService
             return null;
         }
 
+        if (_cachedFrames.TryGetValue(windowId, out var cached) &&
+            cached.Bytes is not null &&
+            cached.Bytes.Length > 0 &&
+            DateTime.UtcNow - cached.CapturedAtUtc <= CachedFrameLifetime)
+        {
+            return cached.Bytes;
+        }
+
+        var captureTask = _captureTasks.GetOrAdd(windowId, _ => CaptureFreshJpegAsync(windowId, browser));
         try
         {
-            var jpegBytes = await browser.Dispatcher.InvokeAsync(() =>
+            var jpegBytes = await captureTask.ConfigureAwait(false);
+            if (jpegBytes is not null && jpegBytes.Length > 0)
             {
-                var width = Math.Max(1, (int)Math.Ceiling(browser.ActualWidth));
-                var height = Math.Max(1, (int)Math.Ceiling(browser.ActualHeight));
-
-                if (width <= 1 || height <= 1)
-                {
-                    return (byte[]?)null;
-                }
-
-                browser.Measure(new Size(width, height));
-                browser.Arrange(new Rect(0, 0, width, height));
-                browser.UpdateLayout();
-
-                var renderTarget = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-                renderTarget.Render(browser);
-
-                var encoder = new JpegBitmapEncoder();
-                encoder.QualityLevel = 72;
-                encoder.Frames.Add(BitmapFrame.Create(renderTarget));
-
-                using (var stream = new MemoryStream())
-                {
-                    encoder.Save(stream);
-                    return stream.ToArray();
-                }
-            });
-
+                _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+            }
             return jpegBytes;
         }
         catch
         {
             return null;
+        }
+        finally
+        {
+            if (_captureTasks.TryGetValue(windowId, out var activeTask) && ReferenceEquals(activeTask, captureTask))
+            {
+                _captureTasks.TryRemove(windowId, out _);
+            }
         }
     }
 
@@ -126,19 +130,24 @@ public sealed class BrowserSnapshotService
                     {
                         browser.Load(clickResult.NavigationUrl);
                     }
+
+                    InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", string.Format("Mouse click => x={0}, y={1}, ok={2}, editable={3}, tag={4}, type={5}, target={6}, clickable={7}, nav={8}", cursor.X, cursor.Y, clickResult.Ok, clickResult.Editable, clickResult.TagName, clickResult.InputType, clickResult.TargetPath, clickResult.ClickablePath, clickResult.NavigationUrl));
                     return clickResult;
                 case "set-text":
                     var setTextResult = await SetTextAtFocusedElementAsync(frame, cursor.X, cursor.Y, text ?? string.Empty).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", string.Format("Texto aplicado ao CEF. ok={0}, editable={1}, tag={2}, type={3}, valueLength={4}, finalValue={5}", setTextResult.Ok, setTextResult.Editable, setTextResult.TagName, setTextResult.InputType, (text ?? string.Empty).Length, setTextResult.Value));
                     return setTextResult;
                 case "back":
                     SendKey(host, 0x1B);
+                    InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", "Escape enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);
+                    InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", "Tab enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "open-fullscreen":
@@ -194,6 +203,7 @@ public sealed class BrowserSnapshotService
                 FocusOnEditableField = true
             });
 
+            InvalidateCapture(windowId);
             AppLog.Write("SuperPreviewControl", string.Format("Tecla local enviada ao CEF: key={0}, code={1}, janela={2}", key, keyCode, windowId.ToString("N")));
             return true;
         });
@@ -231,9 +241,48 @@ public sealed class BrowserSnapshotService
                 });
             }
 
+            InvalidateCapture(windowId);
             AppLog.Write("SuperPreviewControl", string.Format("Texto local enviado ao CEF: length={0}, janela={1}", text.Length, windowId.ToString("N")));
             return true;
         });
+    }
+
+    private static async Task<byte[]?> CaptureFreshJpegAsync(Guid windowId, ChromiumWebBrowser browser)
+    {
+        try
+        {
+            return await browser.Dispatcher.InvokeAsync(() =>
+            {
+                var width = Math.Max(1, (int)Math.Ceiling(browser.ActualWidth));
+                var height = Math.Max(1, (int)Math.Ceiling(browser.ActualHeight));
+
+                if (width <= 1 || height <= 1)
+                {
+                    return (byte[]?)null;
+                }
+
+                browser.Measure(new Size(width, height));
+                browser.Arrange(new Rect(0, 0, width, height));
+                browser.UpdateLayout();
+
+                var renderTarget = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                renderTarget.Render(browser);
+
+                var encoder = new JpegBitmapEncoder();
+                encoder.QualityLevel = 68;
+                encoder.Frames.Add(BitmapFrame.Create(renderTarget));
+
+                using (var stream = new MemoryStream())
+                {
+                    encoder.Save(stream);
+                    return stream.ToArray();
+                }
+            });
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void SendKey(IBrowserHost host, int keyCode)
@@ -529,6 +578,19 @@ public sealed class BrowserSnapshotService
         }
     }
 
+}
+
+internal sealed class CachedJpegFrame
+{
+    public CachedJpegFrame(byte[] bytes, DateTime capturedAtUtc)
+    {
+        Bytes = bytes;
+        CapturedAtUtc = capturedAtUtc;
+    }
+
+    public byte[] Bytes { get; }
+
+    public DateTime CapturedAtUtc { get; }
 }
 
  [DataContract]
