@@ -17,6 +17,7 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class LocalWebRtcPublisherService
 {
+    private static readonly string BridgeDebugLogPath = Path.Combine(AppDataPaths.Root, "bridge-debug.log");
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly DiagnosticAvHlsService _diagnosticAvHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
@@ -29,6 +30,7 @@ public sealed class LocalWebRtcPublisherService
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
+    private int _activeListenerPort;
 
     public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, DiagnosticAvHlsService diagnosticAvHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
@@ -47,11 +49,9 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8088 : serverPort;
         var slug = LinkRtcAddressBuilder.NormalizeRouteSegment(session.Title, session.Id.ToString("N"));
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
-        var listenerKey = string.Format("{0}:{1}", endpoint.Address, endpoint.Port);
-        var publishedUrl = LinkRtcAddressBuilder.BuildPublishedUrl(session, port, bindMode, specificIp);
-        var routeKey = BuildRouteKey(port, slug);
-
-        EnsureListener(endpoint, listenerKey);
+        var activePort = EnsureListener(endpoint);
+        var publishedUrl = LinkRtcAddressBuilder.BuildPublishedUrl(session, activePort, bindMode, specificIp);
+        var routeKey = BuildRouteKey(activePort, slug);
         RemoveExistingRoute(session.Id);
 
         _routes[routeKey] = new PublishedWindowRoute
@@ -60,7 +60,7 @@ public sealed class LocalWebRtcPublisherService
             Title = session.Title,
             SourceUrl = session.InitialUri.ToString(),
             RoutePath = slug,
-            Port = port,
+            Port = activePort,
             PublishedUrl = publishedUrl
         };
 
@@ -179,14 +179,12 @@ public sealed class LocalWebRtcPublisherService
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
-        var listenerKey = string.Format("{0}:{1}", endpoint.Address, endpoint.Port);
-
-        EnsureListener(endpoint, listenerKey);
+        var activePort = EnsureListener(endpoint);
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
-            var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
+            var snapshot = BuildWindowSnapshot(window, activePort, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
         }
@@ -202,15 +200,38 @@ public sealed class LocalWebRtcPublisherService
         }
     }
 
-    private void EnsureListener(IPEndPoint endpoint, string listenerKey)
+    private int EnsureListener(IPEndPoint endpoint)
     {
         lock (_listenerGate)
         {
-            if (!string.Equals(_activeListenerKey, listenerKey, StringComparison.OrdinalIgnoreCase))
+            var preferredPort = endpoint.Port;
+
+            if (_listener is not null && _activeListenerPort > 0 && _activeListenerPort >= preferredPort && _activeListenerPort <= preferredPort + 3)
             {
-                StopListener();
-                StartListener(endpoint, listenerKey);
+                return _activeListenerPort;
             }
+
+            StopListener();
+
+            Exception? lastError = null;
+            for (var candidatePort = preferredPort; candidatePort <= preferredPort + 3; candidatePort++)
+            {
+                var candidateEndpoint = new IPEndPoint(endpoint.Address, candidatePort);
+                var listenerKey = string.Format("{0}:{1}", candidateEndpoint.Address, candidateEndpoint.Port);
+
+                try
+                {
+                    StartListener(candidateEndpoint, listenerKey);
+                    return candidatePort;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    WriteBridgeDebug("PORT fallback failed " + candidatePort.ToString() + " => " + ex.Message);
+                }
+            }
+
+            throw new InvalidOperationException("Nao foi possivel iniciar o bridge local nas portas 8090-8093.", lastError);
         }
     }
 
@@ -220,10 +241,12 @@ public sealed class LocalWebRtcPublisherService
         var listener = new TcpListener(endpoint);
         listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         listener.Start();
+        WriteBridgeDebug("START listener " + listenerKey);
 
         _listener = listener;
         _listenerCancellation = cancellation;
         _activeListenerKey = listenerKey;
+        _activeListenerPort = endpoint.Port;
 
         Task.Run(() => ListenLoopAsync(listener, cancellation.Token));
     }
@@ -250,16 +273,18 @@ public sealed class LocalWebRtcPublisherService
         _listenerCancellation = null;
         _listener = null;
         _activeListenerKey = string.Empty;
+        _activeListenerPort = 0;
     }
 
     private async Task ListenLoopAsync(TcpListener listener, CancellationToken cancellationToken)
     {
+        WriteBridgeDebug("LISTEN loop active");
         while (!cancellationToken.IsCancellationRequested)
         {
-            TcpClient? client = null;
             try
             {
-                client = await listener.AcceptTcpClientAsync();
+                var client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                WriteBridgeDebug("ACCEPT " + ((client.Client.RemoteEndPoint as IPEndPoint)?.ToString() ?? "(unknown)"));
                 _ = Task.Run(() => HandleClientAsync(client, cancellationToken), cancellationToken);
             }
             catch (ObjectDisposedException)
@@ -272,10 +297,12 @@ public sealed class LocalWebRtcPublisherService
                 {
                     break;
                 }
+
+                WriteBridgeDebug("SOCKET error in listen loop");
             }
             catch
             {
-                client?.Dispose();
+                WriteBridgeDebug("UNHANDLED error in listen loop");
             }
         }
     }
@@ -289,7 +316,7 @@ public sealed class LocalWebRtcPublisherService
             string? requestLine;
             try
             {
-                requestLine = await reader.ReadLineAsync();
+                requestLine = await reader.ReadLineAsync().ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(requestLine))
                 {
                     return;
@@ -298,7 +325,7 @@ public sealed class LocalWebRtcPublisherService
                 string? headerLine;
                 do
                 {
-                    headerLine = await reader.ReadLineAsync();
+                    headerLine = await reader.ReadLineAsync().ConfigureAwait(false);
                 }
                 while (!string.IsNullOrEmpty(headerLine));
             }
@@ -307,14 +334,49 @@ public sealed class LocalWebRtcPublisherService
                 return;
             }
 
-            var path = ParsePath(requestLine);
+            var path = ParseRequestPath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
-            var bytes = await BuildResponseAsync(path, remoteAddress, cancellationToken);
-            await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
+            try
+            {
+                WriteBridgeDebug("HANDLE " + path + " from " + (string.IsNullOrWhiteSpace(remoteAddress) ? "(unknown)" : remoteAddress));
+                var response = await BuildResponseAsync(path, remoteAddress, cancellationToken);
+                var bytes = BuildRawHttpResponse(response);
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                WriteBridgeDebug("RESPONDED " + path + " bytes=" + response.BodyBytes.Length.ToString());
+            }
+            catch (Exception ex)
+            {
+                WriteBridgeDebug("ERROR " + path + " => " + ex.Message);
+                AppLog.Write(
+                    "Bridge",
+                    string.Format(
+                        "Falha ao responder requisicao '{0}' de {1}: {2}",
+                        path,
+                        string.IsNullOrWhiteSpace(remoteAddress) ? "(desconhecido)" : remoteAddress,
+                        ex.Message));
+
+                var response = BuildHttpResponse(500, "Bridge failure", "text/plain; charset=utf-8");
+                var bytes = BuildRawHttpResponse(response);
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
-    private async Task<byte[]> BuildResponseAsync(string path, string remoteAddress, CancellationToken cancellationToken)
+    private static void WriteBridgeDebug(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(BridgeDebugLogPath) ?? AppDataPaths.Root);
+            File.AppendAllText(
+                BridgeDebugLogPath,
+                string.Format("[{0:HH:mm:ss.fff}] {1}{2}", DateTime.Now, message, Environment.NewLine));
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task<BridgeHttpResponse> BuildResponseAsync(string path, string remoteAddress, CancellationToken cancellationToken)
     {
         var requestTarget = path ?? "/";
         var normalizedPath = requestTarget.Split('?')[0];
@@ -370,7 +432,7 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(200, BuildIndexPage(), "text/html; charset=utf-8");
         }
 
-        var port = (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8088;
+        var port = _activeListenerPort <= 0 ? 8088 : _activeListenerPort;
         if (!_routes.TryGetValue(BuildRouteKey(port, slug), out var route))
         {
             return BuildHttpResponse(404, "<html><body style='font-family:Segoe UI;padding:24px'><h1>Rota nao encontrada</h1></body></html>", "text/html; charset=utf-8");
@@ -557,7 +619,7 @@ public sealed class LocalWebRtcPublisherService
         }
     }
 
-    private async Task<byte[]> HandleControlRequestAsync(string requestTarget, CancellationToken cancellationToken)
+    private async Task<BridgeHttpResponse> HandleControlRequestAsync(string requestTarget, CancellationToken cancellationToken)
     {
         var queryIndex = requestTarget.IndexOf('?');
         if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
@@ -584,7 +646,7 @@ public sealed class LocalWebRtcPublisherService
         return BuildHttpResponse(result.Ok ? 200 : 404, body, "application/json; charset=utf-8");
     }
 
-    private async Task<byte[]> BuildThumbnailResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    private async Task<BridgeHttpResponse> BuildThumbnailResponseAsync(string normalizedPath, CancellationToken cancellationToken)
     {
         var fileName = normalizedPath.Substring("/thumbnails/".Length);
         if (fileName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
@@ -606,7 +668,7 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
-    private async Task<byte[]> BuildDiagnosticAvResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    private async Task<BridgeHttpResponse> BuildDiagnosticAvResponseAsync(string normalizedPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -647,7 +709,7 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
     }
 
-    private static string ParsePath(string requestLine)
+    private static string ParseRequestPath(string requestLine)
     {
         var parts = requestLine.Split(' ');
         if (parts.Length < 2)
@@ -658,35 +720,32 @@ public sealed class LocalWebRtcPublisherService
         return parts[1];
     }
 
-    private static byte[] BuildHttpResponse(int statusCode, string body, string contentType)
+    private static byte[] BuildRawHttpResponse(BridgeHttpResponse response)
     {
-        var reason = statusCode == 200 ? "OK" : statusCode == 404 ? "Not Found" : "Error";
-        var bodyBytes = Encoding.UTF8.GetBytes(body);
-        var header = string.Format(
-            "HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{4}",
-            statusCode,
-            reason,
-            contentType,
-            bodyBytes.Length,
-            body);
-        return Encoding.UTF8.GetBytes(header);
-    }
-
-    private static byte[] BuildBinaryHttpResponse(int statusCode, byte[] bodyBytes, string contentType)
-    {
-        var reason = statusCode == 200 ? "OK" : statusCode == 404 ? "Not Found" : "Error";
+        var reason = response.StatusCode == 200 ? "OK" : response.StatusCode == 404 ? "Not Found" : response.StatusCode == 400 ? "Bad Request" : "Error";
         var header = Encoding.ASCII.GetBytes(
             string.Format(
                 "HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n",
-                statusCode,
+                response.StatusCode,
                 reason,
-                contentType,
-                bodyBytes.Length));
+                response.ContentType,
+                response.BodyBytes.Length));
 
-        var response = new byte[header.Length + bodyBytes.Length];
-        Buffer.BlockCopy(header, 0, response, 0, header.Length);
-        Buffer.BlockCopy(bodyBytes, 0, response, header.Length, bodyBytes.Length);
-        return response;
+        var result = new byte[header.Length + response.BodyBytes.Length];
+        Buffer.BlockCopy(header, 0, result, 0, header.Length);
+        Buffer.BlockCopy(response.BodyBytes, 0, result, header.Length, response.BodyBytes.Length);
+        return result;
+    }
+
+    private static BridgeHttpResponse BuildHttpResponse(int statusCode, string body, string contentType)
+    {
+        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        return new BridgeHttpResponse(statusCode, contentType, bodyBytes);
+    }
+
+    private static BridgeHttpResponse BuildBinaryHttpResponse(int statusCode, byte[] bodyBytes, string contentType)
+    {
+        return new BridgeHttpResponse(statusCode, contentType, bodyBytes);
     }
 
     private static string BuildIndexPage()
@@ -1008,5 +1067,21 @@ public sealed class RegisteredDisplaySnapshot
 
     [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
+}
+
+internal sealed class BridgeHttpResponse
+{
+    public BridgeHttpResponse(int statusCode, string contentType, byte[] bodyBytes)
+    {
+        StatusCode = statusCode;
+        ContentType = contentType;
+        BodyBytes = bodyBytes;
+    }
+
+    public int StatusCode { get; }
+
+    public string ContentType { get; }
+
+    public byte[] BodyBytes { get; }
 }
 

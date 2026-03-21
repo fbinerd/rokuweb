@@ -1,5 +1,7 @@
 sub init()
-    m.defaultBridgeHost = "superweb.local:8090"
+    m.defaultBridgeHostBase = "superweb.local"
+    m.defaultBridgePorts = [8090, 8091, 8092, 8093]
+    m.defaultBridgeHost = m.defaultBridgeHostBase + ":" + m.defaultBridgePorts[0].ToStr()
     m.bridgeHost = m.defaultBridgeHost
     m.windowEntries = []
     m.selectedIndex = 0
@@ -210,6 +212,10 @@ sub reportInputKey(key as string)
 end sub
 
 sub loadWindows(silent = false as boolean)
+    if m.isAutoConnecting
+        m.bridgeHost = resolveAutoConnectBridgeHost()
+    end if
+
     if not silent and m.isAutoConnecting
         m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
         m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " em andamento. Tentando automaticamente..."
@@ -940,4 +946,13 @@ function normalizeBridgeHost(value as string) as string
     end if
 
     return host
+end function
+
+function resolveAutoConnectBridgeHost() as string
+    if m.defaultBridgePorts = invalid or m.defaultBridgePorts.Count() = 0
+        return m.defaultBridgeHost
+    end if
+
+    portIndex = m.autoConnectAttempts mod m.defaultBridgePorts.Count()
+    return m.defaultBridgeHostBase + ":" + m.defaultBridgePorts[portIndex].ToStr()
 end function
