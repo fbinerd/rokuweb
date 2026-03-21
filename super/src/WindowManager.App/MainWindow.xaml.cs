@@ -23,7 +23,6 @@ public partial class MainWindow : Window
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, ChromiumWebBrowser> _previewBrowsers = new Dictionary<Guid, ChromiumWebBrowser>();
-    private readonly Dictionary<Guid, BrowserCaptureWindow> _captureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
     private readonly Dictionary<Guid, PreviewWindow> _detailWindows = new Dictionary<Guid, PreviewWindow>();
     private TransmissionLogWindow? _logWindow;
 
@@ -85,7 +84,6 @@ public partial class MainWindow : Window
     private void AddPreview(WindowSession session)
     {
         session.PropertyChanged += OnWindowSessionPropertyChanged;
-        EnsureCaptureWindow(session);
 
         var headerTitle = new TextBlock
         {
@@ -213,7 +211,7 @@ public partial class MainWindow : Window
             };
 
             _previewBrowsers[session.Id] = browser;
-            _browserSnapshotService.RegisterMirror(session.Id, browser);
+            _browserSnapshotService.Register(session.Id, browser);
             return browser;
         }
 
@@ -290,16 +288,9 @@ public partial class MainWindow : Window
 
         if (_previewBrowsers.TryGetValue(session.Id, out var browser))
         {
-            _browserSnapshotService.UnregisterMirror(session.Id, browser);
+            _browserSnapshotService.Unregister(session.Id);
             browser.Dispose();
             _previewBrowsers.Remove(session.Id);
-        }
-
-        if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
-        {
-            _browserSnapshotService.Unregister(session.Id);
-            captureWindow.Close();
-            _captureWindows.Remove(session.Id);
         }
 
         if (_detailWindows.TryGetValue(session.Id, out var detailWindow))
@@ -557,11 +548,6 @@ public partial class MainWindow : Window
             }
         }
 
-        if (e.PropertyName == nameof(WindowSession.InitialUri) && _captureWindows.TryGetValue(session.Id, out var captureWindow))
-        {
-            captureWindow.UpdateAddress(session.InitialUri);
-        }
-
         if ((e.PropertyName == nameof(WindowSession.State) || e.PropertyName == nameof(WindowSession.AssignedTarget)) &&
             session.State == WindowSessionState.Streaming &&
             session.AssignedTarget?.TransportKind == DisplayTransportKind.Miracast)
@@ -608,11 +594,6 @@ public partial class MainWindow : Window
             detailWindow.Close();
         }
 
-        foreach (var captureWindow in _captureWindows.Values)
-        {
-            captureWindow.Close();
-        }
-
         _logWindow?.Close();
 
         foreach (var browser in _previewBrowsers.Values)
@@ -620,25 +601,7 @@ public partial class MainWindow : Window
             browser.Dispose();
         }
 
-        foreach (var windowId in _previewBrowsers.Keys)
-        {
-            _browserSnapshotService.Unregister(windowId);
-        }
-
         base.OnClosed(e);
-    }
-
-    private void EnsureCaptureWindow(WindowSession session)
-    {
-        if (!AppRuntimeState.BrowserEngineAvailable || _captureWindows.ContainsKey(session.Id))
-        {
-            return;
-        }
-
-        var captureWindow = new BrowserCaptureWindow(session.InitialUri);
-        _captureWindows[session.Id] = captureWindow;
-        _browserSnapshotService.Register(session.Id, captureWindow.Browser);
-        captureWindow.Show();
     }
 }
 
