@@ -1042,6 +1042,7 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"invalid_offer\"}", "application/json; charset=utf-8");
             }
 
+            _experimentalAvMediaService.Invalidate(windowId);
             var mediaUrl = BuildExperimentalMediaUrl(windowId);
             var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, mediaUrl, payload);
             AppLog.Write(

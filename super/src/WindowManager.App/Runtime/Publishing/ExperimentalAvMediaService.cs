@@ -77,6 +77,28 @@ public sealed class ExperimentalAvMediaService : IDisposable
         return IsAvailable && File.Exists(path);
     }
 
+    public void Invalidate(Guid windowId)
+    {
+        try
+        {
+            var windowDirectory = Path.Combine(_rootDirectory, windowId.ToString("N"));
+            if (!Directory.Exists(windowDirectory))
+            {
+                return;
+            }
+
+            DeleteIfExists(Path.Combine(windowDirectory, "panel-experimental.mp4"));
+            DeleteIfExists(Path.Combine(windowDirectory, "panel-experimental.tmp.mp4"));
+            DeleteIfExists(Path.Combine(windowDirectory, "panel.wav"));
+            DeleteIfExists(Path.Combine(windowDirectory, "panel.jpg"));
+            AppLog.Write("ExpWebRtc", $"Midia experimental invalidada: janela={windowId:N}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("ExpWebRtc", $"Falha ao invalidar midia experimental da janela {windowId:N}: {ex.Message}");
+        }
+    }
+
     private async Task WaitForBrowserMediaAndGenerateAsync(Guid windowId)
     {
         var deadlineUtc = DateTime.UtcNow.AddSeconds(15);
@@ -259,5 +281,13 @@ public sealed class ExperimentalAvMediaService : IDisposable
 
     public void Dispose()
     {
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
     }
 }
