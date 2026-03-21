@@ -15,9 +15,9 @@ sub execute()
     end if
 
     url = "http://" + bridgeHost + "/api/windows"
-    registerDisplay(bridgeHost)
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)
+    transfer.SetMinimumTransferRate(1, 2)
 
     responseBody = invalid
     responseCode = 0
@@ -28,6 +28,7 @@ sub execute()
         responseCode = 200
         m.top.errorMessage = ""
         m.top.responseBody = responseBody
+        registerDisplay(bridgeHost)
     else
         m.top.errorMessage = "Falha ao conectar em " + bridgeHost
         m.top.responseBody = ""
@@ -58,6 +59,7 @@ sub registerDisplay(bridgeHost as string)
 
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(registerUrl)
+    transfer.SetMinimumTransferRate(1, 2)
     ignored = transfer.GetToString()
 end sub
 

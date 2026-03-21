@@ -45,11 +45,9 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8088 : serverPort;
         var slug = LinkRtcAddressBuilder.NormalizeRouteSegment(session.Title, session.Id.ToString("N"));
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
-        var listenerKey = string.Format("{0}:{1}", endpoint.Address, endpoint.Port);
-        var publishedUrl = LinkRtcAddressBuilder.BuildPublishedUrl(session, port, bindMode, specificIp);
-        var routeKey = BuildRouteKey(port, slug);
-
-        EnsureListener(endpoint, listenerKey);
+        var activePort = EnsureListener(endpoint);
+        var publishedUrl = LinkRtcAddressBuilder.BuildPublishedUrl(session, activePort, bindMode, specificIp);
+        var routeKey = BuildRouteKey(activePort, slug);
         RemoveExistingRoute(session.Id);
 
         _routes[routeKey] = new PublishedWindowRoute
@@ -58,7 +56,7 @@ public sealed class LocalWebRtcPublisherService
             Title = session.Title,
             SourceUrl = session.InitialUri.ToString(),
             RoutePath = slug,
-            Port = port,
+            Port = activePort,
             PublishedUrl = publishedUrl
         };
 
@@ -177,14 +175,12 @@ public sealed class LocalWebRtcPublisherService
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
-        var listenerKey = string.Format("{0}:{1}", endpoint.Address, endpoint.Port);
-
-        EnsureListener(endpoint, listenerKey);
+        var activePort = EnsureListener(endpoint);
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
-            var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
+            var snapshot = BuildWindowSnapshot(window, activePort, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
         }
@@ -198,15 +194,35 @@ public sealed class LocalWebRtcPublisherService
         }
     }
 
-    private void EnsureListener(IPEndPoint endpoint, string listenerKey)
+    private int EnsureListener(IPEndPoint endpoint)
     {
         lock (_listenerGate)
         {
-            if (!string.Equals(_activeListenerKey, listenerKey, StringComparison.OrdinalIgnoreCase))
+            var preferredPort = endpoint.Port;
+
+            if (_listener is not null && !string.IsNullOrWhiteSpace(_activeListenerKey))
             {
-                StopListener();
-                StartListener(endpoint, listenerKey);
+                return _listener.LocalEndpoint is IPEndPoint currentEndpoint ? currentEndpoint.Port : preferredPort;
             }
+
+            Exception? lastError = null;
+            for (var candidatePort = preferredPort; candidatePort <= preferredPort + 3; candidatePort++)
+            {
+                var candidateEndpoint = new IPEndPoint(endpoint.Address, candidatePort);
+                var listenerKey = string.Format("{0}:{1}", candidateEndpoint.Address, candidateEndpoint.Port);
+                try
+                {
+                    StopListener();
+                    StartListener(candidateEndpoint, listenerKey);
+                    return candidatePort;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            throw new InvalidOperationException("Nao foi possivel iniciar o bridge local nas portas 8090-8093.", lastError);
         }
     }
 
@@ -214,7 +230,6 @@ public sealed class LocalWebRtcPublisherService
     {
         var cancellation = new CancellationTokenSource();
         var listener = new TcpListener(endpoint);
-        listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         listener.Start();
 
         _listener = listener;

@@ -1,5 +1,7 @@
 sub init()
-    m.defaultBridgeHost = "superweb.local:8090"
+    m.defaultBridgeHostBase = "superweb.local"
+    m.defaultBridgePorts = [8090, 8091, 8092, 8093]
+    m.defaultBridgeHost = m.defaultBridgeHostBase + ":" + m.defaultBridgePorts[0].ToStr()
     m.bridgeHost = m.defaultBridgeHost
     m.windowEntries = []
     m.selectedIndex = 0
@@ -300,6 +302,7 @@ end sub
 sub beginAutoConnect()
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
+    m.bridgeHost = resolveAutoConnectBridgeHost()
     startPanelRefresh()
     loadWindows()
 end sub
@@ -331,10 +334,12 @@ end sub
 
 sub scheduleAutoConnectRetry()
     if m.autoConnectTimer = invalid
+        m.bridgeHost = resolveAutoConnectBridgeHost()
         loadWindows()
         return
     end if
 
+    m.bridgeHost = resolveAutoConnectBridgeHost()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
     m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente automaticamente..."
     m.autoConnectTimer.control = "stop"
@@ -343,6 +348,7 @@ end sub
 
 sub onAutoConnectTimerFire()
     if m.isAutoConnecting
+        m.bridgeHost = resolveAutoConnectBridgeHost()
         loadWindows()
     end if
 end sub
@@ -855,4 +861,13 @@ function normalizeBridgeHost(value as string) as string
     end if
 
     return host
+end function
+
+function resolveAutoConnectBridgeHost() as string
+    if m.defaultBridgePorts = invalid or m.defaultBridgePorts.Count() = 0
+        return m.defaultBridgeHost
+    end if
+
+    portIndex = m.autoConnectAttempts mod m.defaultBridgePorts.Count()
+    return m.defaultBridgeHostBase + ":" + m.defaultBridgePorts[portIndex].ToStr()
 end function
