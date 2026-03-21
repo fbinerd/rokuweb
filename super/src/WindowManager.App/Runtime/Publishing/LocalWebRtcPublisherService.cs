@@ -402,7 +402,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/api/experimental-av/", StringComparison.OrdinalIgnoreCase))
         {
-            return await BuildExperimentalWebRtcResponseAsync(method, normalizedPath, requestBody, headers, cancellationToken);
+            return await BuildExperimentalWebRtcResponseAsync(method, requestTarget, normalizedPath, requestBody, headers, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/api/control", StringComparison.OrdinalIgnoreCase))
@@ -954,7 +954,7 @@ public sealed class LocalWebRtcPublisherService
         };
     }
 
-    private async Task<byte[]> BuildExperimentalWebRtcResponseAsync(string method, string normalizedPath, string requestBody, Dictionary<string, string> headers, CancellationToken cancellationToken)
+    private async Task<byte[]> BuildExperimentalWebRtcResponseAsync(string method, string requestTarget, string normalizedPath, string requestBody, Dictionary<string, string> headers, CancellationToken cancellationToken)
     {
         if (!_experimentalWebRtcAvService.IsEnabled)
         {
@@ -1001,12 +1001,26 @@ public sealed class LocalWebRtcPublisherService
 
         if (string.Equals(routeSuffix, "media", StringComparison.OrdinalIgnoreCase))
         {
+            var queryValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var queryIndex = requestTarget.IndexOf('?');
+            if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
+            {
+                queryValues = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+            }
+
             AppLog.Write(
                 "ExpWebRtc",
                 string.Format(
                     "Midia experimental solicitada: janela={0}, transportStatus={1}",
                     windowId.ToString("N"),
                     sessionState.TransportStatus));
+
+            if (queryValues.TryGetValue("probe", out var probeValue) && string.Equals(probeValue, "1", StringComparison.OrdinalIgnoreCase))
+            {
+                var ready = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
+                return BuildHttpResponse(200, ready ? "{\"ready\":true}" : "{\"ready\":false}", "application/json; charset=utf-8");
+            }
+
             if (_experimentalAvMediaService.TryGetMp4Path(windowId, out var mp4Path))
             {
                 headers.TryGetValue("Range", out var rangeHeader);

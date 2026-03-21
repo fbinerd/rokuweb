@@ -1000,7 +1000,13 @@ sub onExperimentalAvMediaProbeTimerFire()
     end if
 
     m.experimentalAvMediaProbeInFlight = true
-    runExperimentalAvRequest(m.experimentalAvMediaTask, m.experimentalAvMediaUrl, "HEAD", "")
+    probeUrl = m.experimentalAvMediaUrl
+    if Instr(1, probeUrl, "?") > 0
+        probeUrl = probeUrl + "&probe=1"
+    else
+        probeUrl = probeUrl + "?probe=1"
+    end if
+    runExperimentalAvRequest(m.experimentalAvMediaTask, probeUrl, "GET", "")
 end sub
 
 sub onExperimentalAvMediaTaskCompleted()
@@ -1010,13 +1016,21 @@ sub onExperimentalAvMediaTaskCompleted()
 
     m.experimentalAvMediaProbeInFlight = false
     code = m.experimentalAvMediaTask.responseCode
-    ? "[ExpAV] media probe => "; code
+    responseBody = m.experimentalAvMediaTask.responseBody
+    ready = false
+    if responseBody <> invalid and responseBody <> ""
+        probeJson = ParseJson(responseBody)
+        if probeJson <> invalid and probeJson.ready <> invalid
+            ready = probeJson.ready = true
+        end if
+    end if
+    ? "[ExpAV] media probe => "; code; " ready="; ready
 
     if m.experimentalAvPlaybackStarted
         return
     end if
 
-    if code >= 200 and code < 400 and m.experimentalAvMediaUrl <> ""
+    if ready and m.experimentalAvMediaUrl <> ""
         startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
         m.experimentalAvPlaybackStarted = true
         return
