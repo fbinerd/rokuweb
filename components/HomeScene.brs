@@ -43,6 +43,7 @@ sub init()
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
+    m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.panelAudioNode = m.top.findNode("panelAudioNode")
 
     m.panelGroups = [
@@ -87,6 +88,7 @@ sub init()
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
+    m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
@@ -501,6 +503,9 @@ sub stopPanelAudio()
     end if
 
     m.audioSessionId = ""
+    if m.audioRetryTimer <> invalid
+        m.audioRetryTimer.control = "stop"
+    end if
     m.panelAudioNode.control = "stop"
     m.panelAudioNode.content = invalid
 end sub
@@ -522,12 +527,45 @@ sub onPanelAudioStateChanged()
     else if state = "stopped"
         if m.isFullscreen and m.audioSessionId <> ""
             m.statusLabel.text = "Audio do painel parado"
+            scheduleAudioRetry()
         end if
     else if state = "error"
         if m.isFullscreen and m.audioSessionId <> ""
             m.statusLabel.text = "Falha ao reproduzir audio do painel"
+            scheduleAudioRetry()
         end if
     end if
+end sub
+
+sub scheduleAudioRetry()
+    if m.audioRetryTimer = invalid
+        restartPanelAudio()
+        return
+    end if
+
+    m.audioRetryTimer.control = "stop"
+    m.audioRetryTimer.control = "start"
+end sub
+
+sub onAudioRetryTimerFire()
+    restartPanelAudio()
+end sub
+
+sub restartPanelAudio()
+    if not m.isFullscreen or m.audioSessionId = ""
+        return
+    end if
+
+    if m.selectedIndex < 0 or m.selectedIndex >= m.windowEntries.Count()
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if getString(entry.id, "") <> m.audioSessionId
+        return
+    end if
+
+    startPanelAudio(entry)
 end sub
 
 sub moveCursor(command as string)

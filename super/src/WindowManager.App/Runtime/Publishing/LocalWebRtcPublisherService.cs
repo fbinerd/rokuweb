@@ -331,7 +331,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
         {
-            return await BuildAudioResponseAsync(normalizedPath, cancellationToken);
+            return await BuildAudioResponseAsync(requestTarget, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
@@ -605,10 +605,11 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
-    private async Task<byte[]> BuildAudioResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    private async Task<byte[]> BuildAudioResponseAsync(string requestTarget, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var normalizedPath = requestTarget.Split('?')[0];
         var fileName = normalizedPath.Substring("/audio/".Length);
         if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
         {
@@ -620,7 +621,19 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Audio nao encontrado.", "text/plain; charset=utf-8");
         }
 
-        var wavBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId);
+        var seconds = 1.5;
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
+        {
+            var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+            if (double.TryParse(GetValue(values, "seconds"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedSeconds) &&
+                parsedSeconds > 0.1 && parsedSeconds < 10)
+            {
+                seconds = parsedSeconds;
+            }
+        }
+
+        var wavBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId, TimeSpan.FromSeconds(seconds));
         if (wavBytes is null || wavBytes.Length == 0)
         {
             return BuildHttpResponse(404, "Audio indisponivel.", "text/plain; charset=utf-8");
@@ -850,7 +863,7 @@ public sealed class LocalWebRtcPublisherService
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = string.Format("http://{0}:{1}/audio-live/{2}.wav", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav?seconds=1.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
             AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }
