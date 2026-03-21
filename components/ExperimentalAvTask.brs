@@ -32,12 +32,11 @@ sub execute()
         responseBody = transfer.GetToString()
     end if
 
-    responseCode = transfer.GetResponseCode()
     responseType = Type(responseBody)
     if responseType = "roString" or responseType = "String"
-        if responseBody <> "" or (responseCode >= 200 and responseCode < 400)
-            if responseCode >= 200 and responseCode < 400
-                m.top.responseCode = responseCode
+        if responseBody <> "" or method = "HEAD"
+            if method = "HEAD"
+                m.top.responseCode = 200
             else
                 m.top.responseCode = 200
             end if
