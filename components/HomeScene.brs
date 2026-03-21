@@ -452,6 +452,7 @@ sub showFullscreen()
     streamUrlLower = LCase(getString(entry.streamUrl, ""))
     m.videoUsesStream = Instr(1, streamUrlLower, ".m3u8") > 0 or Instr(1, streamUrlLower, ".mp4") > 0
     m.videoStreamUrl = getString(entry.streamUrl, "")
+    startPanelAudioIfNeeded(entry)
     if m.videoUsesStream and m.fullscreenVideo <> invalid
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
@@ -468,7 +469,6 @@ sub showFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
-        startPanelAudioIfNeeded(entry)
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
     else
@@ -736,6 +736,7 @@ sub fallbackToPosterFullscreen(message as string)
     m.activeFullscreenPoster.visible = true
     m.bufferFullscreenPoster.visible = false
     m.bufferFullscreenPoster.uri = ""
+    startPanelAudioIfNeeded(entry)
     startFullscreenStream()
 end sub
 
