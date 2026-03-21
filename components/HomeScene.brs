@@ -29,6 +29,8 @@ sub init()
     m.audioUsesHls = false
     m.videoUsesStream = false
     m.videoStreamUrl = ""
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -48,6 +50,7 @@ sub init()
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
+    m.fullscreenVideoWatchTimer = m.top.findNode("fullscreenVideoWatchTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
@@ -97,6 +100,7 @@ sub init()
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
+    m.fullscreenVideoWatchTimer.observeField("fire", "onFullscreenVideoWatchTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
@@ -463,6 +467,8 @@ sub showFullscreen()
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
     m.videoStreamUrl = getString(entry.streamUrl, "")
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
     if m.videoUsesStream and m.fullscreenVideo <> invalid
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
@@ -472,6 +478,10 @@ sub showFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
+        if m.fullscreenVideoWatchTimer <> invalid
+            m.fullscreenVideoWatchTimer.control = "stop"
+            m.fullscreenVideoWatchTimer.control = "start"
+        end if
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
         m.statusLabel.text = "Iniciando stream HLS do painel..."
@@ -501,6 +511,9 @@ sub hideFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.content = invalid
         m.fullscreenVideo.visible = false
+    end if
+    if m.fullscreenVideoWatchTimer <> invalid
+        m.fullscreenVideoWatchTimer.control = "stop"
     end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
@@ -568,6 +581,7 @@ sub onFullscreenVideoStateChanged()
     end if
 
     if state = "playing"
+        m.fullscreenVideoStallCount = 0
         m.statusLabel.text = "Stream HLS do painel em reproducao"
     else if state = "buffering"
         m.statusLabel.text = "Bufferizando stream HLS do painel..."
@@ -584,6 +598,38 @@ sub onFullscreenVideoStateChanged()
             m.fullscreenVideo.control = "play"
             m.statusLabel.text = "Reiniciando stream HLS do painel..."
         end if
+    end if
+end sub
+
+sub onFullscreenVideoWatchTimerFire()
+    if m.fullscreenVideo = invalid or not m.isFullscreen or not m.videoUsesStream
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state <> "playing"
+        return
+    end if
+
+    currentPosition = int(val(getString(m.fullscreenVideo.position, "0")))
+    if currentPosition <= m.fullscreenVideoLastPosition
+        m.fullscreenVideoStallCount = m.fullscreenVideoStallCount + 1
+    else
+        m.fullscreenVideoStallCount = 0
+        m.fullscreenVideoLastPosition = currentPosition
+    end if
+
+    if m.fullscreenVideoStallCount >= 3 and m.videoStreamUrl <> ""
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(m.videoStreamUrl)
+        content.streamFormat = "hls"
+        content.title = "Painel"
+        m.fullscreenVideo.content = content
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.control = "play"
+        m.fullscreenVideoStallCount = 0
+        m.fullscreenVideoLastPosition = -1
+        m.statusLabel.text = "Reiniciando stream HLS parado..."
     end if
 end sub
 
