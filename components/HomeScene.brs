@@ -22,7 +22,7 @@ sub init()
     m.firmwareVersion = deviceInfo.GetVersion()
     m.channelVersion = GetRokuChannelReleaseId()
     m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
-    m.audioPlayer = CreateObject("roAudioPlayer")
+    m.audioSessionId = ""
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -43,6 +43,7 @@ sub init()
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
+    m.panelAudioNode = m.top.findNode("panelAudioNode")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -90,6 +91,9 @@ sub init()
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
+    if m.panelAudioNode <> invalid
+        m.panelAudioNode.observeField("state", "onPanelAudioStateChanged")
+    end if
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -468,7 +472,7 @@ end sub
 sub startPanelAudio(entry as object)
     stopPanelAudio()
 
-    if m.audioPlayer = invalid
+    if m.panelAudioNode = invalid
         return
     end if
 
@@ -481,23 +485,49 @@ sub startPanelAudio(entry as object)
         return
     end if
 
-    audioItem = CreateObject("roAssociativeArray")
-    audioItem.url = appendCacheBust(audioUrl)
-    audioItem.streamformat = "wav"
-    audioItem.title = getString(entry.title, "Audio do painel")
-
-    m.audioPlayer = CreateObject("roAudioPlayer")
-    m.audioPlayer.SetLoop(false)
-    m.audioPlayer.AddContent(audioItem)
-    m.audioPlayer.Play()
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(audioUrl)
+    content.streamFormat = "wav"
+    content.title = getString(entry.title, "Audio do painel")
+    m.audioSessionId = getString(entry.id, "")
+    m.panelAudioNode.content = content
+    m.panelAudioNode.control = "stop"
+    m.panelAudioNode.control = "play"
 end sub
 
 sub stopPanelAudio()
-    if m.audioPlayer = invalid
+    if m.panelAudioNode = invalid
         return
     end if
 
-    m.audioPlayer.Stop()
+    m.audioSessionId = ""
+    m.panelAudioNode.control = "stop"
+    m.panelAudioNode.content = invalid
+end sub
+
+sub onPanelAudioStateChanged()
+    if m.panelAudioNode = invalid
+        return
+    end if
+
+    state = LCase(getString(m.panelAudioNode.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.statusLabel.text = "Audio do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando audio do painel..."
+    else if state = "stopped"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Audio do painel parado"
+        end if
+    else if state = "error"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Falha ao reproduzir audio do painel"
+        end if
+    end if
 end sub
 
 sub moveCursor(command as string)
