@@ -347,13 +347,14 @@ public sealed class LocalWebRtcPublisherService
                 return;
             }
 
+            var method = ParseRequestMethod(requestLine);
             var path = ParseRequestPath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
             try
             {
                 WriteBridgeDebug("HANDLE " + path + " from " + (string.IsNullOrWhiteSpace(remoteAddress) ? "(unknown)" : remoteAddress));
                 var response = await BuildResponseAsync(path, remoteAddress, requestHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), cancellationToken);
-                var bytes = BuildRawHttpResponse(response);
+                var bytes = BuildRawHttpResponse(response, string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase));
                 await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
                 WriteBridgeDebug("RESPONDED " + path + " bytes=" + response.BodyBytes.Length.ToString());
             }
@@ -369,7 +370,7 @@ public sealed class LocalWebRtcPublisherService
                         ex.Message));
 
                 var response = BuildHttpResponse(500, "Bridge failure", "text/plain; charset=utf-8");
-                var bytes = BuildRawHttpResponse(response);
+                var bytes = BuildRawHttpResponse(response, string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase));
                 await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -788,6 +789,17 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, mp3Bytes, "audio/mpeg");
     }
 
+    private static string ParseRequestMethod(string requestLine)
+    {
+        var parts = requestLine.Split(' ');
+        if (parts.Length < 1)
+        {
+            return "GET";
+        }
+
+        return parts[0];
+    }
+
     private static string ParseRequestPath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -799,7 +811,7 @@ public sealed class LocalWebRtcPublisherService
         return parts[1];
     }
 
-    private static byte[] BuildRawHttpResponse(BridgeHttpResponse response)
+    private static byte[] BuildRawHttpResponse(BridgeHttpResponse response, bool headOnly = false)
     {
         var reason = response.StatusCode == 200 ? "OK"
             : response.StatusCode == 206 ? "Partial Content"
@@ -819,6 +831,11 @@ public sealed class LocalWebRtcPublisherService
         }
         headerBuilder.Append("\r\n");
         var header = Encoding.ASCII.GetBytes(headerBuilder.ToString());
+
+        if (headOnly)
+        {
+            return header;
+        }
 
         var result = new byte[header.Length + response.BodyBytes.Length];
         Buffer.BlockCopy(header, 0, result, 0, header.Length);
