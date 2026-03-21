@@ -3,7 +3,8 @@ param(
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
-    [switch]$SkipSideload
+    [switch]$SkipSideload,
+    [switch]$InstallLocalFfmpeg
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,7 @@ $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
+$localFfmpegPath = Join-Path $repoRoot "tools\ffmpeg\ffmpeg.exe"
 
 function Invoke-Step {
     param(
@@ -169,6 +171,29 @@ function Test-TcpEndpoint {
     }
 }
 
+function Ensure-LocalFfmpeg {
+    if (Test-Path $localFfmpegPath) {
+        Write-Host "ffmpeg local detectado em: $localFfmpegPath"
+        return
+    }
+
+    $installerScript = Join-Path $repoRoot "scripts\Install-LocalFfmpeg.ps1"
+    if (-not (Test-Path $installerScript)) {
+        throw "Script de instalacao local do ffmpeg nao encontrado."
+    }
+
+    Invoke-Step -Label "Instalar ffmpeg local" -Action {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installerScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao instalar ffmpeg local."
+        }
+    }
+}
+
+if ($InstallLocalFfmpeg) {
+    Ensure-LocalFfmpeg
+}
+
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
     try {
@@ -230,3 +255,6 @@ Write-Host ""
 Write-Host "Fluxo local concluido."
 Write-Host "Super: $superExePath"
 Write-Host "Roku zip: $localRokuZip"
+if (Test-Path $localFfmpegPath) {
+    Write-Host "ffmpeg local: $localFfmpegPath"
+}

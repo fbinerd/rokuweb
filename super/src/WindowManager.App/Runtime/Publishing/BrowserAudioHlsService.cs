@@ -97,6 +97,7 @@ public sealed class BrowserAudioHlsService
         {
             Environment.GetEnvironmentVariable("SUPERPAINEL_FFMPEG_PATH"),
             Environment.GetEnvironmentVariable("FFMPEG_PATH"),
+            TryResolveRepositoryFfmpegPath(),
             "ffmpeg"
         };
 
@@ -132,6 +133,36 @@ public sealed class BrowserAudioHlsService
             catch
             {
             }
+        }
+
+        return string.Empty;
+    }
+
+    private static string TryResolveRepositoryFfmpegPath()
+    {
+        try
+        {
+            var current = new DirectoryInfo(AppContext.BaseDirectory);
+            while (current is not null)
+            {
+                var manifestPath = Path.Combine(current.FullName, "manifest");
+                var superPath = Path.Combine(current.FullName, "super");
+                if (File.Exists(manifestPath) && Directory.Exists(superPath))
+                {
+                    var localFfmpegPath = Path.Combine(current.FullName, "tools", "ffmpeg", "ffmpeg.exe");
+                    if (File.Exists(localFfmpegPath))
+                    {
+                        return localFfmpegPath;
+                    }
+
+                    break;
+                }
+
+                current = current.Parent;
+            }
+        }
+        catch
+        {
         }
 
         return string.Empty;
