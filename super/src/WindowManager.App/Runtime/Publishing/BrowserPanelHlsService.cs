@@ -11,7 +11,7 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelHlsService
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(1.0);
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(4.0);
     private readonly BrowserSnapshotService _snapshotService;
     private readonly BrowserAudioCaptureService _audioCaptureService;
     private readonly string _rootDirectory;
@@ -223,7 +223,7 @@ public sealed class BrowserPanelHlsService
                     }
 
                     var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
-                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, TimeSpan.FromSeconds(12));
+                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, TimeSpan.FromSeconds(20));
                     if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
@@ -244,7 +244,7 @@ public sealed class BrowserPanelHlsService
                     var segmentPattern = Path.Combine(OutputDirectory, "segment-%03d.ts");
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -shortest -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time 1 -hls_list_size 6 -hls_flags delete_segments+omit_endlist+independent_segments -hls_segment_filename \"{2}\" \"{3}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -shortest -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time 2 -hls_list_size 10 -hls_flags omit_endlist+independent_segments -hls_segment_filename \"{2}\" \"{3}\"",
                         imagePath,
                         audioPath,
                         segmentPattern,

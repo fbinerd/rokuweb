@@ -478,10 +478,6 @@ sub showFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
-        if m.fullscreenVideoWatchTimer <> invalid
-            m.fullscreenVideoWatchTimer.control = "stop"
-            m.fullscreenVideoWatchTimer.control = "start"
-        end if
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
         m.statusLabel.text = "Iniciando stream HLS do painel..."
@@ -495,7 +491,9 @@ sub showFullscreen()
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
-    startPanelAudio(entry)
+    if not m.videoUsesStream
+        startPanelAudio(entry)
+    end if
     startFullscreenStream()
     m.top.setFocus(true)
 end sub
@@ -602,35 +600,7 @@ sub onFullscreenVideoStateChanged()
 end sub
 
 sub onFullscreenVideoWatchTimerFire()
-    if m.fullscreenVideo = invalid or not m.isFullscreen or not m.videoUsesStream
-        return
-    end if
-
-    state = LCase(getString(m.fullscreenVideo.state, ""))
-    if state <> "playing"
-        return
-    end if
-
-    currentPosition = int(val(getString(m.fullscreenVideo.position, "0")))
-    if currentPosition <= m.fullscreenVideoLastPosition
-        m.fullscreenVideoStallCount = m.fullscreenVideoStallCount + 1
-    else
-        m.fullscreenVideoStallCount = 0
-        m.fullscreenVideoLastPosition = currentPosition
-    end if
-
-    if m.fullscreenVideoStallCount >= 3 and m.videoStreamUrl <> ""
-        content = CreateObject("roSGNode", "ContentNode")
-        content.url = appendCacheBust(m.videoStreamUrl)
-        content.streamFormat = "hls"
-        content.title = "Painel"
-        m.fullscreenVideo.content = content
-        m.fullscreenVideo.control = "stop"
-        m.fullscreenVideo.control = "play"
-        m.fullscreenVideoStallCount = 0
-        m.fullscreenVideoLastPosition = -1
-        m.statusLabel.text = "Reiniciando stream HLS parado..."
-    end if
+    return
 end sub
 
 sub stopPanelAudio()
