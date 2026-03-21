@@ -53,6 +53,7 @@ sub init()
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
+    m.experimentalAvPlaybackStarted = false
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -471,6 +472,7 @@ sub showFullscreen()
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
+    m.experimentalAvPlaybackStarted = false
     stopPanelRefresh()
     updateCursorMarker()
     maybeStartExperimentalAv(entry)
@@ -709,6 +711,7 @@ sub stopExperimentalAv()
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
+    m.experimentalAvPlaybackStarted = false
     if m.experimentalAvStateTimer <> invalid
         m.experimentalAvStateTimer.control = "stop"
     end if
@@ -857,9 +860,9 @@ sub onExperimentalAvStateTaskCompleted()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
-        if transportImplemented and mediaUrl <> "" and mediaReady = false
+        if transportImplemented and mediaUrl <> "" and not m.experimentalAvPlaybackStarted
             startExperimentalMediaPlayback(mediaUrl)
-            mediaReady = true
+            m.experimentalAvPlaybackStarted = true
         end if
         if transportImplemented
             m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
@@ -904,6 +907,7 @@ sub onFullscreenVideoStateChanged()
 
     ? "[ExpAV] video state => "; state
     if state = "error" or state = "stopped" or state = "finished"
+        m.experimentalAvPlaybackStarted = false
         m.fullscreenVideo.visible = false
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.content = invalid
