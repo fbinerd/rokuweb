@@ -87,6 +87,7 @@ function Invoke-RokuSideload {
     $handler.PreAuthenticate = $true
 
     $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(12)
     try {
         $basic = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$Username`:$Password"))
         $client.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Basic", $basic)
@@ -109,9 +110,44 @@ function Invoke-RokuSideload {
         $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
         Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
     }
+    catch {
+        $message = $_.Exception.Message
+        $inner = $_.Exception.InnerException
+        while ($inner -ne $null) {
+            $message = $message + " | " + $inner.Message
+            $inner = $inner.InnerException
+        }
+
+        throw "Falha ao comunicar com a Roku em $RokuHost. Detalhes: $message"
+    }
     finally {
         $client.Dispose()
         $handler.Dispose()
+    }
+}
+
+function Test-TcpEndpoint {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Host,
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connectTask = $tcp.ConnectAsync($Host, $Port)
+        if (-not $connectTask.Wait(3000)) {
+            return $false
+        }
+
+        return $tcp.Connected
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $tcp.Dispose()
     }
 }
 
@@ -152,6 +188,19 @@ if ($LaunchSuper) {
 if (-not $SkipSideload) {
     if ([string]::IsNullOrWhiteSpace($RokuIp)) {
         throw "Informe -RokuIp para fazer sideload local, ou use -SkipSideload."
+    }
+
+    Invoke-Step -Label "Verificar conectividade da Roku em $RokuIp" -Action {
+        $rokuHost = $RokuIp.Trim()
+        $devPortOk = Test-TcpEndpoint -Host $rokuHost -Port 80
+        $ecpPortOk = Test-TcpEndpoint -Host $rokuHost -Port 8060
+
+        Write-Host ("porta 80 => {0}" -f $(if ($devPortOk) { "ok" } else { "falhou" }))
+        Write-Host ("porta 8060 => {0}" -f $(if ($ecpPortOk) { "ok" } else { "falhou" }))
+
+        if (-not $devPortOk -and -not $ecpPortOk) {
+            throw "A Roku em $rokuHost nao respondeu nas portas 80 e 8060. Verifique IP, modo developer e conectividade de rede."
+        }
     }
 
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {
