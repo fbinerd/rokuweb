@@ -723,7 +723,11 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var segmentBytes = await Task.Run(() => File.ReadAllBytes(segmentPath), cancellationToken).ConfigureAwait(false);
-        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+        var extension = Path.GetExtension(segmentPath);
+        var contentType = string.Equals(extension, ".mp4", StringComparison.OrdinalIgnoreCase) || string.Equals(extension, ".m4s", StringComparison.OrdinalIgnoreCase)
+            ? "video/mp4"
+            : "video/mp2t";
+        return BuildBinaryHttpResponse(200, segmentBytes, contentType);
     }
 
     private async Task<BridgeHttpResponse> BuildPanelAudioResponseAsync(string normalizedPath, CancellationToken cancellationToken)
