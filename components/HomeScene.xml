@@ -15,12 +15,14 @@
     <ExperimentalAvTask id="experimentalAvSessionTask" />
     <ExperimentalAvTask id="experimentalAvOfferTask" />
     <ExperimentalAvTask id="experimentalAvStateTask" />
+    <ExperimentalAvTask id="experimentalAvMediaTask" />
     <Timer id="panelRefreshTimer" repeat="true" duration="5.0" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
     <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Timer id="experimentalAvStateTimer" repeat="false" duration="0.5" />
+    <Timer id="experimentalAvMediaProbeTimer" repeat="false" duration="0.5" />
     <Video
       id="fullscreenVideo"
       width="1280"

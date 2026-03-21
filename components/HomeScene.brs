@@ -43,12 +43,14 @@ sub init()
     m.experimentalAvSessionTask = m.top.findNode("experimentalAvSessionTask")
     m.experimentalAvOfferTask = m.top.findNode("experimentalAvOfferTask")
     m.experimentalAvStateTask = m.top.findNode("experimentalAvStateTask")
+    m.experimentalAvMediaTask = m.top.findNode("experimentalAvMediaTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.experimentalAvStateTimer = m.top.findNode("experimentalAvStateTimer")
+    m.experimentalAvMediaProbeTimer = m.top.findNode("experimentalAvMediaProbeTimer")
     m.experimentalAvMode = false
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
@@ -56,6 +58,7 @@ sub init()
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
+    m.experimentalAvMediaProbeInFlight = false
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -100,6 +103,7 @@ sub init()
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.experimentalAvStateTimer.observeField("fire", "onExperimentalAvStateTimerFire")
+    m.experimentalAvMediaProbeTimer.observeField("fire", "onExperimentalAvMediaProbeTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     if m.fullscreenVideo <> invalid
@@ -110,6 +114,7 @@ sub init()
     m.experimentalAvSessionTask.observeField("completedToken", "onExperimentalAvSessionTaskCompleted")
     m.experimentalAvOfferTask.observeField("completedToken", "onExperimentalAvOfferTaskCompleted")
     m.experimentalAvStateTask.observeField("completedToken", "onExperimentalAvStateTaskCompleted")
+    m.experimentalAvMediaTask.observeField("completedToken", "onExperimentalAvMediaTaskCompleted")
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -716,8 +721,12 @@ sub stopExperimentalAv()
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
+    m.experimentalAvMediaProbeInFlight = false
     if m.experimentalAvStateTimer <> invalid
         m.experimentalAvStateTimer.control = "stop"
+    end if
+    if m.experimentalAvMediaProbeTimer <> invalid
+        m.experimentalAvMediaProbeTimer.control = "stop"
     end if
 end sub
 
@@ -826,6 +835,7 @@ sub onExperimentalAvOfferTaskCompleted()
     m.statusLabel.text = "Offer experimental entregue"
     m.subtitleLabel.text = "Acompanhando state da sessao..."
     scheduleExperimentalAvStatePoll()
+    scheduleExperimentalAvMediaProbe()
 end sub
 
 sub onExperimentalAvStateTaskCompleted()
@@ -870,10 +880,6 @@ sub onExperimentalAvStateTaskCompleted()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
-        if transportImplemented and mediaUrl <> "" and not m.experimentalAvPlaybackStarted
-            startExperimentalMediaPlayback(mediaUrl)
-            m.experimentalAvPlaybackStarted = true
-        end if
         if transportImplemented
             m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
         else
@@ -939,7 +945,7 @@ sub onFullscreenVideoStateChanged()
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Falha temporaria na midia experimental"
         m.subtitleLabel.text = "Tentando novamente..."
-        scheduleExperimentalAvStatePoll()
+        scheduleExperimentalAvMediaProbe()
     end if
 end sub
 
@@ -957,11 +963,6 @@ sub onExperimentalAvStateTimerFire()
         return
     end if
 
-    if not m.experimentalAvPlaybackStarted and m.experimentalAvMediaUrl <> ""
-        startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
-        m.experimentalAvPlaybackStarted = true
-    end if
-
     if m.experimentalAvStateRequestInFlight
         scheduleExperimentalAvStatePoll()
         return
@@ -970,6 +971,55 @@ sub onExperimentalAvStateTimerFire()
     m.experimentalAvStateRequestInFlight = true
     m.experimentalAvLastAction = "state"
     runExperimentalAvRequest(m.experimentalAvStateTask, m.experimentalAvStateUrl, "GET", "")
+end sub
+
+sub scheduleExperimentalAvMediaProbe()
+    if not m.experimentalAvMode or m.experimentalAvMediaUrl = "" or m.experimentalAvMediaProbeTimer = invalid
+        return
+    end if
+
+    m.experimentalAvMediaProbeTimer.control = "stop"
+    m.experimentalAvMediaProbeTimer.control = "start"
+end sub
+
+sub onExperimentalAvMediaProbeTimerFire()
+    if not m.experimentalAvMode or m.experimentalAvMediaUrl = ""
+        return
+    end if
+
+    if m.experimentalAvPlaybackStarted
+        return
+    end if
+
+    if m.experimentalAvMediaProbeInFlight
+        scheduleExperimentalAvMediaProbe()
+        return
+    end if
+
+    m.experimentalAvMediaProbeInFlight = true
+    runExperimentalAvRequest(m.experimentalAvMediaTask, m.experimentalAvMediaUrl, "GET", "")
+end sub
+
+sub onExperimentalAvMediaTaskCompleted()
+    if not m.experimentalAvMode or m.experimentalAvMediaTask = invalid
+        return
+    end if
+
+    m.experimentalAvMediaProbeInFlight = false
+    code = m.experimentalAvMediaTask.responseCode
+    ? "[ExpAV] media probe => "; code
+
+    if m.experimentalAvPlaybackStarted
+        return
+    end if
+
+    if code >= 200 and code < 400 and m.experimentalAvMediaUrl <> ""
+        startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+        m.experimentalAvPlaybackStarted = true
+        return
+    end if
+
+    scheduleExperimentalAvMediaProbe()
 end sub
 
 sub onClickControlTaskCompleted()
