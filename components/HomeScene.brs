@@ -454,7 +454,7 @@ sub showFullscreen()
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
     streamUrlLower = LCase(getString(entry.streamUrl, ""))
-    m.videoUsesStream = Instr(1, streamUrlLower, ".m3u8") > 0 or Instr(1, streamUrlLower, ".mp4") > 0
+    m.videoUsesStream = Instr(1, streamUrlLower, ".m3u8") > 0 or Instr(1, streamUrlLower, ".mp4") > 0 or Instr(1, streamUrlLower, ".ts") > 0
     m.videoStreamUrl = getString(entry.streamUrl, "")
     if m.videoUsesStream
         stopPanelAudio()
@@ -468,6 +468,10 @@ sub showFullscreen()
             content.live = false
             content.streamFormat = "mp4"
             m.statusLabel.text = "Iniciando stream A/V diagnostico MP4..."
+        else if Instr(1, streamUrlLower, ".ts") > 0
+            content.live = false
+            content.streamFormat = "ts"
+            m.statusLabel.text = "Iniciando stream A/V diagnostico TS..."
         else
             content.live = false
             content.streamFormat = "hls"

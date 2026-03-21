@@ -5,7 +5,8 @@ param(
     [switch]$LaunchSuper,
     [switch]$SkipSideload,
     [switch]$UseDiagnosticAvStream,
-    [switch]$UseDiagnosticAvMp4
+    [switch]$UseDiagnosticAvMp4,
+    [switch]$UseDiagnosticAvTs
 )
 
 $ErrorActionPreference = "Stop"
@@ -179,6 +180,9 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
     if ($UseDiagnosticAvMp4) {
         $env:SUPERPAINEL_TEST_AV_MP4 = "1"
     }
+    if ($UseDiagnosticAvTs) {
+        $env:SUPERPAINEL_TEST_AV_TS = "1"
+    }
     try {
         Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
@@ -194,6 +198,7 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
         if (-not $LaunchSuper) {
             Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
             Remove-Item Env:SUPERPAINEL_TEST_AV_MP4 -ErrorAction SilentlyContinue
+            Remove-Item Env:SUPERPAINEL_TEST_AV_TS -ErrorAction SilentlyContinue
         }
     }
 }
@@ -218,6 +223,7 @@ if ($LaunchSuper) {
 if (-not $LaunchSuper) {
     Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
     Remove-Item Env:SUPERPAINEL_TEST_AV_MP4 -ErrorAction SilentlyContinue
+    Remove-Item Env:SUPERPAINEL_TEST_AV_TS -ErrorAction SilentlyContinue
 }
 
 if (-not $SkipSideload) {

@@ -13,6 +13,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
     private readonly string _ffmpegPath;
     private readonly bool _enabled;
     private readonly bool _useMp4Mode;
+    private readonly bool _useTsMode;
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
 
@@ -21,8 +22,10 @@ public sealed class DiagnosticAvHlsService : IDisposable
         _rootDirectory = Path.Combine(AppDataPaths.Root, "diagnostic-av-hls");
         Directory.CreateDirectory(_rootDirectory);
         _enabled = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV"), "1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_MP4"), "1", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_MP4"), "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_TS"), "1", StringComparison.OrdinalIgnoreCase);
         _useMp4Mode = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_MP4"), "1", StringComparison.OrdinalIgnoreCase);
+        _useTsMode = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_TS"), "1", StringComparison.OrdinalIgnoreCase);
         _ffmpegPath = ResolveFfmpegPath();
 
         if (_enabled)
@@ -34,6 +37,10 @@ public sealed class DiagnosticAvHlsService : IDisposable
                 {
                     AppLog.Write("DiagAv", "Modo diagnostico MP4 habilitado.");
                 }
+                else if (_useTsMode)
+                {
+                    AppLog.Write("DiagAv", "Modo diagnostico TS habilitado.");
+                }
             }
             else
             {
@@ -44,6 +51,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
 
     public bool IsAvailable => _enabled && !string.IsNullOrWhiteSpace(_ffmpegPath);
     public bool UsesMp4 => _useMp4Mode;
+    public bool UsesTs => _useTsMode;
 
     public void EnsureStarted()
     {
@@ -99,6 +107,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
         return IsAvailable && _useMp4Mode && File.Exists(path);
     }
 
+    public bool TryGetTsPath(out string path)
+    {
+        path = Path.Combine(_rootDirectory, "diagnostic.ts");
+        return IsAvailable && _useTsMode && File.Exists(path);
+    }
+
     public bool TryGetFfmpegPath(out string path)
     {
         path = _ffmpegPath;
@@ -110,6 +124,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
         if (_useMp4Mode)
         {
             await GenerateMp4Async(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_useTsMode)
+        {
+            await GenerateTsAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -218,6 +238,56 @@ public sealed class DiagnosticAvHlsService : IDisposable
         catch (Exception ex)
         {
             AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico MP4: " + ex.Message);
+        }
+    }
+
+    private async Task GenerateTsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outputPath = Path.Combine(_rootDirectory, "diagnostic.ts");
+            var args =
+                "-hide_banner -loglevel error -y " +
+                "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
+                "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
+                "-map 0:v:0 -map 1:a:0 " +
+                "-t 60 " +
+                "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                "-g 48 -keyint_min 48 -sc_threshold 0 " +
+                "-c:a aac -profile:a aac_low -b:a 128k -ar 48000 -ac 2 " +
+                "-af aresample=async=1:first_pts=0 " +
+                "-fflags +genpts -avoid_negative_ts make_zero " +
+                "-muxpreload 0 -muxdelay 0 " +
+                "-mpegts_flags +resend_headers " +
+                "-f mpegts " +
+                "\"" + outputPath + "\"";
+
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = _ffmpegPath,
+                Arguments = args,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            });
+
+            if (process is null)
+            {
+                return;
+            }
+
+            AppLog.Write("DiagAv", "Gerador A/V diagnostico TS iniciado.");
+            await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            AppLog.Write("DiagAv", $"ffmpeg do diagnostico TS encerrou. ExitCode={process.ExitCode}. stderr={error}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico TS: " + ex.Message);
         }
     }
 

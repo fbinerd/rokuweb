@@ -706,6 +706,17 @@ public sealed class LocalWebRtcPublisherService
             return BuildBinaryHttpResponse(200, mp3Bytes, "audio/mpeg");
         }
 
+        if (string.Equals(fileName, "diagnostic.ts", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_diagnosticAvHlsService.TryGetTsPath(out var tsPath))
+            {
+                return BuildHttpResponse(404, "Arquivo A/V diagnostico TS indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var tsBytes = await Task.Run(() => File.ReadAllBytes(tsPath), cancellationToken).ConfigureAwait(false);
+            return BuildBinaryHttpResponse(200, tsBytes, "video/mp2t");
+        }
+
         if (string.Equals(fileName, "index.m3u8", StringComparison.OrdinalIgnoreCase))
         {
             if (!_diagnosticAvHlsService.TryGetPlaylistPath(out var playlistPath))
@@ -972,6 +983,8 @@ public sealed class LocalWebRtcPublisherService
         {
             diagnosticStreamUrl = _diagnosticAvHlsService.UsesMp4
                 ? string.Format("http://{0}:{1}/diag-av/diagnostic.mp4", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
+                : _diagnosticAvHlsService.UsesTs
+                    ? string.Format("http://{0}:{1}/diag-av/diagnostic.ts", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
                 : string.Format("http://{0}:{1}/diag-av/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port);
         }
 
