@@ -19,6 +19,7 @@
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Timer id="audioRetryTimer" repeat="false" duration="1.2" />
     <Timer id="audioFallbackTimer" repeat="false" duration="1.2" />
+    <Timer id="audioHlsRestartTimer" repeat="false" duration="0.35" />
     <Audio id="panelAudioNode" />
     <Video id="panelAudioVideo" width="2" height="2" translation="[-10, -10]" visible="false" />
     <Rectangle

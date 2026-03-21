@@ -49,6 +49,7 @@ sub init()
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
+    m.audioHlsRestartTimer = m.top.findNode("audioHlsRestartTimer")
     m.panelAudioNode = m.top.findNode("panelAudioNode")
     m.panelAudioVideo = m.top.findNode("panelAudioVideo")
 
@@ -96,6 +97,7 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
+    m.audioHlsRestartTimer.observeField("fire", "onAudioHlsRestartTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
@@ -539,6 +541,9 @@ sub stopPanelAudio()
     if m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
     end if
+    if m.audioHlsRestartTimer <> invalid
+        m.audioHlsRestartTimer.control = "stop"
+    end if
     m.audioUsesHls = false
     if m.panelAudioNode <> invalid
         m.panelAudioNode.control = "stop"
@@ -604,10 +609,28 @@ sub onPanelAudioVideoStateChanged()
         m.statusLabel.text = "Bufferizando audio HLS..."
     else if state = "stopped" or state = "error" or state = "finished"
         if m.isFullscreen and m.audioSessionId <> ""
-            m.statusLabel.text = "Falha no audio HLS; tentando fallback"
-            scheduleAudioRetry()
+            m.statusLabel.text = "Reiniciando audio HLS do painel..."
+            scheduleAudioHlsRestart()
         end if
     end if
+end sub
+
+sub scheduleAudioHlsRestart()
+    if m.audioHlsRestartTimer = invalid
+        restartPanelAudio()
+        return
+    end if
+
+    m.audioHlsRestartTimer.control = "stop"
+    m.audioHlsRestartTimer.control = "start"
+end sub
+
+sub onAudioHlsRestartTimerFire()
+    if not m.audioUsesHls
+        return
+    end if
+
+    restartPanelAudio()
 end sub
 
 sub scheduleAudioRetry()
@@ -627,7 +650,7 @@ sub onAudioRetryTimerFire()
     end if
 
     if m.audioUsesHls
-        startLegacyPanelAudio()
+        restartPanelAudio()
         return
     end if
 
