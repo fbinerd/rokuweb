@@ -889,6 +889,9 @@ sub onExperimentalAvStateTaskCompleted()
                 m.subtitleLabel.text = "Sinalizacao OK; transporte A/V experimental ainda nao conectado."
             end if
         end if
+        if not m.experimentalAvPlaybackStarted and m.experimentalAvMediaUrl <> ""
+            scheduleExperimentalAvMediaProbe()
+        end if
         scheduleExperimentalAvStatePoll()
 end sub
 
