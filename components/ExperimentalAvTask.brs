@@ -32,12 +32,21 @@ sub execute()
         responseBody = transfer.GetToString()
     end if
 
+    responseCode = transfer.GetResponseCode()
     responseType = Type(responseBody)
     if responseType = "roString" or responseType = "String"
-        if responseBody <> ""
-            m.top.responseCode = 200
+        if responseBody <> "" or (responseCode >= 200 and responseCode < 400)
+            if responseCode >= 200 and responseCode < 400
+                m.top.responseCode = responseCode
+            else
+                m.top.responseCode = 200
+            end if
             m.top.errorMessage = ""
-            m.top.responseBody = responseBody
+            if responseBody <> ""
+                m.top.responseBody = responseBody
+            else
+                m.top.responseBody = "{}"
+            end if
         else
             m.top.responseCode = 0
             m.top.errorMessage = "Falha ao chamar " + bridgeUrl
