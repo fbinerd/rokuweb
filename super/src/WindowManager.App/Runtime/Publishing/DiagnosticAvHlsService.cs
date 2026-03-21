@@ -125,11 +125,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
                     "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
                     "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
                     "-map 0:v:0 -map 1:a:0 " +
-                    "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                    "-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                    "-g 24 -keyint_min 24 -sc_threshold 0 " +
                     "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
                     "-af aresample=async=1:first_pts=0 " +
                     "-fflags +genpts -avoid_negative_ts make_zero " +
-                    "-f hls -hls_time 2 -hls_list_size 8 -hls_flags delete_segments+omit_endlist+independent_segments " +
+                    "-f hls -hls_time 1 -hls_list_size 4 -hls_flags delete_segments+omit_endlist+independent_segments " +
                     "-hls_segment_type fmp4 " +
                     "-hls_fmp4_init_filename \"" + Path.GetFileName(initSegment) + "\" " +
                     "-hls_segment_filename \"" + segmentPattern + "\" " +
