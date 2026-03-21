@@ -52,6 +52,7 @@ sub init()
     m.experimentalAvMode = false
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
+    m.experimentalAvMediaUrl = ""
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
@@ -711,6 +712,7 @@ sub stopExperimentalAv()
     m.experimentalAvMode = false
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
+    m.experimentalAvMediaUrl = ""
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
@@ -807,6 +809,7 @@ sub onExperimentalAvOfferTaskCompleted()
         end if
         mediaUrl = getString(json.mediaUrl, "")
         if mediaUrl <> ""
+            m.experimentalAvMediaUrl = mediaUrl
             ? "[ExpAV] media => "; mediaUrl
         end if
         transportStatus = getString(json.transportStatus, "")
@@ -859,6 +862,9 @@ sub onExperimentalAvStateTaskCompleted()
     end if
     transportStatus = getString(json.transportStatus, "")
     mediaUrl = getString(json.mediaUrl, "")
+    if mediaUrl <> ""
+        m.experimentalAvMediaUrl = mediaUrl
+    end if
 
     ? "[ExpAV] state => "; statusText; " offers="; offerCount; " mediaReady="; mediaReady; " transport="; transportImplemented; " transportStatus="; transportStatus; " mediaUrl="; mediaUrl
         m.statusLabel.visible = true
@@ -935,6 +941,11 @@ end sub
 sub onExperimentalAvStateTimerFire()
     if not m.experimentalAvMode or m.experimentalAvStateUrl = ""
         return
+    end if
+
+    if not m.experimentalAvPlaybackStarted and m.experimentalAvMediaUrl <> ""
+        startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+        m.experimentalAvPlaybackStarted = true
     end if
 
     if m.experimentalAvStateRequestInFlight
