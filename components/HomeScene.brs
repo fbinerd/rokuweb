@@ -916,7 +916,20 @@ sub onFullscreenVideoStateChanged()
     end if
 
     ? "[ExpAV] video state => "; state
-    if state = "error" or state = "stopped" or state = "finished"
+    if state = "finished"
+        m.experimentalAvPlaybackStarted = false
+        m.fullscreenVideo.visible = false
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.activeFullscreenPoster.visible = true
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Clip experimental concluido"
+        m.subtitleLabel.text = "Aguardando nova sessao."
+        return
+    end if
+
+    if state = "error" or state = "stopped"
         m.experimentalAvPlaybackStarted = false
         m.fullscreenVideo.visible = false
         m.fullscreenVideo.control = "stop"

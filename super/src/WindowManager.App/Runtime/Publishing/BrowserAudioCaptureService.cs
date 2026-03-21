@@ -29,14 +29,14 @@ public sealed class BrowserAudioCaptureService
                buffer.HasRecentAudio(AudioFreshnessWindow);
     }
 
-    public byte[]? CaptureWaveSnapshot(Guid windowId)
+    public byte[]? CaptureWaveSnapshot(Guid windowId, double? maxSeconds = null)
     {
         if (!_buffers.TryGetValue(windowId, out var buffer))
         {
             return null;
         }
 
-        return buffer.BuildWaveSnapshot();
+        return buffer.BuildWaveSnapshot(maxSeconds);
     }
 
     public double GetBufferedDurationSeconds(Guid windowId)
@@ -204,7 +204,7 @@ public sealed class BrowserAudioCaptureService
             }
         }
 
-        public byte[]? BuildWaveSnapshot()
+        public byte[]? BuildWaveSnapshot(double? maxSeconds = null)
         {
             lock (_gate)
             {
@@ -213,7 +213,19 @@ public sealed class BrowserAudioCaptureService
                     return null;
                 }
 
-                return BuildWaveFile(_pcmBytes, _sampleRate, _channels);
+                var pcmBytes = _pcmBytes;
+                if (maxSeconds.HasValue && maxSeconds.Value > 0)
+                {
+                    var maxBytes = (int)Math.Max(1, Math.Round(_sampleRate * _channels * 2.0 * maxSeconds.Value));
+                    if (pcmBytes.Length > maxBytes)
+                    {
+                        var tail = new byte[maxBytes];
+                        Buffer.BlockCopy(pcmBytes, pcmBytes.Length - maxBytes, tail, 0, maxBytes);
+                        pcmBytes = tail;
+                    }
+                }
+
+                return BuildWaveFile(pcmBytes, _sampleRate, _channels);
             }
         }
 

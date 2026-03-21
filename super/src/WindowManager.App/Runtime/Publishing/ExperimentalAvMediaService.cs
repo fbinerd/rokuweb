@@ -9,6 +9,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class ExperimentalAvMediaService : IDisposable
 {
     private const double MinimumBufferedAudioSeconds = 2.0;
+    private const double ClipAudioSeconds = 4.0;
     private readonly bool _enabled;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
@@ -47,19 +48,9 @@ public sealed class ExperimentalAvMediaService : IDisposable
             return;
         }
 
-        if (TryGetMp4Path(windowId, out var existingPath))
+        if (TryGetMp4Path(windowId, out _))
         {
-            try
-            {
-                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(existingPath);
-                if (age <= TimeSpan.FromSeconds(2))
-                {
-                    return;
-                }
-            }
-            catch
-            {
-            }
+            return;
         }
 
         if (_windowBuilds.TryGetValue(windowId, out var activeBuild) && !activeBuild.IsCompleted)
@@ -123,7 +114,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
     {
         try
         {
-            var waveBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId);
+            var waveBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId, ClipAudioSeconds);
             if (waveBytes is null || waveBytes.Length == 0)
             {
                 AppLog.Write("ExpWebRtc", $"Sem audio recente para gerar midia experimental da janela {windowId:N}.");
