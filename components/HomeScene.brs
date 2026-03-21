@@ -483,7 +483,7 @@ sub startPanelAudio(entry as object)
         return
     end if
 
-    if entry = invalid or getBool(entry.audioAvailable, false) = false
+    if entry = invalid
         return
     end if
 
