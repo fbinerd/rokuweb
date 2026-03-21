@@ -118,6 +118,8 @@ function Invoke-RokuSideload {
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
     try {
+        Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 800
         Push-Location $superRoot
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\build.ps1" -Restore -Build
         if ($LASTEXITCODE -ne 0) {
