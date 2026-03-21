@@ -469,7 +469,7 @@ sub showFullscreen()
             content.streamFormat = "mp4"
             m.statusLabel.text = "Iniciando stream A/V diagnostico MP4..."
         else
-            content.live = true
+            content.live = false
             content.streamFormat = "hls"
             m.statusLabel.text = "Iniciando stream A/V diagnostico..."
         end if

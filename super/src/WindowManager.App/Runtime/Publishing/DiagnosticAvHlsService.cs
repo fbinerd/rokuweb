@@ -113,63 +113,57 @@ public sealed class DiagnosticAvHlsService : IDisposable
             return;
         }
 
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            try
+            var playlistPath = Path.Combine(_rootDirectory, "index.m3u8");
+            var runId = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var segmentPattern = Path.Combine(_rootDirectory, $"segment-{runId}-%03d.m4s");
+            var initSegment = Path.Combine(_rootDirectory, $"init-{runId}.mp4");
+            var args =
+                "-hide_banner -loglevel error -y " +
+                "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
+                "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
+                "-map 0:v:0 -map 1:a:0 " +
+                "-t 60 " +
+                "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                "-g 48 -keyint_min 48 -sc_threshold 0 " +
+                "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
+                "-af aresample=async=1:first_pts=0 " +
+                "-fflags +genpts -avoid_negative_ts make_zero " +
+                "-f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type vod " +
+                "-hls_flags independent_segments+temp_file " +
+                "-hls_segment_type fmp4 " +
+                "-hls_fmp4_init_filename \"" + Path.GetFileName(initSegment) + "\" " +
+                "-hls_segment_filename \"" + segmentPattern + "\" " +
+                "\"" + playlistPath + "\"";
+
+            using var process = Process.Start(new ProcessStartInfo
             {
-                var playlistPath = Path.Combine(_rootDirectory, "index.m3u8");
-                var runId = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-                var segmentPattern = Path.Combine(_rootDirectory, $"segment-{runId}-%03d.m4s");
-                var initSegment = Path.Combine(_rootDirectory, $"init-{runId}.mp4");
-                var args =
-                    "-hide_banner -loglevel error -y " +
-                    "-re -f lavfi -i testsrc2=size=1280x720:rate=24 " +
-                    "-re -f lavfi -i sine=frequency=440:sample_rate=44100 " +
-                    "-map 0:v:0 -map 1:a:0 " +
-                    "-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
-                    "-g 24 -keyint_min 24 -sc_threshold 0 " +
-                    "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
-                    "-af aresample=async=1:first_pts=0 " +
-                    "-fflags +genpts -avoid_negative_ts make_zero " +
-                    "-f hls -hls_time 2 -hls_list_size 12 -hls_playlist_type event -hls_start_number_source epoch " +
-                    "-hls_flags independent_segments+append_list+temp_file+program_date_time " +
-                    "-hls_segment_type fmp4 " +
-                    "-hls_fmp4_init_filename \"" + Path.GetFileName(initSegment) + "\" " +
-                    "-hls_segment_filename \"" + segmentPattern + "\" " +
-                    "\"" + playlistPath + "\"";
+                FileName = _ffmpegPath,
+                Arguments = args,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            });
 
-                using var process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = _ffmpegPath,
-                    Arguments = args,
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true
-                });
-
-                if (process is null)
-                {
-                    await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                AppLog.Write("DiagAv", $"Gerador A/V diagnostico iniciado. runId={runId}");
-
-                await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
-                var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                AppLog.Write("DiagAv", $"ffmpeg do diagnostico encerrou. ExitCode={process.ExitCode}. stderr={error}");
-            }
-            catch (OperationCanceledException)
+            if (process is null)
             {
-                break;
-            }
-            catch (Exception ex)
-            {
-                AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico: " + ex.Message);
+                return;
             }
 
-            await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+            AppLog.Write("DiagAv", $"Gerador A/V diagnostico VOD iniciado. runId={runId}");
+
+            await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            AppLog.Write("DiagAv", $"ffmpeg do diagnostico VOD encerrou. ExitCode={process.ExitCode}. stderr={error}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico: " + ex.Message);
         }
     }
 
