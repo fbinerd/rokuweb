@@ -19,6 +19,9 @@ namespace WindowManager.App;
 
 public partial class MainWindow : Window
 {
+    private const double SharedBrowserRenderWidth = 1280;
+    private const double SharedBrowserRenderHeight = 720;
+    private const double PreviewBrowserScale = 0.246875;
     private readonly MainViewModel _viewModel;
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
@@ -212,6 +215,7 @@ public partial class MainWindow : Window
                 Address = session.InitialUri?.ToString() ?? "about:blank"
             };
 
+            ApplyEmbeddedBrowserPresentation(browser);
             _previewBrowsers[session.Id] = browser;
             _browserSnapshotService.Register(session.Id, browser);
             return browser;
@@ -502,6 +506,7 @@ public partial class MainWindow : Window
         if (sharedBrowser is not null && _previewBrowserHosts.TryGetValue(session.Id, out var browserHost))
         {
             browserHost.Child = BuildDetachedBrowserPlaceholder();
+            ApplyExpandedBrowserPresentation(sharedBrowser);
         }
 
         var detailWindow = sharedBrowser is not null
@@ -624,8 +629,30 @@ public partial class MainWindow : Window
         if (_previewBrowserHosts.TryGetValue(windowId, out var browserHost) &&
             _previewBrowsers.TryGetValue(windowId, out var browser))
         {
+            ApplyEmbeddedBrowserPresentation(browser);
             browserHost.Child = browser;
         }
+    }
+
+    private static void ApplyEmbeddedBrowserPresentation(ChromiumWebBrowser browser)
+    {
+        browser.Width = SharedBrowserRenderWidth;
+        browser.Height = SharedBrowserRenderHeight;
+        browser.HorizontalAlignment = HorizontalAlignment.Left;
+        browser.VerticalAlignment = VerticalAlignment.Top;
+        browser.RenderTransformOrigin = new Point(0, 0);
+        browser.RenderTransform = new ScaleTransform(PreviewBrowserScale, PreviewBrowserScale);
+        browser.Margin = new Thickness(0);
+    }
+
+    private static void ApplyExpandedBrowserPresentation(ChromiumWebBrowser browser)
+    {
+        browser.ClearValue(FrameworkElement.WidthProperty);
+        browser.ClearValue(FrameworkElement.HeightProperty);
+        browser.ClearValue(FrameworkElement.HorizontalAlignmentProperty);
+        browser.ClearValue(FrameworkElement.VerticalAlignmentProperty);
+        browser.RenderTransform = Transform.Identity;
+        browser.Margin = new Thickness(0);
     }
 
     private static UIElement BuildDetachedBrowserPlaceholder()
