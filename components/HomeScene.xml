@@ -19,7 +19,7 @@
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Timer id="audioRetryTimer" repeat="false" duration="1.2" />
     <Timer id="audioFallbackTimer" repeat="false" duration="1.2" />
-    <Timer id="audioPumpTimer" repeat="true" duration="2.2" />
+    <Audio id="panelAudioNode" />
     <Rectangle
       id="background"
       width="1280"
