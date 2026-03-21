@@ -26,9 +26,10 @@ public sealed class Bootstrapper
         var routingService = new RoutingService(captureSessionFactory, transportResolver);
         var profileStore = new ProfileStore();
         var browserSnapshotService = new BrowserSnapshotService();
+        var experimentalWebRtcAvService = new ExperimentalWebRtcAvService();
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
-        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, appUpdatePreferenceStore);
+        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, experimentalWebRtcAvService, appUpdatePreferenceStore);
         var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();

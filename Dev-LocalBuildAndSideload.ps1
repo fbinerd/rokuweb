@@ -3,7 +3,8 @@ param(
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
-    [switch]$SkipSideload
+    [switch]$SkipSideload,
+    [switch]$UseExperimentalWebRtcAv
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,6 +172,9 @@ function Test-TcpEndpoint {
 
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
+    if ($UseExperimentalWebRtcAv) {
+        $env:SUPERPAINEL_EXPERIMENT_WEBRTC_AV = "1"
+    }
     try {
         Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
@@ -183,6 +187,9 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
     finally {
         Pop-Location
         Remove-Item Env:SUPER_BUILD_CHANNEL -ErrorAction SilentlyContinue
+        if (-not $LaunchSuper) {
+            Remove-Item Env:SUPERPAINEL_EXPERIMENT_WEBRTC_AV -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -224,6 +231,10 @@ if (-not $SkipSideload) {
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {
         Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip
     }
+}
+
+if (-not $LaunchSuper) {
+    Remove-Item Env:SUPERPAINEL_EXPERIMENT_WEBRTC_AV -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

@@ -18,6 +18,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly ExperimentalWebRtcAvService _experimentalWebRtcAvService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -29,9 +30,10 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, ExperimentalWebRtcAvService experimentalWebRtcAvService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _experimentalWebRtcAvService = experimentalWebRtcAvService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -355,6 +357,11 @@ public sealed class LocalWebRtcPublisherService
         {
             LogInputRequest(requestTarget, remoteAddress);
             return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
+        }
+
+        if (normalizedPath.StartsWith("/api/experimental-av/", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildExperimentalWebRtcResponse(normalizedPath);
         }
 
         if (string.Equals(normalizedPath, "/api/control", StringComparison.OrdinalIgnoreCase))
@@ -736,11 +743,15 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
-    private static BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
+    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
+        var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var experimentalAvUrl = _experimentalWebRtcAvService.IsEnabled
+            ? _experimentalWebRtcAvService.BuildSessionUrl(window.Id, publicHost, port)
+            : string.Empty;
 
         return new BridgeWindowSnapshot
         {
@@ -751,9 +762,39 @@ public sealed class LocalWebRtcPublisherService
             PublishedWebRtcUrl = publishedUrl,
             StreamUrl = publishedUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
-            ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ServerUrl = string.Format("http://{0}:{1}", publicHost, port),
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", publicHost, port, window.Id.ToString("N")),
+            ExperimentalAvUrl = experimentalAvUrl
         };
+    }
+
+    private byte[] BuildExperimentalWebRtcResponse(string normalizedPath)
+    {
+        if (!_experimentalWebRtcAvService.IsEnabled)
+        {
+            return BuildHttpResponse(404, "Experimento WebRTC A/V desabilitado.", "text/plain; charset=utf-8");
+        }
+
+        var windowIdText = normalizedPath.Substring("/api/experimental-av/".Length);
+        if (!Guid.TryParseExact(windowIdText, "N", out var windowId) || !_windowSnapshots.TryGetValue(windowId, out var snapshot))
+        {
+            return BuildHttpResponse(404, "Janela experimental nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var payload = new WindowSessionSessionInfo
+        {
+            WindowId = snapshot.Id,
+            Title = snapshot.Title,
+            InitialUrl = snapshot.InitialUrl,
+            SignalingUrl = snapshot.ExperimentalAvUrl,
+            Notes = new List<string>
+            {
+                "Foundation only: esta branch prepara o contrato de sinalizacao/capabilities do experimento WebRTC A/V.",
+                "Ainda nao ha peer connection, SDP ou transporte WebRTC real implementado."
+            }
+        };
+
+        return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildSessionJson(payload), "application/json; charset=utf-8");
     }
 
     private void RemoveExistingRoute(Guid windowId)
@@ -923,6 +964,9 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "experimentalAvUrl", Order = 10)]
+    public string ExperimentalAvUrl { get; set; } = string.Empty;
 }
 
 [DataContract]
