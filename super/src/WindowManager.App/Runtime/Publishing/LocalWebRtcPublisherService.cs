@@ -801,6 +801,12 @@ public sealed class LocalWebRtcPublisherService
 
         if (IsYouTubeUrl(initialUri))
         {
+            var videoId = TryExtractYouTubeVideoId(initialUri.ToString());
+            if (string.IsNullOrWhiteSpace(videoId))
+            {
+                return HandoffMetadata.StreamOnly();
+            }
+
             return new HandoffMetadata
             {
                 RenderMode = "youtube-handoff",
