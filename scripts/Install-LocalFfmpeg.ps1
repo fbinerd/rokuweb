@@ -1,10 +1,15 @@
 [CmdletBinding()]
 param(
     [string]$DownloadUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
-    [string]$DestinationRoot = (Join-Path $PSScriptRoot "..\\tools\\ffmpeg")
+    [string]$DestinationRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+$scriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
+    $DestinationRoot = Join-Path $scriptRoot "..\\tools\\ffmpeg"
+}
+
 $resolvedDestination = [System.IO.Path]::GetFullPath($DestinationRoot)
 $downloadRoot = Join-Path $resolvedDestination "_download"
 $archivePath = Join-Path $downloadRoot "ffmpeg-release-essentials.zip"
