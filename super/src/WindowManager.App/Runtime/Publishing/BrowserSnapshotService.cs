@@ -60,6 +60,7 @@ public sealed class BrowserSnapshotService
                 renderTarget.Render(browser);
 
                 var encoder = new JpegBitmapEncoder();
+                encoder.QualityLevel = 72;
                 encoder.Frames.Add(BitmapFrame.Create(renderTarget));
 
                 using (var stream = new MemoryStream())

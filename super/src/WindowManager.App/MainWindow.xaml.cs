@@ -50,7 +50,7 @@ public partial class MainWindow : Window
 
         _previewRefreshTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(900)
+            Interval = TimeSpan.FromMilliseconds(250)
         };
         _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
 
