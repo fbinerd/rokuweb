@@ -32,6 +32,7 @@ sub init()
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.cursorMarker = m.top.findNode("cursorMarker")
+    m.nativeVideo = m.top.findNode("nativeVideo")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
@@ -267,6 +268,9 @@ sub applyBridgeResponse()
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
+            renderMode: getString(window.renderMode, "stream")
+            handoffType: getString(window.handoffType, "")
+            handoffUrl: getString(window.handoffUrl, "")
         })
     end for
 
@@ -419,6 +423,11 @@ sub showFullscreen()
     end if
 
     entry = m.windowEntries[m.selectedIndex]
+    if entry.renderMode = "native-media" and entry.handoffUrl <> invalid and entry.handoffUrl <> ""
+        showNativeVideo(entry)
+        return
+    end if
+
     if entry.thumbnailUrl = invalid or entry.thumbnailUrl = ""
         m.statusLabel.text = "Preview indisponivel para o painel selecionado"
         return
@@ -449,6 +458,7 @@ sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()
+    stopNativeVideo()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -525,6 +535,10 @@ sub updateCursorMarker()
 end sub
 
 sub sendRemoteCommand(command as string)
+    if isNativeVideoActive()
+        return
+    end if
+
     if m.windowEntries.Count() = 0
         return
     end if
@@ -548,6 +562,10 @@ sub sendRemoteCommand(command as string)
 end sub
 
 sub sendPointerCommand(command as string)
+    if isNativeVideoActive()
+        return
+    end if
+
     if m.windowEntries.Count() = 0
         return
     end if
@@ -571,6 +589,10 @@ sub sendPointerCommand(command as string)
 end sub
 
 sub sendClickCommand()
+    if isNativeVideoActive()
+        return
+    end if
+
     if m.windowEntries.Count() = 0 or m.clickControlTask = invalid
         return
     end if
@@ -592,6 +614,10 @@ sub sendClickCommand()
 end sub
 
 sub sendTextCommand(textValue as string)
+    if isNativeVideoActive()
+        return
+    end if
+
     if m.windowEntries.Count() = 0 or m.textControlTask = invalid
         return
     end if
@@ -613,6 +639,10 @@ sub sendTextCommand(textValue as string)
 end sub
 
 sub refreshFullscreenPreview()
+    if isNativeVideoActive()
+        return
+    end if
+
     if not m.isFullscreen or m.windowEntries.Count() = 0 or m.isFullscreenRefreshInFlight
         return
     end if
@@ -810,6 +840,47 @@ sub stopFullscreenStream()
     end if
 end sub
 
+sub showNativeVideo(entry as object)
+    m.isFullscreen = true
+    stopPanelRefresh()
+    m.titleLabel.visible = false
+    m.statusLabel.visible = false
+    m.subtitleLabel.visible = false
+    m.fullscreenPosterA.visible = false
+    m.fullscreenPosterB.visible = false
+    m.cursorMarker.visible = false
+    stopFullscreenStream()
+
+    if m.nativeVideo = invalid
+        return
+    end if
+
+    contentNode = CreateObject("roSGNode", "ContentNode")
+    contentNode.url = entry.handoffUrl
+    contentNode.streamFormat = inferStreamFormat(entry.handoffUrl)
+    contentNode.title = entry.title
+
+    m.nativeVideo.content = contentNode
+    m.nativeVideo.control = "stop"
+    m.nativeVideo.visible = true
+    m.nativeVideo.control = "play"
+    m.top.setFocus(true)
+end sub
+
+sub stopNativeVideo()
+    if m.nativeVideo = invalid
+        return
+    end if
+
+    m.nativeVideo.control = "stop"
+    m.nativeVideo.visible = false
+    m.nativeVideo.content = invalid
+end sub
+
+function isNativeVideoActive() as boolean
+    return m.nativeVideo <> invalid and m.nativeVideo.visible = true
+end function
+
 function getString(value as dynamic, fallback as string) as string
     if value = invalid
         return fallback
@@ -855,4 +926,21 @@ function normalizeBridgeHost(value as string) as string
     end if
 
     return host
+end function
+
+function inferStreamFormat(url as string) as string
+    lowerUrl = LCase(url)
+    if Right(lowerUrl, 5) = ".m3u8"
+        return "hls"
+    end if
+
+    if Right(lowerUrl, 4) = ".mpd"
+        return "dash"
+    end if
+
+    if Right(lowerUrl, 4) = ".mp4"
+        return "mp4"
+    end if
+
+    return "mp4"
 end function

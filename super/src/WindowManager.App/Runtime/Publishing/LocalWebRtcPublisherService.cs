@@ -725,6 +725,7 @@ public sealed class LocalWebRtcPublisherService
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var handoff = AnalyzeHandoff(window.InitialUri);
 
         return new BridgeWindowSnapshot
         {
@@ -736,8 +737,59 @@ public sealed class LocalWebRtcPublisherService
             StreamUrl = publishedUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            RenderMode = handoff.RenderMode,
+            HandoffType = handoff.HandoffType,
+            HandoffUrl = handoff.HandoffUrl
         };
+    }
+
+    private static HandoffMetadata AnalyzeHandoff(Uri? initialUri)
+    {
+        if (initialUri is null)
+        {
+            return HandoffMetadata.StreamOnly();
+        }
+
+        var url = initialUri.ToString();
+        var path = initialUri.AbsolutePath ?? string.Empty;
+
+        if (LooksLikeDirectMedia(path))
+        {
+            return new HandoffMetadata
+            {
+                RenderMode = "native-media",
+                HandoffType = "direct-media",
+                HandoffUrl = url
+            };
+        }
+
+        if (IsYouTubeUrl(initialUri))
+        {
+            return new HandoffMetadata
+            {
+                RenderMode = "stream",
+                HandoffType = "youtube",
+                HandoffUrl = url
+            };
+        }
+
+        return HandoffMetadata.StreamOnly();
+    }
+
+    private static bool LooksLikeDirectMedia(string path)
+    {
+        return path.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".mpd", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".ism", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsYouTubeUrl(Uri uri)
+    {
+        var host = uri.Host ?? string.Empty;
+        return host.IndexOf("youtube.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               host.IndexOf("youtu.be", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private void RemoveExistingRoute(Guid windowId)
@@ -845,6 +897,15 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "renderMode", Order = 10)]
+    public string RenderMode { get; set; } = "stream";
+
+    [DataMember(Name = "handoffType", Order = 11)]
+    public string HandoffType { get; set; } = string.Empty;
+
+    [DataMember(Name = "handoffUrl", Order = 12)]
+    public string HandoffUrl { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -882,5 +943,19 @@ public sealed class RegisteredDisplaySnapshot
 
     [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
+}
+
+internal sealed class HandoffMetadata
+{
+    public string RenderMode { get; set; } = "stream";
+
+    public string HandoffType { get; set; } = string.Empty;
+
+    public string HandoffUrl { get; set; } = string.Empty;
+
+    public static HandoffMetadata StreamOnly()
+    {
+        return new HandoffMetadata();
+    }
 }
 

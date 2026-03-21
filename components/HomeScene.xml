@@ -108,5 +108,12 @@
       translation="[637, 358]"
       uri="pkg:/components/cursor-pointer.png"
       visible="false" />
+    <Video
+      id="nativeVideo"
+      width="1280"
+      height="720"
+      translation="[0, 0]"
+      visible="false"
+      enableUI="false" />
   </children>
 </component>
