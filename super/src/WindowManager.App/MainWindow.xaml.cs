@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
+    private readonly Dictionary<Guid, Border> _previewBrowserHosts = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, ChromiumWebBrowser> _previewBrowsers = new Dictionary<Guid, ChromiumWebBrowser>();
     private readonly Dictionary<Guid, PreviewWindow> _detailWindows = new Dictionary<Guid, PreviewWindow>();
     private TransmissionLogWindow? _logWindow;
@@ -149,6 +150,7 @@ public partial class MainWindow : Window
             BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
             Child = CreatePreviewContent(session)
         };
+        _previewBrowserHosts[session.Id] = browserHost;
 
         Grid.SetRow(header, 0);
         Grid.SetRow(browserHost, 1);
@@ -286,17 +288,19 @@ public partial class MainWindow : Window
             _previewCards.Remove(session.Id);
         }
 
-        if (_previewBrowsers.TryGetValue(session.Id, out var browser))
-        {
-            _browserSnapshotService.Unregister(session.Id);
-            browser.Dispose();
-            _previewBrowsers.Remove(session.Id);
-        }
+        _previewBrowserHosts.Remove(session.Id);
 
         if (_detailWindows.TryGetValue(session.Id, out var detailWindow))
         {
             detailWindow.Close();
             _detailWindows.Remove(session.Id);
+        }
+
+        if (_previewBrowsers.TryGetValue(session.Id, out var browser))
+        {
+            _browserSnapshotService.Unregister(session.Id);
+            browser.Dispose();
+            _previewBrowsers.Remove(session.Id);
         }
     }
 
@@ -491,7 +495,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        var detailWindow = new PreviewWindow(session);
+        var sharedBrowser = AppRuntimeState.BrowserEngineAvailable && _previewBrowsers.TryGetValue(session.Id, out var browser)
+            ? browser
+            : null;
+
+        if (sharedBrowser is not null && _previewBrowserHosts.TryGetValue(session.Id, out var browserHost))
+        {
+            browserHost.Child = BuildDetachedBrowserPlaceholder();
+        }
+
+        var detailWindow = sharedBrowser is not null
+            ? new PreviewWindow(session, sharedBrowser, () => RestorePreviewBrowser(session.Id))
+            : new PreviewWindow(session);
         if (!preferConnectedDisplay)
         {
             detailWindow.Owner = this;
@@ -602,6 +617,31 @@ public partial class MainWindow : Window
         }
 
         base.OnClosed(e);
+    }
+
+    private void RestorePreviewBrowser(Guid windowId)
+    {
+        if (_previewBrowserHosts.TryGetValue(windowId, out var browserHost) &&
+            _previewBrowsers.TryGetValue(windowId, out var browser))
+        {
+            browserHost.Child = browser;
+        }
+    }
+
+    private static UIElement BuildDetachedBrowserPlaceholder()
+    {
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+            Child = new TextBlock
+            {
+                Text = "Visualizacao ampliada aberta. Este painel esta usando a mesma janela exibida na TV.",
+                Margin = new Thickness(16),
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DimGray,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
     }
 }
 

@@ -12,11 +12,19 @@ public sealed class PreviewWindow : Window
 {
     private readonly WindowSession _session;
     private readonly ChromiumWebBrowser? _browser;
+    private readonly Action? _restoreSharedContent;
     private readonly TextBlock? _addressText;
 
     public PreviewWindow(WindowSession session)
+        : this(session, null, null)
+    {
+    }
+
+    public PreviewWindow(WindowSession session, ChromiumWebBrowser? sharedBrowser, Action? restoreSharedContent)
     {
         _session = session;
+        _browser = sharedBrowser;
+        _restoreSharedContent = restoreSharedContent;
         _session.PropertyChanged += OnSessionPropertyChanged;
 
         Title = BuildTitle(session);
@@ -26,7 +34,11 @@ public sealed class PreviewWindow : Window
         MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        if (AppRuntimeState.BrowserEngineAvailable)
+        if (_browser is not null)
+        {
+            Content = _browser;
+        }
+        else if (AppRuntimeState.BrowserEngineAvailable)
         {
             _browser = new ChromiumWebBrowser
             {
@@ -96,7 +108,11 @@ public sealed class PreviewWindow : Window
     {
         Closed -= OnClosed;
         _session.PropertyChanged -= OnSessionPropertyChanged;
-        _browser?.Dispose();
+        _restoreSharedContent?.Invoke();
+        if (_restoreSharedContent is null)
+        {
+            _browser?.Dispose();
+        }
     }
 
     private static string BuildTitle(WindowSession session)
