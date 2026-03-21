@@ -12,6 +12,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
     private readonly bool _enabled;
+    private readonly bool _useMp4Mode;
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
 
@@ -19,7 +20,9 @@ public sealed class DiagnosticAvHlsService : IDisposable
     {
         _rootDirectory = Path.Combine(AppDataPaths.Root, "diagnostic-av-hls");
         Directory.CreateDirectory(_rootDirectory);
-        _enabled = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV"), "1", StringComparison.OrdinalIgnoreCase);
+        _enabled = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV"), "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_MP4"), "1", StringComparison.OrdinalIgnoreCase);
+        _useMp4Mode = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_TEST_AV_MP4"), "1", StringComparison.OrdinalIgnoreCase);
         _ffmpegPath = ResolveFfmpegPath();
 
         if (_enabled)
@@ -27,6 +30,10 @@ public sealed class DiagnosticAvHlsService : IDisposable
             if (!string.IsNullOrWhiteSpace(_ffmpegPath))
             {
                 AppLog.Write("DiagAv", $"Modo diagnostico A/V habilitado com ffmpeg: {_ffmpegPath}");
+                if (_useMp4Mode)
+                {
+                    AppLog.Write("DiagAv", "Modo diagnostico MP4 habilitado.");
+                }
             }
             else
             {
@@ -36,6 +43,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
     }
 
     public bool IsAvailable => _enabled && !string.IsNullOrWhiteSpace(_ffmpegPath);
+    public bool UsesMp4 => _useMp4Mode;
 
     public void EnsureStarted()
     {
@@ -58,7 +66,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
     public bool TryGetPlaylistPath(out string path)
     {
         path = Path.Combine(_rootDirectory, "index.m3u8");
-        return IsAvailable && File.Exists(path);
+        return IsAvailable && !_useMp4Mode && File.Exists(path);
     }
 
     public bool TryGetSegmentPath(string fileName, out string path)
@@ -76,11 +84,23 @@ public sealed class DiagnosticAvHlsService : IDisposable
         }
 
         path = Path.Combine(_rootDirectory, safeName);
-        return File.Exists(path);
+        return !_useMp4Mode && File.Exists(path);
+    }
+
+    public bool TryGetMp4Path(out string path)
+    {
+        path = Path.Combine(_rootDirectory, "diagnostic.mp4");
+        return IsAvailable && _useMp4Mode && File.Exists(path);
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
+        if (_useMp4Mode)
+        {
+            await GenerateMp4Async(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -135,6 +155,58 @@ public sealed class DiagnosticAvHlsService : IDisposable
             }
 
             await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task GenerateMp4Async(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outputPath = Path.Combine(_rootDirectory, "diagnostic.mp4");
+            var args =
+                "-hide_banner -loglevel error -y " +
+                "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
+                "-f lavfi -i sine=frequency=440:sample_rate=48000 " +
+                "-map 0:v:0 -map 1:a:0 " +
+                "-t 60 " +
+                "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                "-c:a aac -b:a 128k -ar 48000 -ac 2 " +
+                "-movflags +faststart " +
+                "\"" + outputPath + "\"";
+
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = _ffmpegPath,
+                Arguments = args,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            });
+
+            if (process is null)
+            {
+                return;
+            }
+
+            AppLog.Write("DiagAv", "Gerador A/V diagnostico MP4 iniciado.");
+            await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+            if (process.ExitCode == 0)
+            {
+                AppLog.Write("DiagAv", "Arquivo diagnostico MP4 pronto.");
+            }
+            else
+            {
+                var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                AppLog.Write("DiagAv", "ffmpeg do diagnostico MP4 encerrou com erro: " + error);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico MP4: " + ex.Message);
         }
     }
 

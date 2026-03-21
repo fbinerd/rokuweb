@@ -610,6 +610,17 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var fileName = normalizedPath.Substring("/diag-av/".Length);
+        if (string.Equals(fileName, "diagnostic.mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_diagnosticAvHlsService.TryGetMp4Path(out var mp4Path))
+            {
+                return BuildHttpResponse(404, "Arquivo A/V diagnostico MP4 indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var mp4Bytes = await Task.Run(() => File.ReadAllBytes(mp4Path), cancellationToken).ConfigureAwait(false);
+            return BuildBinaryHttpResponse(200, mp4Bytes, "video/mp4");
+        }
+
         if (string.Equals(fileName, "index.m3u8", StringComparison.OrdinalIgnoreCase))
         {
             if (!_diagnosticAvHlsService.TryGetPlaylistPath(out var playlistPath))
@@ -765,9 +776,13 @@ public sealed class LocalWebRtcPublisherService
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
-        var diagnosticStreamUrl = _diagnosticAvHlsService.IsAvailable
-            ? string.Format("http://{0}:{1}/diag-av/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
-            : string.Empty;
+        var diagnosticStreamUrl = string.Empty;
+        if (_diagnosticAvHlsService.IsAvailable)
+        {
+            diagnosticStreamUrl = _diagnosticAvHlsService.UsesMp4
+                ? string.Format("http://{0}:{1}/diag-av/diagnostic.mp4", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
+                : string.Format("http://{0}:{1}/diag-av/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port);
+        }
 
         return new BridgeWindowSnapshot
         {

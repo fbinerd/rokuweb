@@ -4,7 +4,8 @@ param(
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
     [switch]$SkipSideload,
-    [switch]$UseDiagnosticAvStream
+    [switch]$UseDiagnosticAvStream,
+    [switch]$UseDiagnosticAvMp4
 )
 
 $ErrorActionPreference = "Stop"
@@ -175,6 +176,9 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
     if ($UseDiagnosticAvStream) {
         $env:SUPERPAINEL_TEST_AV = "1"
     }
+    if ($UseDiagnosticAvMp4) {
+        $env:SUPERPAINEL_TEST_AV_MP4 = "1"
+    }
     try {
         Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
@@ -189,6 +193,7 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
         Remove-Item Env:SUPER_BUILD_CHANNEL -ErrorAction SilentlyContinue
         if (-not $LaunchSuper) {
             Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
+            Remove-Item Env:SUPERPAINEL_TEST_AV_MP4 -ErrorAction SilentlyContinue
         }
     }
 }
@@ -212,6 +217,7 @@ if ($LaunchSuper) {
 
 if (-not $LaunchSuper) {
     Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
+    Remove-Item Env:SUPERPAINEL_TEST_AV_MP4 -ErrorAction SilentlyContinue
 }
 
 if (-not $SkipSideload) {

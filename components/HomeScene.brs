@@ -440,12 +440,19 @@ sub showFullscreen()
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
+    streamUrlLower = LCase(getString(entry.streamUrl, ""))
+    m.videoUsesStream = Instr(1, streamUrlLower, ".m3u8") > 0 or Instr(1, streamUrlLower, ".mp4") > 0
     m.videoStreamUrl = getString(entry.streamUrl, "")
     if m.videoUsesStream and m.fullscreenVideo <> invalid
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
-        content.streamFormat = "hls"
+        if Instr(1, streamUrlLower, ".mp4") > 0
+            content.streamFormat = "mp4"
+            m.statusLabel.text = "Iniciando stream A/V diagnostico MP4..."
+        else
+            content.streamFormat = "hls"
+            m.statusLabel.text = "Iniciando stream A/V diagnostico..."
+        end if
         content.title = getString(entry.title, "Painel")
         m.fullscreenVideo.content = content
         m.fullscreenVideo.control = "stop"
@@ -453,7 +460,6 @@ sub showFullscreen()
         m.fullscreenVideo.control = "play"
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
-        m.statusLabel.text = "Iniciando stream A/V diagnostico..."
     else
         m.statusLabel.visible = false
         m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
