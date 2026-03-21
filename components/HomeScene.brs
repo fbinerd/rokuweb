@@ -51,6 +51,7 @@ sub init()
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.experimentalAvStateTimer = m.top.findNode("experimentalAvStateTimer")
     m.experimentalAvMediaProbeTimer = m.top.findNode("experimentalAvMediaProbeTimer")
+    m.experimentalAvDelayedPlayTimer = m.top.findNode("experimentalAvDelayedPlayTimer")
     m.experimentalAvMode = false
     m.experimentalAvOfferPosted = false
     m.experimentalAvStateUrl = ""
@@ -104,6 +105,7 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.experimentalAvStateTimer.observeField("fire", "onExperimentalAvStateTimerFire")
     m.experimentalAvMediaProbeTimer.observeField("fire", "onExperimentalAvMediaProbeTimerFire")
+    m.experimentalAvDelayedPlayTimer.observeField("fire", "onExperimentalAvDelayedPlayTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     if m.fullscreenVideo <> invalid
@@ -728,6 +730,9 @@ sub stopExperimentalAv()
     if m.experimentalAvMediaProbeTimer <> invalid
         m.experimentalAvMediaProbeTimer.control = "stop"
     end if
+    if m.experimentalAvDelayedPlayTimer <> invalid
+        m.experimentalAvDelayedPlayTimer.control = "stop"
+    end if
 end sub
 
 sub runExperimentalAvRequest(task as object, url as string, method as string, body as string)
@@ -836,6 +841,10 @@ sub onExperimentalAvOfferTaskCompleted()
     m.subtitleLabel.text = "Acompanhando state da sessao..."
     scheduleExperimentalAvStatePoll()
     scheduleExperimentalAvMediaProbe()
+    if m.experimentalAvDelayedPlayTimer <> invalid
+        m.experimentalAvDelayedPlayTimer.control = "stop"
+        m.experimentalAvDelayedPlayTimer.control = "start"
+    end if
 end sub
 
 sub onExperimentalAvStateTaskCompleted()
@@ -1042,6 +1051,16 @@ sub onExperimentalAvMediaTaskCompleted()
     end if
 
     scheduleExperimentalAvMediaProbe()
+end sub
+
+sub onExperimentalAvDelayedPlayTimerFire()
+    if not m.experimentalAvMode or m.experimentalAvPlaybackStarted or m.experimentalAvMediaUrl = ""
+        return
+    end if
+
+    ? "[ExpAV] delayed play => "; m.experimentalAvMediaUrl
+    startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+    m.experimentalAvPlaybackStarted = true
 end sub
 
 sub onClickControlTaskCompleted()
