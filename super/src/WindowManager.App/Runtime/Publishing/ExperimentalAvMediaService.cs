@@ -46,11 +46,6 @@ public sealed class ExperimentalAvMediaService : IDisposable
             return;
         }
 
-        if (!_browserAudioCaptureService.HasRecentAudio(windowId))
-        {
-            return;
-        }
-
         if (TryGetMp4Path(windowId, out var existingPath))
         {
             try
@@ -71,7 +66,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
             return;
         }
 
-        var buildTask = Task.Run(() => GenerateWindowMp4Async(windowId));
+        var buildTask = Task.Run(() => WaitForBrowserMediaAndGenerateAsync(windowId));
         _windowBuilds[windowId] = buildTask;
         _ = buildTask.ContinueWith(_ => _windowBuilds.TryRemove(windowId, out _), TaskScheduler.Default);
     }
@@ -80,6 +75,23 @@ public sealed class ExperimentalAvMediaService : IDisposable
     {
         path = Path.Combine(_rootDirectory, windowId.ToString("N"), "panel-experimental.mp4");
         return IsAvailable && File.Exists(path);
+    }
+
+    private async Task WaitForBrowserMediaAndGenerateAsync(Guid windowId)
+    {
+        var deadlineUtc = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadlineUtc)
+        {
+            if (_browserAudioCaptureService.HasRecentAudio(windowId))
+            {
+                await GenerateWindowMp4Async(windowId).ConfigureAwait(false);
+                return;
+            }
+
+            await Task.Delay(300).ConfigureAwait(false);
+        }
+
+        AppLog.Write("ExpWebRtc", $"Audio do navegador nao ficou pronto a tempo para a janela {windowId:N}.");
     }
 
     private async Task GenerateWindowMp4Async(Guid windowId)
