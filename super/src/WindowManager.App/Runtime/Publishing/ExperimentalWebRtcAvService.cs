@@ -43,6 +43,11 @@ public sealed class ExperimentalWebRtcAvService
         return $"http://{publicHost}:{port}/api/experimental-av/{windowId:N}/state";
     }
 
+    public string BuildMediaUrl(Guid windowId, string publicHost, int port)
+    {
+        return $"http://{publicHost}:{port}/api/experimental-av/{windowId:N}/media";
+    }
+
     public string BuildSessionJson(WindowSessionSessionInfo info)
     {
         using var stream = new MemoryStream();
@@ -69,11 +74,15 @@ public sealed class ExperimentalWebRtcAvService
         state.Title = title;
         state.InitialUrl = initialUrl;
         state.SignalingUrl = signalingUrl;
+        if (string.IsNullOrWhiteSpace(state.TransportStatus))
+        {
+            state.TransportStatus = "not-initialized";
+        }
         state.LastTouchedUtc = DateTime.UtcNow.ToString("O");
         return state;
     }
 
-    public ExperimentalWebRtcSessionState RegisterOffer(Guid windowId, string title, string initialUrl, string signalingUrl, ExperimentalWebRtcOfferPayload payload)
+    public ExperimentalWebRtcSessionState RegisterOffer(Guid windowId, string title, string initialUrl, string signalingUrl, string mediaUrl, ExperimentalWebRtcOfferPayload payload)
     {
         var state = GetOrCreateSession(windowId, title, initialUrl, signalingUrl);
         state.LastOfferType = payload.Type ?? string.Empty;
@@ -85,6 +94,8 @@ public sealed class ExperimentalWebRtcAvService
         state.AnswerSdp = BuildPlaceholderAnswerSdp(windowId);
         state.MediaTransportImplemented = false;
         state.MediaReady = false;
+        state.MediaUrl = mediaUrl;
+        state.TransportStatus = "awaiting-media-transport";
         state.LastTouchedUtc = DateTime.UtcNow.ToString("O");
         state.Notes = new List<string>
         {
@@ -158,10 +169,16 @@ public sealed class WindowSessionSessionInfo
     [DataMember(Name = "supportedTransports", Order = 11)]
     public List<string> SupportedTransports { get; set; } = new List<string>();
 
-    [DataMember(Name = "mediaTransportImplemented", Order = 12)]
+    [DataMember(Name = "mediaUrl", Order = 12)]
+    public string MediaUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "transportStatus", Order = 13)]
+    public string TransportStatus { get; set; } = string.Empty;
+
+    [DataMember(Name = "mediaTransportImplemented", Order = 14)]
     public bool MediaTransportImplemented { get; set; }
 
-    [DataMember(Name = "notes", Order = 13)]
+    [DataMember(Name = "notes", Order = 15)]
     public List<string> Notes { get; set; } = new List<string>();
 }
 
@@ -217,13 +234,19 @@ public sealed class ExperimentalWebRtcSessionState
     [DataMember(Name = "answerSdp", Order = 12)]
     public string AnswerSdp { get; set; } = string.Empty;
 
-    [DataMember(Name = "mediaTransportImplemented", Order = 13)]
+    [DataMember(Name = "mediaUrl", Order = 13)]
+    public string MediaUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "transportStatus", Order = 14)]
+    public string TransportStatus { get; set; } = string.Empty;
+
+    [DataMember(Name = "mediaTransportImplemented", Order = 15)]
     public bool MediaTransportImplemented { get; set; }
 
-    [DataMember(Name = "mediaReady", Order = 14)]
+    [DataMember(Name = "mediaReady", Order = 16)]
     public bool MediaReady { get; set; }
 
-    [DataMember(Name = "notes", Order = 15)]
+    [DataMember(Name = "notes", Order = 17)]
     public List<string> Notes { get; set; } = new List<string>();
 }
 
@@ -251,6 +274,12 @@ public sealed class ExperimentalWebRtcOfferAccepted
     [DataMember(Name = "answerSdp", Order = 7)]
     public string AnswerSdp { get; set; } = string.Empty;
 
-    [DataMember(Name = "notes", Order = 8)]
+    [DataMember(Name = "mediaUrl", Order = 8)]
+    public string MediaUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "transportStatus", Order = 9)]
+    public string TransportStatus { get; set; } = string.Empty;
+
+    [DataMember(Name = "notes", Order = 10)]
     public List<string> Notes { get; set; } = new List<string>();
 }

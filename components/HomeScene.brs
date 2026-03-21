@@ -785,6 +785,14 @@ sub onExperimentalAvOfferTaskCompleted()
         if answerType <> ""
             ? "[ExpAV] answer => "; answerType
         end if
+        mediaUrl = getString(json.mediaUrl, "")
+        if mediaUrl <> ""
+            ? "[ExpAV] media => "; mediaUrl
+        end if
+        transportStatus = getString(json.transportStatus, "")
+        if transportStatus <> ""
+            ? "[ExpAV] transport => "; transportStatus
+        end if
     end if
 
     m.experimentalAvOfferPosted = true
@@ -828,15 +836,21 @@ sub onExperimentalAvStateTaskCompleted()
     if json.mediaTransportImplemented <> invalid
         transportImplemented = json.mediaTransportImplemented
     end if
+    transportStatus = getString(json.transportStatus, "")
+    mediaUrl = getString(json.mediaUrl, "")
 
-    ? "[ExpAV] state => "; statusText; " offers="; offerCount; " mediaReady="; mediaReady; " transport="; transportImplemented
+    ? "[ExpAV] state => "; statusText; " offers="; offerCount; " mediaReady="; mediaReady; " transport="; transportImplemented; " transportStatus="; transportStatus; " mediaUrl="; mediaUrl
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
         if transportImplemented
             m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
         else
-            m.subtitleLabel.text = "Sinalizacao OK; transporte A/V experimental ainda nao conectado."
+            if transportStatus <> ""
+                m.subtitleLabel.text = "Sinalizacao OK; transporte=" + transportStatus
+            else
+                m.subtitleLabel.text = "Sinalizacao OK; transporte A/V experimental ainda nao conectado."
+            end if
         end if
         scheduleExperimentalAvStatePoll()
 end sub

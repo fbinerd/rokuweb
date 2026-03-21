@@ -853,6 +853,17 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(200, _experimentalWebRtcAvService.BuildStateJson(sessionState), "application/json; charset=utf-8");
         }
 
+        if (string.Equals(routeSuffix, "media", StringComparison.OrdinalIgnoreCase))
+        {
+            AppLog.Write(
+                "ExpWebRtc",
+                string.Format(
+                    "Midia experimental solicitada: janela={0}, transportStatus={1}",
+                    windowId.ToString("N"),
+                    sessionState.TransportStatus));
+            return BuildHttpResponse(501, "Experimental AV media transport not implemented yet.", "text/plain; charset=utf-8");
+        }
+
         if (string.Equals(routeSuffix, "offer", StringComparison.OrdinalIgnoreCase))
         {
             if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
@@ -879,7 +890,8 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"invalid_offer\"}", "application/json; charset=utf-8");
             }
 
-            var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, payload);
+            var mediaUrl = _experimentalWebRtcAvService.BuildMediaUrl(windowId, LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty), (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090);
+            var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, mediaUrl, payload);
             AppLog.Write(
                 "ExpWebRtc",
                 string.Format(
@@ -898,6 +910,8 @@ public sealed class LocalWebRtcPublisherService
                 StateUrl = snapshot.ExperimentalAvUrl + "/state",
                 AnswerType = updated.AnswerType,
                 AnswerSdp = updated.AnswerSdp,
+                MediaUrl = updated.MediaUrl,
+                TransportStatus = updated.TransportStatus,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
@@ -933,8 +947,11 @@ public sealed class LocalWebRtcPublisherService
             {
                 "session-discovery",
                 "offer-post",
-                "state-poll"
+                "state-poll",
+                "media-endpoint"
             },
+            MediaUrl = _experimentalWebRtcAvService.BuildMediaUrl(windowId, LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty), (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090),
+            TransportStatus = sessionState.TransportStatus,
             MediaTransportImplemented = false,
             Notes = new List<string>
             {
