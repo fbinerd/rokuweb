@@ -19,6 +19,7 @@ public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
+    private readonly BrowserAudioHlsService _browserAudioHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -31,10 +32,11 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _browserAudioCaptureService = browserAudioCaptureService;
+        _browserAudioHlsService = browserAudioHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -187,6 +189,7 @@ public sealed class LocalWebRtcPublisherService
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
+            _browserAudioHlsService.EnsureWindow(window.Id);
             var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
@@ -197,6 +200,7 @@ public sealed class LocalWebRtcPublisherService
             if (!activeIds.Contains(existingId))
             {
                 _windowSnapshots.TryRemove(existingId, out _);
+                _browserAudioHlsService.Unregister(existingId);
             }
         }
     }
@@ -309,11 +313,18 @@ public sealed class LocalWebRtcPublisherService
             var path = ParsePath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
             var normalizedPath = (path ?? "/").Split('?')[0];
-            if (normalizedPath.StartsWith("/audio-live/", StringComparison.OrdinalIgnoreCase))
-            {
-                await HandleAudioLiveRequestAsync(stream, normalizedPath, cancellationToken);
-                return;
-            }
+        if (normalizedPath.StartsWith("/audio-live/", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAudioLiveRequestAsync(stream, normalizedPath, cancellationToken);
+            return;
+        }
+
+        if (normalizedPath.StartsWith("/audio-hls/", StringComparison.OrdinalIgnoreCase))
+        {
+            var hlsResponseBytes = await BuildAudioHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(hlsResponseBytes, 0, hlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
             var bytes = await BuildResponseAsync(path ?? "/", remoteAddress, cancellationToken);
             await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
@@ -606,6 +617,44 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
+    private async Task<byte[]> BuildAudioHlsResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/audio-hls/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Playlist HLS nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Janela de audio HLS invalida.", "text/plain; charset=utf-8");
+        }
+
+        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_browserAudioHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            {
+                return BuildHttpResponse(404, "Playlist HLS indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var playlistText = File.ReadAllText(playlistPath);
+            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserAudioHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        {
+            return BuildHttpResponse(404, "Segmento HLS indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = File.ReadAllBytes(segmentPath);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
     private async Task<byte[]> BuildAudioResponseAsync(string requestTarget, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -866,7 +915,9 @@ public sealed class LocalWebRtcPublisherService
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = _browserAudioHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+                : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
             AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }

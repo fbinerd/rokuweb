@@ -20,6 +20,7 @@
     <Timer id="audioRetryTimer" repeat="false" duration="1.2" />
     <Timer id="audioFallbackTimer" repeat="false" duration="1.2" />
     <Audio id="panelAudioNode" />
+    <Video id="panelAudioVideo" width="2" height="2" translation="[-10, -10]" visible="false" />
     <Rectangle
       id="background"
       width="1280"

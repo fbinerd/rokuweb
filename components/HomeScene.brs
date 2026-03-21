@@ -26,6 +26,7 @@ sub init()
     m.audioMode = ""
     m.audioChunkUrl = ""
     m.audioPlayer = CreateObject("roAudioPlayer")
+    m.audioUsesHls = false
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -49,6 +50,7 @@ sub init()
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
     m.panelAudioNode = m.top.findNode("panelAudioNode")
+    m.panelAudioVideo = m.top.findNode("panelAudioVideo")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -100,6 +102,9 @@ sub init()
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     if m.panelAudioNode <> invalid
         m.panelAudioNode.observeField("state", "onPanelAudioStateChanged")
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.observeField("state", "onPanelAudioVideoStateChanged")
     end if
     m.top.setFocus(true)
 
@@ -492,16 +497,28 @@ sub startPanelAudio(entry as object)
         return
     end if
 
+    m.audioUsesHls = Instr(1, LCase(audioUrl), ".m3u8") > 0
     content = CreateObject("roSGNode", "ContentNode")
     content.url = appendCacheBust(audioUrl)
-    content.streamFormat = "wav"
+    if m.audioUsesHls
+        content.streamFormat = "hls"
+    else
+        content.streamFormat = "wav"
+    end if
     content.title = getString(entry.title, "Audio do painel")
     m.audioSessionId = getString(entry.id, "")
     m.audioChunkUrl = audioUrl
     m.audioMode = "scenegraph"
-    m.panelAudioNode.content = content
-    m.panelAudioNode.control = "stop"
-    m.panelAudioNode.control = "play"
+    if m.audioUsesHls and m.panelAudioVideo <> invalid
+        m.panelAudioVideo.content = content
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.control = "play"
+        m.statusLabel.text = "Iniciando audio HLS do painel..."
+    else
+        m.panelAudioNode.content = content
+        m.panelAudioNode.control = "stop"
+        m.panelAudioNode.control = "play"
+    end if
     if m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
         m.audioFallbackTimer.control = "start"
@@ -522,15 +539,22 @@ sub stopPanelAudio()
     if m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
     end if
-    m.panelAudioNode.control = "stop"
-    m.panelAudioNode.content = invalid
+    m.audioUsesHls = false
+    if m.panelAudioNode <> invalid
+        m.panelAudioNode.control = "stop"
+        m.panelAudioNode.content = invalid
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.content = invalid
+    end if
     if m.audioPlayer <> invalid
         m.audioPlayer.Stop()
     end if
 end sub
 
 sub onPanelAudioStateChanged()
-    if m.panelAudioNode = invalid
+    if m.panelAudioNode = invalid or m.audioUsesHls
         return
     end if
 
@@ -560,6 +584,32 @@ sub onPanelAudioStateChanged()
     end if
 end sub
 
+sub onPanelAudioVideoStateChanged()
+    if m.panelAudioVideo = invalid or not m.audioUsesHls
+        return
+    end if
+
+    state = LCase(getString(m.panelAudioVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.audioMode = "scenegraph"
+        if m.audioFallbackTimer <> invalid
+            m.audioFallbackTimer.control = "stop"
+        end if
+        m.statusLabel.text = "Audio HLS do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando audio HLS..."
+    else if state = "stopped" or state = "error" or state = "finished"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Falha no audio HLS; tentando fallback"
+            scheduleAudioRetry()
+        end if
+    end if
+end sub
+
 sub scheduleAudioRetry()
     if m.audioRetryTimer = invalid
         restartPanelAudio()
@@ -573,6 +623,11 @@ end sub
 sub onAudioRetryTimerFire()
     if m.audioMode = "legacy"
         playLegacyPanelAudioChunk()
+        return
+    end if
+
+    if m.audioUsesHls
+        startLegacyPanelAudio()
         return
     end if
 
@@ -601,7 +656,14 @@ sub onAudioFallbackTimerFire()
         return
     end if
 
-    if m.audioMode = "scenegraph" and m.panelAudioNode <> invalid
+    if m.audioUsesHls and m.panelAudioVideo <> invalid
+        state = LCase(getString(m.panelAudioVideo.state, ""))
+        if state = "playing"
+            return
+        end if
+    end if
+
+    if m.audioMode = "scenegraph" and not m.audioUsesHls and m.panelAudioNode <> invalid
         state = LCase(getString(m.panelAudioNode.state, ""))
         if state = "playing"
             return
@@ -618,9 +680,14 @@ sub startLegacyPanelAudio()
     end if
 
     m.audioMode = "legacy"
+    m.audioUsesHls = false
     if m.panelAudioNode <> invalid
         m.panelAudioNode.control = "stop"
         m.panelAudioNode.content = invalid
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.content = invalid
     end if
 
     playLegacyPanelAudioChunk()
