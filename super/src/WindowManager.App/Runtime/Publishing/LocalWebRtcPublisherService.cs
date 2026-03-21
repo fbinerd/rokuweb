@@ -20,7 +20,6 @@ public sealed class LocalWebRtcPublisherService
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly ExperimentalWebRtcAvService _experimentalWebRtcAvService;
     private readonly ExperimentalAvMediaService _experimentalAvMediaService;
-    private readonly ExperimentalMediaHttpServer _experimentalMediaHttpServer;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -37,7 +36,6 @@ public sealed class LocalWebRtcPublisherService
         _browserSnapshotService = browserSnapshotService;
         _experimentalWebRtcAvService = experimentalWebRtcAvService;
         _experimentalAvMediaService = experimentalAvMediaService;
-        _experimentalMediaHttpServer = experimentalMediaHttpServer;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -182,9 +180,7 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
         var activePort = EnsureListener(endpoint);
-        var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
         _experimentalAvMediaService.EnsureStarted();
-        _experimentalMediaHttpServer.TryEnsureStarted(publicHost, activePort + 20, out _);
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
@@ -307,6 +303,7 @@ public sealed class LocalWebRtcPublisherService
         using (var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, true))
         {
             var method = "GET";
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             string? requestLine;
             var contentLength = 0;
             try
@@ -323,10 +320,19 @@ public sealed class LocalWebRtcPublisherService
                 do
                 {
                     headerLine = await reader.ReadLineAsync();
-                    if (!string.IsNullOrEmpty(headerLine) && headerLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                    if (!string.IsNullOrEmpty(headerLine))
                     {
-                        var headerValue = headerLine.Substring("Content-Length:".Length).Trim();
-                        _ = int.TryParse(headerValue, out contentLength);
+                        var separatorIndex = headerLine.IndexOf(':');
+                        if (separatorIndex > 0)
+                        {
+                            var headerKey = headerLine.Substring(0, separatorIndex).Trim();
+                            var headerValue = headerLine.Substring(separatorIndex + 1).Trim();
+                            headers[headerKey] = headerValue;
+                            if (string.Equals(headerKey, "Content-Length", StringComparison.OrdinalIgnoreCase))
+                            {
+                                _ = int.TryParse(headerValue, out contentLength);
+                            }
+                        }
                     }
                 }
                 while (!string.IsNullOrEmpty(headerLine));
@@ -357,12 +363,12 @@ public sealed class LocalWebRtcPublisherService
 
             var path = ParsePath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
-            var bytes = await BuildResponseAsync(method, path, requestBody, remoteAddress, cancellationToken);
+            var bytes = await BuildResponseAsync(method, path, requestBody, remoteAddress, headers, cancellationToken);
             await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
         }
     }
 
-    private async Task<byte[]> BuildResponseAsync(string method, string path, string requestBody, string remoteAddress, CancellationToken cancellationToken)
+    private async Task<byte[]> BuildResponseAsync(string method, string path, string requestBody, string remoteAddress, Dictionary<string, string> headers, CancellationToken cancellationToken)
     {
         var requestTarget = path ?? "/";
         var normalizedPath = requestTarget.Split('?')[0];
@@ -396,7 +402,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/api/experimental-av/", StringComparison.OrdinalIgnoreCase))
         {
-            return BuildExperimentalWebRtcResponse(method, normalizedPath, requestBody);
+            return await BuildExperimentalWebRtcResponseAsync(method, normalizedPath, requestBody, headers, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/api/control", StringComparison.OrdinalIgnoreCase))
@@ -795,15 +801,116 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
+    private static async Task<byte[]> BuildFileResponseAsync(string filePath, string contentType, string? rangeHeader, bool headOnly, CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(filePath);
+        if (!fileInfo.Exists)
+        {
+            return BuildHttpResponse(404, "Arquivo nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var totalLength = fileInfo.Length;
+        long start = 0;
+        long end = totalLength - 1;
+        var statusCode = 200;
+        var extraHeaders = new StringBuilder();
+        extraHeaders.Append("Accept-Ranges: bytes\r\n");
+
+        if (TryParseRangeHeader(rangeHeader, totalLength, out start, out end))
+        {
+            statusCode = 206;
+            extraHeaders.AppendFormat("Content-Range: bytes {0}-{1}/{2}\r\n", start, end, totalLength);
+        }
+
+        var contentLength = end - start + 1;
+        var reason = statusCode == 206 ? "Partial Content" : "OK";
+        var header = Encoding.ASCII.GetBytes(
+            string.Format(
+                "HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\nConnection: close\r\nCache-Control: no-store\r\n{4}\r\n",
+                statusCode,
+                reason,
+                contentType,
+                contentLength,
+                extraHeaders.ToString()));
+
+        if (headOnly)
+        {
+            return header;
+        }
+
+        var bodyBytes = new byte[contentLength];
+        using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            fs.Seek(start, SeekOrigin.Begin);
+            var offset = 0;
+            while (offset < contentLength)
+            {
+                var read = await fs.ReadAsync(bodyBytes, offset, (int)(contentLength - offset), cancellationToken).ConfigureAwait(false);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                offset += read;
+            }
+        }
+
+        var response = new byte[header.Length + bodyBytes.Length];
+        Buffer.BlockCopy(header, 0, response, 0, header.Length);
+        Buffer.BlockCopy(bodyBytes, 0, response, header.Length, bodyBytes.Length);
+        return response;
+    }
+
+    private static bool TryParseRangeHeader(string? rangeHeader, long totalLength, out long start, out long end)
+    {
+        start = 0;
+        end = totalLength - 1;
+
+        if (string.IsNullOrWhiteSpace(rangeHeader) || !rangeHeader.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var value = rangeHeader.Substring("bytes=".Length);
+        var separatorIndex = value.IndexOf('-');
+        if (separatorIndex < 0)
+        {
+            return false;
+        }
+
+        var startText = value.Substring(0, separatorIndex).Trim();
+        var endText = value.Substring(separatorIndex + 1).Trim();
+
+        if (startText.Length == 0)
+        {
+            if (!long.TryParse(endText, out var suffixLength) || suffixLength <= 0)
+            {
+                return false;
+            }
+
+            start = Math.Max(0, totalLength - suffixLength);
+            end = totalLength - 1;
+            return true;
+        }
+
+        if (!long.TryParse(startText, out start) || start < 0)
+        {
+            return false;
+        }
+
+        if (endText.Length == 0)
+        {
+            end = totalLength - 1;
+            return true;
+        }
+
+        return long.TryParse(endText, out end) && end >= start;
+    }
+
     private string BuildExperimentalMediaUrl(Guid windowId)
     {
         var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty);
         var port = (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090;
-        if (_experimentalMediaHttpServer.TryEnsureStarted(publicHost, port + 20, out var mediaPort))
-        {
-            return _experimentalMediaHttpServer.BuildUrl(mediaPort, windowId);
-        }
-
         return _experimentalWebRtcAvService.BuildMediaUrl(windowId, publicHost, port);
     }
 
@@ -816,7 +923,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (_experimentalAvMediaService.TryGetMp4Path(out _))
         {
-            return "diagnostic-media-ready";
+            return "bridge-media-ready";
         }
 
         return "diagnostic-media-starting";
@@ -847,7 +954,7 @@ public sealed class LocalWebRtcPublisherService
         };
     }
 
-    private byte[] BuildExperimentalWebRtcResponse(string method, string normalizedPath, string requestBody)
+    private async Task<byte[]> BuildExperimentalWebRtcResponseAsync(string method, string normalizedPath, string requestBody, Dictionary<string, string> headers, CancellationToken cancellationToken)
     {
         if (!_experimentalWebRtcAvService.IsEnabled)
         {
@@ -899,9 +1006,10 @@ public sealed class LocalWebRtcPublisherService
                     "Midia experimental solicitada: janela={0}, transportStatus={1}",
                     windowId.ToString("N"),
                     sessionState.TransportStatus));
-            if (!string.IsNullOrWhiteSpace(sessionState.MediaUrl))
+            if (_experimentalAvMediaService.TryGetMp4Path(out var mp4Path))
             {
-                return BuildHttpResponse(302, sessionState.MediaUrl, "text/plain; charset=utf-8");
+                headers.TryGetValue("Range", out var rangeHeader);
+                return await BuildFileResponseAsync(mp4Path, "video/mp4", rangeHeader, string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase), cancellationToken);
             }
 
             return BuildHttpResponse(501, "Experimental AV media transport not implemented yet.", "text/plain; charset=utf-8");
