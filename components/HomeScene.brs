@@ -924,8 +924,9 @@ sub onFullscreenVideoStateChanged()
         m.activeFullscreenPoster.visible = true
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
-        m.statusLabel.text = "Falha na midia experimental"
-        m.subtitleLabel.text = "Voltando ao preview por imagem."
+        m.statusLabel.text = "Falha temporaria na midia experimental"
+        m.subtitleLabel.text = "Tentando novamente..."
+        scheduleExperimentalAvStatePoll()
     end if
 end sub
 
