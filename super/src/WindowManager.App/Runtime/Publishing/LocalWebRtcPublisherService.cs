@@ -307,7 +307,14 @@ public sealed class LocalWebRtcPublisherService
 
             var path = ParsePath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
-            var bytes = await BuildResponseAsync(path, remoteAddress, cancellationToken);
+            var normalizedPath = (path ?? "/").Split('?')[0];
+            if (normalizedPath.StartsWith("/audio-live/", StringComparison.OrdinalIgnoreCase))
+            {
+                await HandleAudioLiveRequestAsync(stream, normalizedPath, cancellationToken);
+                return;
+            }
+
+            var bytes = await BuildResponseAsync(path ?? "/", remoteAddress, cancellationToken);
             await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
         }
     }
@@ -622,6 +629,53 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, wavBytes, "audio/wav");
     }
 
+    private async Task HandleAudioLiveRequestAsync(NetworkStream stream, string normalizedPath, CancellationToken cancellationToken)
+    {
+        var fileName = normalizedPath.Substring("/audio-live/".Length);
+        if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = fileName.Substring(0, fileName.Length - 4);
+        }
+
+        if (!Guid.TryParseExact(fileName, "N", out var windowId))
+        {
+            var notFound = BuildHttpResponse(404, "Audio ao vivo nao encontrado.", "text/plain; charset=utf-8");
+            await stream.WriteAsync(notFound, 0, notFound.Length, cancellationToken);
+            return;
+        }
+
+        if (!_browserAudioCaptureService.TryGetLiveAudioFormat(windowId, out var sampleRate, out var channels))
+        {
+            var notReady = BuildHttpResponse(404, "Audio ao vivo indisponivel.", "text/plain; charset=utf-8");
+            await stream.WriteAsync(notReady, 0, notReady.Length, cancellationToken);
+            return;
+        }
+
+        var header = Encoding.ASCII.GetBytes(
+            "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: audio/wav\r\n" +
+            "Connection: close\r\n" +
+            "Cache-Control: no-store\r\n\r\n");
+        await stream.WriteAsync(header, 0, header.Length, cancellationToken);
+
+        var waveHeader = BuildStreamingWaveHeader(sampleRate, channels);
+        await stream.WriteAsync(waveHeader, 0, waveHeader.Length, cancellationToken);
+
+        long lastSequence = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var packet = await _browserAudioCaptureService.WaitForNextPacketAsync(windowId, lastSequence, cancellationToken).ConfigureAwait(false);
+            if (packet is null || packet.Bytes.Length == 0)
+            {
+                continue;
+            }
+
+            lastSequence = packet.Sequence;
+            await stream.WriteAsync(packet.Bytes, 0, packet.Bytes.Length, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private static string ParsePath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -662,6 +716,33 @@ public sealed class LocalWebRtcPublisherService
         Buffer.BlockCopy(header, 0, response, 0, header.Length);
         Buffer.BlockCopy(bodyBytes, 0, response, header.Length, bodyBytes.Length);
         return response;
+    }
+
+    private static byte[] BuildStreamingWaveHeader(int sampleRate, int channels)
+    {
+        var bitsPerSample = 16;
+        var blockAlign = channels * bitsPerSample / 8;
+        var byteRate = sampleRate * blockAlign;
+
+        using (var stream = new MemoryStream(44))
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(new[] { 'R', 'I', 'F', 'F' });
+            writer.Write(int.MaxValue);
+            writer.Write(new[] { 'W', 'A', 'V', 'E' });
+            writer.Write(new[] { 'f', 'm', 't', ' ' });
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write((short)channels);
+            writer.Write(sampleRate);
+            writer.Write(byteRate);
+            writer.Write((short)blockAlign);
+            writer.Write((short)bitsPerSample);
+            writer.Write(new[] { 'd', 'a', 't', 'a' });
+            writer.Write(int.MaxValue);
+            writer.Flush();
+            return stream.ToArray();
+        }
     }
 
     private static string BuildIndexPage()
@@ -769,7 +850,7 @@ public sealed class LocalWebRtcPublisherService
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = string.Format("http://{0}:{1}/audio/{2}.wav", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = string.Format("http://{0}:{1}/audio-live/{2}.wav", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
             AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }

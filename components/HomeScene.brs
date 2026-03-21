@@ -22,6 +22,7 @@ sub init()
     m.firmwareVersion = deviceInfo.GetVersion()
     m.channelVersion = GetRokuChannelReleaseId()
     m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
+    m.audioPlayer = CreateObject("roAudioPlayer")
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -267,6 +268,8 @@ sub applyBridgeResponse()
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
+            audioStreamUrl: getString(window.audioStreamUrl, "")
+            audioAvailable: getBool(window.audioAvailable, false)
         })
     end for
 
@@ -441,6 +444,7 @@ sub showFullscreen()
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
+    startPanelAudio(entry)
     startFullscreenStream()
     m.top.setFocus(true)
 end sub
@@ -449,6 +453,7 @@ sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()
+    stopPanelAudio()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -458,6 +463,41 @@ sub hideFullscreen()
     startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
+end sub
+
+sub startPanelAudio(entry as object)
+    stopPanelAudio()
+
+    if m.audioPlayer = invalid
+        return
+    end if
+
+    if entry = invalid or getBool(entry.audioAvailable, false) = false
+        return
+    end if
+
+    audioUrl = getString(entry.audioStreamUrl, "")
+    if audioUrl = ""
+        return
+    end if
+
+    audioItem = CreateObject("roAssociativeArray")
+    audioItem.url = appendCacheBust(audioUrl)
+    audioItem.streamformat = "wav"
+    audioItem.title = getString(entry.title, "Audio do painel")
+
+    m.audioPlayer = CreateObject("roAudioPlayer")
+    m.audioPlayer.SetLoop(false)
+    m.audioPlayer.AddContent(audioItem)
+    m.audioPlayer.Play()
+end sub
+
+sub stopPanelAudio()
+    if m.audioPlayer = invalid
+        return
+    end if
+
+    m.audioPlayer.Stop()
 end sub
 
 sub moveCursor(command as string)
@@ -817,6 +857,22 @@ function getString(value as dynamic, fallback as string) as string
 
     if Type(value) = "roString" or Type(value) = "String"
         return value
+    end if
+
+    return fallback
+end function
+
+function getBool(value as dynamic, fallback as boolean) as boolean
+    if value = invalid
+        return fallback
+    end if
+
+    if value = true
+        return true
+    end if
+
+    if value = false
+        return false
     end if
 
     return fallback

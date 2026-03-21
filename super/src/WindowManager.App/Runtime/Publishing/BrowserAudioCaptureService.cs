@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using CefSharp;
 using CefSharp.Handler;
 
@@ -39,6 +40,29 @@ public sealed class BrowserAudioCaptureService
         }
 
         return buffer.BuildWaveSnapshot();
+    }
+
+    public bool TryGetLiveAudioFormat(Guid windowId, out int sampleRate, out int channels)
+    {
+        sampleRate = 0;
+        channels = 0;
+
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return false;
+        }
+
+        return buffer.TryGetFormat(out sampleRate, out channels);
+    }
+
+    public Task<LiveAudioPacket?> WaitForNextPacketAsync(Guid windowId, long lastSequence, CancellationToken cancellationToken)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return Task.FromResult<LiveAudioPacket?>(null);
+        }
+
+        return buffer.WaitForNextPacketAsync(lastSequence, cancellationToken);
     }
 
     internal bool TryConfigure(Guid windowId, CefSharp.Structs.AudioParameters parameters, int channels)
@@ -107,14 +131,25 @@ public sealed class BrowserAudioCaptureService
         }
     }
 
+    public sealed class LiveAudioPacket
+    {
+        public long Sequence { get; set; }
+
+        public byte[] Bytes { get; set; } = Array.Empty<byte>();
+    }
+
     private sealed class WindowAudioBuffer
     {
+        private const int MaxLivePackets = 64;
         private readonly object _gate = new object();
+        private readonly Queue<LiveAudioPacket> _livePackets = new Queue<LiveAudioPacket>();
+        private readonly SemaphoreSlim _packetSignal = new SemaphoreSlim(0);
         private byte[] _pcmBytes = Array.Empty<byte>();
         private int _sampleRate;
         private int _channels;
         private int _maxBytes;
         private DateTime _lastPacketUtc = DateTime.MinValue;
+        private long _sequence;
 
         public void Configure(int sampleRate, int channels, int maxBytes)
         {
@@ -173,6 +208,23 @@ public sealed class BrowserAudioCaptureService
                 }
 
                 AppendBytes(packetBytes);
+                _sequence++;
+                _livePackets.Enqueue(new LiveAudioPacket
+                {
+                    Sequence = _sequence,
+                    Bytes = packetBytes
+                });
+                while (_livePackets.Count > MaxLivePackets)
+                {
+                    _livePackets.Dequeue();
+                }
+                try
+                {
+                    _packetSignal.Release();
+                }
+                catch
+                {
+                }
                 _lastPacketUtc = DateTime.UtcNow;
             }
         }
@@ -207,6 +259,37 @@ public sealed class BrowserAudioCaptureService
 
                 return BuildWaveFile(_pcmBytes, _sampleRate, _channels);
             }
+        }
+
+        public bool TryGetFormat(out int sampleRate, out int channels)
+        {
+            lock (_gate)
+            {
+                sampleRate = _sampleRate;
+                channels = _channels;
+                return sampleRate > 0 && channels > 0;
+            }
+        }
+
+        public async Task<LiveAudioPacket?> WaitForNextPacketAsync(long lastSequence, CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                lock (_gate)
+                {
+                    foreach (var packet in _livePackets)
+                    {
+                        if (packet.Sequence > lastSequence)
+                        {
+                            return packet;
+                        }
+                    }
+                }
+
+                await _packetSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return null;
         }
 
         private void AppendBytes(byte[] packetBytes)
