@@ -10,7 +10,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class BrowserAudioCaptureService
 {
     private static readonly TimeSpan AudioFreshnessWindow = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromSeconds(12);
     private readonly ConcurrentDictionary<Guid, WindowAudioBuffer> _buffers = new ConcurrentDictionary<Guid, WindowAudioBuffer>();
 
     public IAudioHandler CreateHandler(Guid windowId)
