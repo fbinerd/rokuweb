@@ -213,6 +213,7 @@ public partial class MainWindow : Window
             };
 
             _previewBrowsers[session.Id] = browser;
+            _browserSnapshotService.RegisterMirror(session.Id, browser);
             return browser;
         }
 
@@ -289,6 +290,7 @@ public partial class MainWindow : Window
 
         if (_previewBrowsers.TryGetValue(session.Id, out var browser))
         {
+            _browserSnapshotService.UnregisterMirror(session.Id, browser);
             browser.Dispose();
             _previewBrowsers.Remove(session.Id);
         }

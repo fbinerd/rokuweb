@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using CefSharp;
@@ -16,6 +18,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class BrowserSnapshotService
 {
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<int, ChromiumWebBrowser>> _mirrorBrowsers = new ConcurrentDictionary<Guid, ConcurrentDictionary<int, ChromiumWebBrowser>>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
@@ -24,9 +27,29 @@ public sealed class BrowserSnapshotService
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
     }
 
+    public void RegisterMirror(Guid windowId, ChromiumWebBrowser browser)
+    {
+        var mirrors = _mirrorBrowsers.GetOrAdd(windowId, _ => new ConcurrentDictionary<int, ChromiumWebBrowser>());
+        mirrors[RuntimeHelpers.GetHashCode(browser)] = browser;
+        _cursorStates.TryAdd(windowId, new RemoteCursorState());
+    }
+
+    public void UnregisterMirror(Guid windowId, ChromiumWebBrowser browser)
+    {
+        if (_mirrorBrowsers.TryGetValue(windowId, out var mirrors))
+        {
+            mirrors.TryRemove(RuntimeHelpers.GetHashCode(browser), out _);
+            if (mirrors.IsEmpty)
+            {
+                _mirrorBrowsers.TryRemove(windowId, out _);
+            }
+        }
+    }
+
     public void Unregister(Guid windowId)
     {
         _browsers.TryRemove(windowId, out _);
+        _mirrorBrowsers.TryRemove(windowId, out _);
         _cursorStates.TryRemove(windowId, out _);
     }
 
@@ -86,13 +109,50 @@ public sealed class BrowserSnapshotService
             return RemoteCommandResult.Failure();
         }
 
+        var result = await ExecuteRemoteCommandAsync(browser, windowId, command, x, y, text, writeLog: true).ConfigureAwait(false);
+
+        if (_mirrorBrowsers.TryGetValue(windowId, out var mirrors))
+        {
+            var tasks = mirrors.Values
+                .Where(mirror => !ReferenceEquals(mirror, browser))
+                .Select(mirror => ExecuteRemoteCommandAsync(mirror, windowId, command, x, y, text, writeLog: false))
+                .ToArray();
+
+            if (tasks.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<RemoteCommandResult> ExecuteRemoteCommandAsync(
+        ChromiumWebBrowser browser,
+        Guid windowId,
+        string command,
+        int? x,
+        int? y,
+        string? text,
+        bool writeLog)
+    {
         return await browser.Dispatcher.InvokeAsync(async () =>
         {
             var cefBrowser = browser.GetBrowser();
             var host = cefBrowser?.GetHost();
             if (cefBrowser is null || host is null)
             {
-                AppLog.Write("RokuControl", string.Format("CEF indisponivel para janela {0}", windowId.ToString("N")));
+                if (writeLog)
+                {
+                    AppLog.Write("RokuControl", string.Format("CEF indisponivel para janela {0}", windowId.ToString("N")));
+                }
+
                 return RemoteCommandResult.Failure();
             }
 
@@ -104,14 +164,22 @@ public sealed class BrowserSnapshotService
             var height = Math.Max(1, (int)Math.Ceiling(browser.ActualHeight));
             var cursor = _cursorStates.GetOrAdd(windowId, _ => new RemoteCursorState());
             cursor.UpdateFromClient(x, y, width, height);
-            AppLog.Write("RokuControl", string.Format("Recebido comando '{0}' para janela {1}", normalizedCommand, windowId.ToString("N")));
+
+            if (writeLog)
+            {
+                AppLog.Write("RokuControl", string.Format("Recebido comando '{0}' para janela {1}", normalizedCommand, windowId.ToString("N")));
+            }
 
             switch (normalizedCommand)
             {
                 case "move":
                     host.SendMouseMoveEvent(cursor.ToMouseEvent(), false);
                     await HighlightElementAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true);
-                    AppLog.Write("RokuControl", string.Format("Mouse move => x={0}, y={1}", cursor.X, cursor.Y));
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", string.Format("Mouse move => x={0}, y={1}", cursor.X, cursor.Y));
+                    }
+
                     return RemoteCommandResult.Success();
                 case "click":
                 case "ok":
@@ -124,29 +192,54 @@ public sealed class BrowserSnapshotService
                     {
                         browser.Load(clickResult.NavigationUrl);
                     }
-                    AppLog.Write("RokuControl", string.Format("Mouse click => x={0}, y={1}, ok={2}, editable={3}, tag={4}, type={5}, target={6}, clickable={7}, nav={8}", cursor.X, cursor.Y, clickResult.Ok, clickResult.Editable, clickResult.TagName, clickResult.InputType, clickResult.TargetPath, clickResult.ClickablePath, clickResult.NavigationUrl));
+
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", string.Format("Mouse click => x={0}, y={1}, ok={2}, editable={3}, tag={4}, type={5}, target={6}, clickable={7}, nav={8}", cursor.X, cursor.Y, clickResult.Ok, clickResult.Editable, clickResult.TagName, clickResult.InputType, clickResult.TargetPath, clickResult.ClickablePath, clickResult.NavigationUrl));
+                    }
+
                     return clickResult;
                 case "set-text":
                     var setTextResult = await SetTextAtFocusedElementAsync(frame, cursor.X, cursor.Y, text ?? string.Empty).ConfigureAwait(true);
-                    AppLog.Write("RokuControl", string.Format("Texto aplicado ao CEF. ok={0}, editable={1}, tag={2}, type={3}, valueLength={4}, finalValue={5}", setTextResult.Ok, setTextResult.Editable, setTextResult.TagName, setTextResult.InputType, (text ?? string.Empty).Length, setTextResult.Value));
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", string.Format("Texto aplicado ao CEF. ok={0}, editable={1}, tag={2}, type={3}, valueLength={4}, finalValue={5}", setTextResult.Ok, setTextResult.Editable, setTextResult.TagName, setTextResult.InputType, (text ?? string.Empty).Length, setTextResult.Value));
+                    }
+
                     return setTextResult;
                 case "back":
                     SendKey(host, 0x1B);
-                    AppLog.Write("RokuControl", "Escape enviado ao CEF.");
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", "Escape enviado ao CEF.");
+                    }
+
                     return RemoteCommandResult.Success();
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);
-                    AppLog.Write("RokuControl", "Tab enviado ao CEF.");
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", "Tab enviado ao CEF.");
+                    }
+
                     return RemoteCommandResult.Success();
                 case "open-fullscreen":
-                    AppLog.Write("RokuControl", "Solicitacao de fullscreen recebida da Roku.");
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", "Solicitacao de fullscreen recebida da Roku.");
+                    }
+
                     return RemoteCommandResult.Success();
                 default:
-                    AppLog.Write("RokuControl", string.Format("Comando desconhecido: {0}", normalizedCommand));
+                    if (writeLog)
+                    {
+                        AppLog.Write("RokuControl", string.Format("Comando desconhecido: {0}", normalizedCommand));
+                    }
+
                     return RemoteCommandResult.Failure();
             }
-        }).Task.Unwrap();
+        }).Task.Unwrap().ConfigureAwait(false);
     }
 
     private static void SendKey(IBrowserHost host, int keyCode)
