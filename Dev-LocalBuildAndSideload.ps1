@@ -37,28 +37,22 @@ function New-MultipartBody {
         [string]$Password
     )
 
-    $boundary = "---------------------------" + [Guid]::NewGuid().ToString("N")
+    $boundary = "---------------------------" + [DateTime]::UtcNow.Ticks.ToString()
     $newLine = "`r`n"
-    $fileName = [System.IO.Path]::GetFileName($PackagePath)
-    $headerText = @(
-        "--$boundary"
-        'Content-Disposition: form-data; name="mysubmit"'
-        ""
-        "Install"
-        "--$boundary"
-        'Content-Disposition: form-data; name="passwd"'
-        ""
-        $Password
-        "--$boundary"
-        "Content-Disposition: form-data; name=`"archive`"; filename=`"$fileName`""
-        "Content-Type: application/octet-stream"
-        ""
-    ) -join $newLine
+    $headerBuilder = New-Object System.Text.StringBuilder
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="mysubmit"').Append($newLine).Append($newLine)
+    [void]$headerBuilder.Append("Install").Append($newLine)
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="passwd"').Append($newLine).Append($newLine)
+    [void]$headerBuilder.Append($Password).Append($newLine)
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="archive"; filename="').Append([System.IO.Path]::GetFileName($PackagePath)).Append('"').Append($newLine)
+    [void]$headerBuilder.Append("Content-Type: application/octet-stream").Append($newLine).Append($newLine)
 
-    $footerText = $newLine + "--$boundary--" + $newLine
-    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headerText)
+    $headerBytes = [System.Text.Encoding]::UTF8.GetBytes($headerBuilder.ToString())
     $fileBytes = [System.IO.File]::ReadAllBytes($PackagePath)
-    $footerBytes = [System.Text.Encoding]::ASCII.GetBytes($footerText)
+    $footerBytes = [System.Text.Encoding]::UTF8.GetBytes($newLine + "--" + $boundary + "--" + $newLine)
 
     $buffer = New-Object byte[] ($headerBytes.Length + $fileBytes.Length + $footerBytes.Length)
     [System.Buffer]::BlockCopy($headerBytes, 0, $buffer, 0, $headerBytes.Length)
@@ -119,8 +113,13 @@ function Invoke-RokuSideload {
         }
 
         Start-Sleep -Milliseconds 1200
-        $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-        Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+        try {
+            $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+            Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+        }
+        catch {
+            Write-Host "keypress/Home => falhou"
+        }
         Start-Sleep -Milliseconds 1200
         $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
         $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
