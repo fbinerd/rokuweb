@@ -8,8 +8,8 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class ExperimentalAvMediaService : IDisposable
 {
-    private const double MinimumBufferedAudioSeconds = 2.0;
-    private const double ClipAudioSeconds = 4.0;
+    private const double MinimumBufferedAudioSeconds = 8.0;
+    private const double ClipAudioSeconds = 12.0;
     private readonly bool _enabled;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;

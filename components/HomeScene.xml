@@ -23,7 +23,7 @@
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Timer id="experimentalAvStateTimer" repeat="false" duration="0.5" />
     <Timer id="experimentalAvMediaProbeTimer" repeat="false" duration="0.5" />
-    <Timer id="experimentalAvDelayedPlayTimer" repeat="false" duration="6.0" />
+    <Timer id="experimentalAvDelayedPlayTimer" repeat="false" duration="12.0" />
     <Video
       id="fullscreenVideo"
       width="1280"
