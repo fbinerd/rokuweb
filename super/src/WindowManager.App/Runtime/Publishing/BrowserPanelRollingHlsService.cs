@@ -248,7 +248,7 @@ public sealed class BrowserPanelRollingHlsService
 
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -t {2:0.###} -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest -f mpegts \"{3}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -f mpegts \"{3}\"",
                         imagePath,
                         audioPath,
                         SegmentDuration.TotalSeconds,
