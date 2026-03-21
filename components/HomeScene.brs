@@ -27,6 +27,8 @@ sub init()
     m.audioChunkUrl = ""
     m.audioPlayer = CreateObject("roAudioPlayer")
     m.audioUsesHls = false
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -52,6 +54,7 @@ sub init()
     m.audioHlsRestartTimer = m.top.findNode("audioHlsRestartTimer")
     m.panelAudioNode = m.top.findNode("panelAudioNode")
     m.panelAudioVideo = m.top.findNode("panelAudioVideo")
+    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -107,6 +110,9 @@ sub init()
     end if
     if m.panelAudioVideo <> invalid
         m.panelAudioVideo.observeField("state", "onPanelAudioVideoStateChanged")
+    end if
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
     end if
     m.top.setFocus(true)
 
@@ -285,6 +291,7 @@ sub applyBridgeResponse()
             title: getString(window.title, "Janela sem titulo")
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
+            streamUrl: getString(window.streamUrl, "")
             initialUrl: getString(window.initialUrl, "")
             audioStreamUrl: getString(window.audioStreamUrl, "")
             audioAvailable: getBool(window.audioAvailable, false)
@@ -454,10 +461,26 @@ sub showFullscreen()
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
-    m.activeFullscreenPoster.visible = true
-    m.bufferFullscreenPoster.visible = false
-    m.bufferFullscreenPoster.uri = ""
+    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
+    m.videoStreamUrl = getString(entry.streamUrl, "")
+    if m.videoUsesStream and m.fullscreenVideo <> invalid
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(m.videoStreamUrl)
+        content.streamFormat = "hls"
+        content.title = getString(entry.title, "Painel")
+        m.fullscreenVideo.content = content
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.visible = true
+        m.fullscreenVideo.control = "play"
+        m.activeFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.visible = false
+        m.statusLabel.text = "Iniciando stream HLS do painel..."
+    else
+        m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.activeFullscreenPoster.visible = true
+        m.bufferFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.uri = ""
+    end if
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
@@ -472,6 +495,13 @@ sub hideFullscreen()
     stopHeldDirection()
     stopFullscreenStream()
     stopPanelAudio()
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -524,6 +554,36 @@ sub startPanelAudio(entry as object)
     if m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
         m.audioFallbackTimer.control = "start"
+    end if
+end sub
+
+sub onFullscreenVideoStateChanged()
+    if m.fullscreenVideo = invalid or not m.videoUsesStream
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.statusLabel.text = "Stream HLS do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando stream HLS do painel..."
+    else if state = "error"
+        m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
+    else if state = "finished" or state = "stopped"
+        if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
+            content = CreateObject("roSGNode", "ContentNode")
+            content.url = appendCacheBust(m.videoStreamUrl)
+            content.streamFormat = "hls"
+            content.title = "Painel"
+            m.fullscreenVideo.content = content
+            m.fullscreenVideo.control = "stop"
+            m.fullscreenVideo.control = "play"
+            m.statusLabel.text = "Reiniciando stream HLS do painel..."
+        end if
     end if
 end sub
 
