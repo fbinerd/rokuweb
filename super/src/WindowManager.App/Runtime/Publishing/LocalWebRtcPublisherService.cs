@@ -896,10 +896,13 @@ public sealed class LocalWebRtcPublisherService
                 WindowId = updated.WindowId,
                 OfferCount = updated.OfferCount,
                 StateUrl = snapshot.ExperimentalAvUrl + "/state",
+                AnswerType = updated.AnswerType,
+                AnswerSdp = updated.AnswerSdp,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
-                    "Resposta SDP ainda e placeholder; o transporte WebRTC real entra no proximo passo."
+                    "Resposta SDP placeholder gerada.",
+                    "O transporte experimental de audio/video ainda nao esta conectado."
                 }
             };
 
@@ -932,10 +935,11 @@ public sealed class LocalWebRtcPublisherService
                 "offer-post",
                 "state-poll"
             },
+            MediaTransportImplemented = false,
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",
-                "Ainda nao ha peer connection, answer SDP real ou transporte WebRTC A/V implementado."
+                "Ainda nao ha peer connection ou transporte WebRTC A/V real implementado."
             }
         };
 

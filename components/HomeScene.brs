@@ -779,6 +779,14 @@ sub onExperimentalAvOfferTaskCompleted()
         return
     end if
 
+    json = ParseJson(responseBody)
+    if json <> invalid
+        answerType = getString(json.answerType, "")
+        if answerType <> ""
+            ? "[ExpAV] answer => "; answerType
+        end if
+    end if
+
     m.experimentalAvOfferPosted = true
     m.experimentalAvLastAction = "state"
     ? "[ExpAV] offer accepted"
@@ -812,12 +820,24 @@ sub onExperimentalAvStateTaskCompleted()
     if json.offerCount <> invalid
         offerCount = json.offerCount
     end if
+    mediaReady = false
+    if json.mediaReady <> invalid
+        mediaReady = json.mediaReady
+    end if
+    transportImplemented = false
+    if json.mediaTransportImplemented <> invalid
+        transportImplemented = json.mediaTransportImplemented
+    end if
 
-    ? "[ExpAV] state => "; statusText; " offers="; offerCount
+    ? "[ExpAV] state => "; statusText; " offers="; offerCount; " mediaReady="; mediaReady; " transport="; transportImplemented
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
-        m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
+        if transportImplemented
+            m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
+        else
+            m.subtitleLabel.text = "Sinalizacao OK; transporte A/V experimental ainda nao conectado."
+        end if
         scheduleExperimentalAvStatePoll()
 end sub
 

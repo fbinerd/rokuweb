@@ -80,11 +80,16 @@ public sealed class ExperimentalWebRtcAvService
         state.LastOfferSdp = payload.Sdp ?? string.Empty;
         state.LastOfferSource = payload.Source ?? string.Empty;
         state.OfferCount += 1;
-        state.Status = "offer-received";
+        state.Status = "answer-ready";
+        state.AnswerType = "answer";
+        state.AnswerSdp = BuildPlaceholderAnswerSdp(windowId);
+        state.MediaTransportImplemented = false;
+        state.MediaReady = false;
         state.LastTouchedUtc = DateTime.UtcNow.ToString("O");
         state.Notes = new List<string>
         {
             "Offer recebida e persistida no super.",
+            "Resposta SDP placeholder gerada para a sessao experimental.",
             "Ainda nao existe peer connection WebRTC real; esta branch prepara a trilha de sinalizacao."
         };
         return state;
@@ -94,6 +99,26 @@ public sealed class ExperimentalWebRtcAvService
     {
         _sessions.TryGetValue(windowId, out var state);
         return state;
+    }
+
+    private static string BuildPlaceholderAnswerSdp(Guid windowId)
+    {
+        return
+            "v=0\r\n" +
+            "o=superpainel 0 0 IN IP4 127.0.0.1\r\n" +
+            "s=SuperPainel Experimental AV\r\n" +
+            "t=0 0\r\n" +
+            "a=msid-semantic: WMS " + windowId.ToString("N") + "\r\n" +
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" +
+            "c=IN IP4 0.0.0.0\r\n" +
+            "a=mid:0\r\n" +
+            "a=inactive\r\n" +
+            "a=rtpmap:111 opus/48000/2\r\n" +
+            "m=video 9 UDP/TLS/RTP/SAVPF 102\r\n" +
+            "c=IN IP4 0.0.0.0\r\n" +
+            "a=mid:1\r\n" +
+            "a=inactive\r\n" +
+            "a=rtpmap:102 H264/90000\r\n";
     }
 }
 
@@ -133,7 +158,10 @@ public sealed class WindowSessionSessionInfo
     [DataMember(Name = "supportedTransports", Order = 11)]
     public List<string> SupportedTransports { get; set; } = new List<string>();
 
-    [DataMember(Name = "notes", Order = 12)]
+    [DataMember(Name = "mediaTransportImplemented", Order = 12)]
+    public bool MediaTransportImplemented { get; set; }
+
+    [DataMember(Name = "notes", Order = 13)]
     public List<string> Notes { get; set; } = new List<string>();
 }
 
@@ -189,7 +217,13 @@ public sealed class ExperimentalWebRtcSessionState
     [DataMember(Name = "answerSdp", Order = 12)]
     public string AnswerSdp { get; set; } = string.Empty;
 
-    [DataMember(Name = "notes", Order = 13)]
+    [DataMember(Name = "mediaTransportImplemented", Order = 13)]
+    public bool MediaTransportImplemented { get; set; }
+
+    [DataMember(Name = "mediaReady", Order = 14)]
+    public bool MediaReady { get; set; }
+
+    [DataMember(Name = "notes", Order = 15)]
     public List<string> Notes { get; set; } = new List<string>();
 }
 
@@ -211,6 +245,12 @@ public sealed class ExperimentalWebRtcOfferAccepted
     [DataMember(Name = "stateUrl", Order = 5)]
     public string StateUrl { get; set; } = string.Empty;
 
-    [DataMember(Name = "notes", Order = 6)]
+    [DataMember(Name = "answerType", Order = 6)]
+    public string AnswerType { get; set; } = string.Empty;
+
+    [DataMember(Name = "answerSdp", Order = 7)]
+    public string AnswerSdp { get; set; } = string.Empty;
+
+    [DataMember(Name = "notes", Order = 8)]
     public List<string> Notes { get; set; } = new List<string>();
 }
