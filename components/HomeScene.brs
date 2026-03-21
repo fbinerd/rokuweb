@@ -54,6 +54,7 @@ sub init()
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
+    m.experimentalAvStateRequestInFlight = false
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -712,6 +713,7 @@ sub stopExperimentalAv()
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
+    m.experimentalAvStateRequestInFlight = false
     if m.experimentalAvStateTimer <> invalid
         m.experimentalAvStateTimer.control = "stop"
     end if
@@ -828,6 +830,7 @@ sub onExperimentalAvStateTaskCompleted()
         return
     end if
 
+    m.experimentalAvStateRequestInFlight = false
     responseBody = m.experimentalAvStateTask.responseBody
     ? "[ExpAV] responseCode="; m.experimentalAvStateTask.responseCode; " action=state"
     if responseBody = invalid or responseBody = ""
@@ -934,6 +937,12 @@ sub onExperimentalAvStateTimerFire()
         return
     end if
 
+    if m.experimentalAvStateRequestInFlight
+        scheduleExperimentalAvStatePoll()
+        return
+    end if
+
+    m.experimentalAvStateRequestInFlight = true
     m.experimentalAvLastAction = "state"
     runExperimentalAvRequest(m.experimentalAvStateTask, m.experimentalAvStateUrl, "GET", "")
 end sub
