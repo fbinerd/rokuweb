@@ -16,6 +16,7 @@ public sealed class BrowserPanelRollingHlsService
     private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
     private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(1800);
     private const int PlaylistSize = 6;
+    private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
     private readonly BrowserSnapshotService _snapshotService;
     private readonly BrowserAudioCaptureService _audioCaptureService;
@@ -33,6 +34,10 @@ public sealed class BrowserPanelRollingHlsService
         if (!string.IsNullOrWhiteSpace(_ffmpegPath))
         {
             AppLog.Write("PanelRollingHls", $"ffmpeg detectado para HLS rolling do painel: {_ffmpegPath}");
+            if (UseSyntheticAudio)
+            {
+                AppLog.Write("PanelRollingHls", "Modo sintetico habilitado para diagnostico de audio.");
+            }
         }
         else
         {
@@ -230,7 +235,9 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
-                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId);
+                    var wavBytes = UseSyntheticAudio
+                        ? BuildSineWaveSnapshot()
+                        : audioCaptureService.CaptureWaveSnapshot(_windowId);
                     if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
@@ -402,5 +409,50 @@ public sealed class BrowserPanelRollingHlsService
         public string FileName { get; }
 
         public TimeSpan Duration { get; }
+    }
+
+    private static byte[] BuildSineWaveSnapshot()
+    {
+        const int sampleRate = 48000;
+        const int channels = 2;
+        const double frequency = 440.0;
+        var totalFrames = (int)Math.Round(SegmentDuration.TotalSeconds * sampleRate);
+        var pcmBytes = new byte[totalFrames * channels * 2];
+        var writeIndex = 0;
+
+        for (var frame = 0; frame < totalFrames; frame++)
+        {
+            var sample = (short)Math.Round(Math.Sin((2.0 * Math.PI * frequency * frame) / sampleRate) * (short.MaxValue * 0.25));
+            for (var channel = 0; channel < channels; channel++)
+            {
+                pcmBytes[writeIndex++] = (byte)(sample & 0xFF);
+                pcmBytes[writeIndex++] = (byte)((sample >> 8) & 0xFF);
+            }
+        }
+
+        using (var stream = new MemoryStream(44 + pcmBytes.Length))
+        using (var writer = new BinaryWriter(stream))
+        {
+            const int bitsPerSample = 16;
+            var blockAlign = channels * bitsPerSample / 8;
+            var byteRate = sampleRate * blockAlign;
+
+            writer.Write(new[] { 'R', 'I', 'F', 'F' });
+            writer.Write(36 + pcmBytes.Length);
+            writer.Write(new[] { 'W', 'A', 'V', 'E' });
+            writer.Write(new[] { 'f', 'm', 't', ' ' });
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write((short)channels);
+            writer.Write(sampleRate);
+            writer.Write(byteRate);
+            writer.Write((short)blockAlign);
+            writer.Write((short)bitsPerSample);
+            writer.Write(new[] { 'd', 'a', 't', 'a' });
+            writer.Write(pcmBytes.Length);
+            writer.Write(pcmBytes);
+            writer.Flush();
+            return stream.ToArray();
+        }
     }
 }
