@@ -880,6 +880,11 @@ sub onExperimentalAvStateTaskCompleted()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
+        if mediaReady and m.experimentalAvMediaUrl <> "" and not m.experimentalAvPlaybackStarted
+            ? "[ExpAV] state ready => play media"
+            startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+            m.experimentalAvPlaybackStarted = true
+        end if
         if transportImplemented
             m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
         else
