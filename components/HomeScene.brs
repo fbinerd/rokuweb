@@ -665,6 +665,7 @@ end sub
 
 sub maybeStartExperimentalAv(entry as object)
     experimentalAvUrl = getString(entry.experimentalAvUrl, "")
+    ? "[ExpAV] entry="; getString(entry.id, ""); " url="; experimentalAvUrl
     if experimentalAvUrl = ""
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
@@ -681,6 +682,7 @@ sub maybeStartExperimentalAv(entry as object)
     m.subtitleLabel.visible = true
     m.statusLabel.text = "Sessao experimental A/V detectada"
     m.subtitleLabel.text = "Consultando sessao experimental..."
+    ? "[ExpAV] session GET => "; experimentalAvUrl
     runExperimentalAvRequest(experimentalAvUrl, "GET", "")
 end sub
 
@@ -699,6 +701,7 @@ sub runExperimentalAvRequest(url as string, method as string, body as string)
         return
     end if
 
+    ? "[ExpAV] request => "; method; " "; url
     m.experimentalAvTask.bridgeUrl = url
     m.experimentalAvTask.httpMethod = method
     m.experimentalAvTask.requestBody = body
@@ -714,7 +717,9 @@ sub onExperimentalAvTaskCompleted()
     end if
 
     responseBody = m.experimentalAvTask.responseBody
+    ? "[ExpAV] responseCode="; m.experimentalAvTask.responseCode; " action="; m.experimentalAvLastAction
     if responseBody = invalid or responseBody = ""
+        ? "[ExpAV] empty response"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental A/V sem resposta"
@@ -724,6 +729,7 @@ sub onExperimentalAvTaskCompleted()
 
     json = ParseJson(responseBody)
     if json = invalid
+        ? "[ExpAV] invalid json"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Resposta invalida da sessao experimental"
@@ -735,6 +741,7 @@ sub onExperimentalAvTaskCompleted()
         offerUrl = getString(json.offerUrl, "")
         stateUrl = getString(json.stateUrl, "")
         if offerUrl = "" or stateUrl = ""
+            ? "[ExpAV] missing offer/state url"
             m.statusLabel.visible = true
             m.subtitleLabel.visible = true
             m.statusLabel.text = "Sessao experimental incompleta"
@@ -744,6 +751,7 @@ sub onExperimentalAvTaskCompleted()
 
         m.experimentalAvStateUrl = stateUrl
         m.experimentalAvLastAction = "offer"
+        ? "[ExpAV] session ok => offer="; offerUrl; " state="; stateUrl
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental encontrada"
@@ -756,6 +764,7 @@ sub onExperimentalAvTaskCompleted()
     if m.experimentalAvLastAction = "offer"
         m.experimentalAvOfferPosted = true
         m.experimentalAvLastAction = "state"
+        ? "[ExpAV] offer accepted"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Offer experimental entregue"
@@ -771,6 +780,7 @@ sub onExperimentalAvTaskCompleted()
             offerCount = json.offerCount
         end if
 
+        ? "[ExpAV] state => "; statusText; " offers="; offerCount
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
