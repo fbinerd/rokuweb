@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.Serialization;
@@ -807,6 +808,16 @@ public sealed class LocalWebRtcPublisherService
 
     private static string GetExpectedRokuChannelVersion()
     {
+        var currentChannel = UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel);
+        if (string.Equals(currentChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase))
+        {
+            var localPackageReleaseId = TryReadLocalRokuPackageReleaseId();
+            if (!string.IsNullOrWhiteSpace(localPackageReleaseId))
+            {
+                return localPackageReleaseId;
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(BuildVersionInfo.ReleaseId))
         {
             return BuildVersionInfo.ReleaseId;
@@ -842,6 +853,58 @@ public sealed class LocalWebRtcPublisherService
                     }
 
                     return string.Format("{0}.{1}.{2}", major, minor, build);
+                }
+
+                current = current.Parent;
+            }
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
+    }
+
+    private static string TryReadLocalRokuPackageReleaseId()
+    {
+        try
+        {
+            var current = new DirectoryInfo(AppContext.BaseDirectory);
+            while (current is not null)
+            {
+                var manifestPath = Path.Combine(current.FullName, "manifest");
+                var localPackagePath = Path.Combine(current.FullName, UpdateChannelNames.Local + "-roku.zip");
+                if (File.Exists(manifestPath) && File.Exists(localPackagePath))
+                {
+                    using (var archive = ZipFile.OpenRead(localPackagePath))
+                    {
+                        var entry = archive.GetEntry("source/BuildInfo.brs");
+                        if (entry is null)
+                        {
+                            return string.Empty;
+                        }
+
+                        using (var stream = entry.Open())
+                        using (var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, true))
+                        {
+                            var content = reader.ReadToEnd();
+                            var marker = "return \"";
+                            var startIndex = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                            if (startIndex < 0)
+                            {
+                                return string.Empty;
+                            }
+
+                            startIndex += marker.Length;
+                            var endIndex = content.IndexOf('"', startIndex);
+                            if (endIndex <= startIndex)
+                            {
+                                return string.Empty;
+                            }
+
+                            return content.Substring(startIndex, endIndex - startIndex).Trim();
+                        }
+                    }
                 }
 
                 current = current.Parent;
