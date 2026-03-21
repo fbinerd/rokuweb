@@ -27,8 +27,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, Border> _previewBrowserHosts = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, ChromiumWebBrowser> _previewBrowsers = new Dictionary<Guid, ChromiumWebBrowser>();
-    private readonly Dictionary<Guid, PreviewWindow> _detailWindows = new Dictionary<Guid, PreviewWindow>();
     private TransmissionLogWindow? _logWindow;
+    private Guid? _expandedPreviewWindowId;
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService)
     {
@@ -294,17 +294,16 @@ public partial class MainWindow : Window
 
         _previewBrowserHosts.Remove(session.Id);
 
-        if (_detailWindows.TryGetValue(session.Id, out var detailWindow))
-        {
-            detailWindow.Close();
-            _detailWindows.Remove(session.Id);
-        }
-
         if (_previewBrowsers.TryGetValue(session.Id, out var browser))
         {
             _browserSnapshotService.Unregister(session.Id);
             browser.Dispose();
             _previewBrowsers.Remove(session.Id);
+        }
+
+        if (_expandedPreviewWindowId == session.Id)
+        {
+            CloseExpandedPreview();
         }
     }
 
@@ -319,7 +318,7 @@ public partial class MainWindow : Window
 
         if (e.ClickCount >= 2)
         {
-            OpenDetailWindow(session);
+            ToggleExpandedPreview(session);
         }
     }
 
@@ -486,70 +485,49 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void OpenDetailWindow(WindowSession session, bool preferConnectedDisplay = false)
+    private void ToggleExpandedPreview(WindowSession session)
     {
-        if (_detailWindows.TryGetValue(session.Id, out var existingWindow))
+        if (_expandedPreviewWindowId == session.Id)
         {
-            if (preferConnectedDisplay)
-            {
-                MoveDetailWindowToConnectedDisplay(existingWindow);
-            }
-
-            existingWindow.Activate();
+            CloseExpandedPreview();
             return;
         }
 
-        var sharedBrowser = AppRuntimeState.BrowserEngineAvailable && _previewBrowsers.TryGetValue(session.Id, out var browser)
+        if (!AppRuntimeState.BrowserEngineAvailable)
+        {
+            return;
+        }
+
+        CloseExpandedPreview();
+
+        var sharedBrowser = _previewBrowsers.TryGetValue(session.Id, out var browser)
             ? browser
             : null;
 
         if (sharedBrowser is not null && _previewBrowserHosts.TryGetValue(session.Id, out var browserHost))
         {
-            browserHost.Child = BuildDetachedBrowserPlaceholder();
             ApplyExpandedBrowserPresentation(sharedBrowser);
+            browserHost.Child = BuildDetachedBrowserPlaceholder();
+            ExpandedPreviewHost.Child = sharedBrowser;
+            ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
+            ExpandedPreviewOverlay.Visibility = Visibility.Visible;
+            _expandedPreviewWindowId = session.Id;
         }
-
-        var detailWindow = sharedBrowser is not null
-            ? new PreviewWindow(session, sharedBrowser, () => RestorePreviewBrowser(session.Id))
-            : new PreviewWindow(session);
-        if (!preferConnectedDisplay)
-        {
-            detailWindow.Owner = this;
-        }
-
-        detailWindow.Closed += (_, __) =>
-        {
-            _detailWindows.Remove(session.Id);
-        };
-
-        _detailWindows[session.Id] = detailWindow;
-        if (preferConnectedDisplay)
-        {
-            MoveDetailWindowToConnectedDisplay(detailWindow);
-        }
-
-        detailWindow.Show();
     }
 
-    private static void MoveDetailWindowToConnectedDisplay(Window window)
+    private void CloseExpandedPreview()
     {
-        var secondaryScreen = Forms.Screen.AllScreens.FirstOrDefault(screen => !screen.Primary);
-        if (secondaryScreen is null)
+        if (!_expandedPreviewWindowId.HasValue)
         {
             return;
         }
 
-        var bounds = secondaryScreen.Bounds;
-        window.WindowStartupLocation = WindowStartupLocation.Manual;
-        window.WindowStyle = WindowStyle.None;
-        window.ResizeMode = ResizeMode.NoResize;
-        window.ShowInTaskbar = false;
-        window.Topmost = true;
-        window.WindowState = WindowState.Normal;
-        window.Left = bounds.Left;
-        window.Top = bounds.Top;
-        window.Width = bounds.Width;
-        window.Height = bounds.Height;
+        var windowId = _expandedPreviewWindowId.Value;
+        _expandedPreviewWindowId = null;
+        ExpandedPreviewOverlay.Visibility = Visibility.Collapsed;
+        ExpandedPreviewTitle.Text = string.Empty;
+        ExpandedPreviewHost.Child = null;
+        RestorePreviewBrowser(windowId);
     }
 
     private void OnWindowSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -572,7 +550,7 @@ public partial class MainWindow : Window
             session.State == WindowSessionState.Streaming &&
             session.AssignedTarget?.TransportKind == DisplayTransportKind.Miracast)
         {
-            Dispatcher.Invoke(() => OpenDetailWindow(session, preferConnectedDisplay: true));
+            Dispatcher.Invoke(() => ToggleExpandedPreview(session));
         }
     }
 
@@ -609,12 +587,8 @@ public partial class MainWindow : Window
             window.PropertyChanged -= OnWindowSessionPropertyChanged;
         }
 
-        foreach (var detailWindow in _detailWindows.Values)
-        {
-            detailWindow.Close();
-        }
-
         _logWindow?.Close();
+        CloseExpandedPreview();
 
         foreach (var browser in _previewBrowsers.Values)
         {
@@ -669,6 +643,11 @@ public partial class MainWindow : Window
                 VerticalAlignment = VerticalAlignment.Center
             }
         };
+    }
+
+    private void OnCloseExpandedPreviewClick(object sender, RoutedEventArgs e)
+    {
+        CloseExpandedPreview();
     }
 }
 

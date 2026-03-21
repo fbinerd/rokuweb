@@ -441,11 +441,59 @@
             </StackPanel>
         </ScrollViewer>
 
-        <GroupBox Grid.Row="1" Grid.Column="2" Header="Painel Simultaneo">
-            <ScrollViewer Margin="12" VerticalScrollBarVisibility="Auto">
-                <WrapPanel x:Name="PreviewPanel" ItemWidth="360" ItemHeight="260" />
-            </ScrollViewer>
-        </GroupBox>
+        <Grid Grid.Row="1" Grid.Column="2">
+            <GroupBox Header="Painel Simultaneo">
+                <ScrollViewer Margin="12" VerticalScrollBarVisibility="Auto">
+                    <WrapPanel x:Name="PreviewPanel" ItemWidth="360" ItemHeight="260" />
+                </ScrollViewer>
+            </GroupBox>
+
+            <Border x:Name="ExpandedPreviewOverlay"
+                    Visibility="Collapsed"
+                    Background="#CC0F172A"
+                    CornerRadius="12"
+                    Margin="8"
+                    Panel.ZIndex="10">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock x:Name="ExpandedPreviewTitle"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"
+                                   VerticalAlignment="Center" />
+
+                        <Button Grid.Column="1"
+                                Width="120"
+                                Height="34"
+                                Margin="12,0,0,0"
+                                Content="Fechar"
+                                Click="OnCloseExpandedPreviewClick" />
+                    </Grid>
+
+                    <Border Grid.Row="1"
+                            Margin="0,16,0,0"
+                            Background="White"
+                            CornerRadius="12"
+                            BorderBrush="#CBD5E1"
+                            BorderThickness="1">
+                        <Border x:Name="ExpandedPreviewHost"
+                                Margin="12"
+                                Background="#F8FAFC"
+                                CornerRadius="8" />
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
 
         <TextBlock Grid.Row="2"
                    Grid.ColumnSpan="3"
