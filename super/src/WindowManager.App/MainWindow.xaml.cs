@@ -306,7 +306,6 @@ public partial class MainWindow : Window
 
         if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
         {
-            captureWindow.CurrentAddressChanged -= OnCaptureWindowCurrentAddressChanged;
             _browserSnapshotService.Unregister(session.Id);
             captureWindow.Close();
             _captureWindows.Remove(session.Id);
@@ -606,42 +605,9 @@ public partial class MainWindow : Window
         }
 
         var captureWindow = new BrowserCaptureWindow(session.InitialUri);
-        captureWindow.Tag = session.Id;
-        captureWindow.CurrentAddressChanged += OnCaptureWindowCurrentAddressChanged;
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
         captureWindow.Show();
-    }
-
-    private void OnCaptureWindowCurrentAddressChanged(object? sender, Uri? currentUri)
-    {
-        if (sender is not BrowserCaptureWindow captureWindow || captureWindow.Tag is not Guid windowId)
-        {
-            return;
-        }
-
-        var session = _viewModel.Windows.FirstOrDefault(x => x.Id == windowId);
-        if (session is null || currentUri is null)
-        {
-            return;
-        }
-
-        if (currentUri.Scheme != Uri.UriSchemeHttp && currentUri.Scheme != Uri.UriSchemeHttps)
-        {
-            return;
-        }
-
-        if (string.Equals(session.InitialUri?.ToString(), currentUri.ToString(), StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        session.InitialUri = currentUri;
-
-        if (_viewModel.SelectedWindow?.Id == session.Id)
-        {
-            _viewModel.BrowserUrlInput = currentUri.ToString();
-        }
     }
 
     private void OnCloseExpandedPreviewClick(object sender, RoutedEventArgs e)

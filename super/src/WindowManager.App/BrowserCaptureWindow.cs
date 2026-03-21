@@ -6,8 +6,6 @@ namespace WindowManager.App;
 
 public sealed class BrowserCaptureWindow : Window
 {
-    public event EventHandler<Uri?>? CurrentAddressChanged;
-
     public BrowserCaptureWindow(Uri? initialUri)
     {
         Width = 1280;
@@ -24,7 +22,6 @@ public sealed class BrowserCaptureWindow : Window
         {
             Address = initialUri?.ToString() ?? "about:blank"
         };
-        Browser.AddressChanged += OnBrowserAddressChanged;
 
         Content = Browser;
     }
@@ -42,20 +39,7 @@ public sealed class BrowserCaptureWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        Browser.AddressChanged -= OnBrowserAddressChanged;
         Browser.Dispose();
         base.OnClosed(e);
-    }
-
-    private void OnBrowserAddressChanged(object? sender, DependencyPropertyChangedEventArgs e)
-    {
-        var address = e.NewValue as string;
-        if (Uri.TryCreate(address, UriKind.Absolute, out var uri))
-        {
-            CurrentAddressChanged?.Invoke(this, uri);
-            return;
-        }
-
-        CurrentAddressChanged?.Invoke(this, null);
     }
 }
