@@ -17,6 +17,7 @@ sub execute()
     url = "http://" + bridgeHost + "/api/windows"
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)
+    transfer.SetMinimumTransferRate(1, 2)
 
     responseBody = invalid
     responseCode = 0
@@ -58,6 +59,7 @@ sub registerDisplay(bridgeHost as string)
 
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(registerUrl)
+    transfer.SetMinimumTransferRate(1, 2)
     ignored = transfer.GetToString()
 end sub
 
