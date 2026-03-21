@@ -336,6 +336,12 @@ public sealed class LocalWebRtcPublisherService
 
         if (string.Equals(normalizedPath, "/api/windows", StringComparison.OrdinalIgnoreCase))
         {
+            AppLog.Write(
+                "Bridge",
+                string.Format(
+                    "/api/windows solicitado por {0}. Janelas={1}",
+                    string.IsNullOrWhiteSpace(remoteAddress) ? "(desconhecido)" : remoteAddress,
+                    _windowSnapshots.Count));
             return BuildHttpResponse(200, BuildWindowsJson(), "application/json; charset=utf-8");
         }
 
