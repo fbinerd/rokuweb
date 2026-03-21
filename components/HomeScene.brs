@@ -39,11 +39,17 @@ sub init()
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
+    m.experimentalAvTask = m.top.findNode("experimentalAvTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
+    m.experimentalAvStateTimer = m.top.findNode("experimentalAvStateTimer")
+    m.experimentalAvMode = false
+    m.experimentalAvOfferPosted = false
+    m.experimentalAvStateUrl = ""
+    m.experimentalAvLastAction = ""
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -87,10 +93,12 @@ sub init()
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
+    m.experimentalAvStateTimer.observeField("fire", "onExperimentalAvStateTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
+    m.experimentalAvTask.observeField("completedToken", "onExperimentalAvTaskCompleted")
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -269,6 +277,7 @@ sub applyBridgeResponse()
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
+            experimentalAvUrl: getString(window.experimentalAvUrl, "")
         })
     end for
 
@@ -445,8 +454,13 @@ sub showFullscreen()
     m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
+    m.experimentalAvMode = false
+    m.experimentalAvOfferPosted = false
+    m.experimentalAvStateUrl = ""
+    m.experimentalAvLastAction = ""
     stopPanelRefresh()
     updateCursorMarker()
+    maybeStartExperimentalAv(entry)
     startFullscreenStream()
     m.top.setFocus(true)
 end sub
@@ -461,6 +475,7 @@ sub hideFullscreen()
     m.titleLabel.visible = true
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
+    stopExperimentalAv()
     startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
@@ -646,6 +661,136 @@ end sub
 
 sub onFullscreenStreamTimerFire()
     refreshFullscreenPreview()
+end sub
+
+sub maybeStartExperimentalAv(entry as object)
+    experimentalAvUrl = getString(entry.experimentalAvUrl, "")
+    if experimentalAvUrl = ""
+        return
+    end if
+
+    m.experimentalAvMode = true
+    m.experimentalAvOfferPosted = false
+    m.experimentalAvStateUrl = ""
+    m.experimentalAvLastAction = "session"
+    m.statusLabel.visible = true
+    m.subtitleLabel.visible = true
+    m.statusLabel.text = "Sessao experimental A/V detectada"
+    m.subtitleLabel.text = "Consultando sessao experimental..."
+    runExperimentalAvRequest(experimentalAvUrl, "GET", "")
+end sub
+
+sub stopExperimentalAv()
+    m.experimentalAvMode = false
+    m.experimentalAvOfferPosted = false
+    m.experimentalAvStateUrl = ""
+    m.experimentalAvLastAction = ""
+    if m.experimentalAvStateTimer <> invalid
+        m.experimentalAvStateTimer.control = "stop"
+    end if
+end sub
+
+sub runExperimentalAvRequest(url as string, method as string, body as string)
+    if m.experimentalAvTask = invalid or url = ""
+        return
+    end if
+
+    m.experimentalAvTask.bridgeUrl = url
+    m.experimentalAvTask.httpMethod = method
+    m.experimentalAvTask.requestBody = body
+    m.experimentalAvTask.responseCode = 0
+    m.experimentalAvTask.responseBody = ""
+    m.experimentalAvTask.errorMessage = ""
+    m.experimentalAvTask.control = "RUN"
+end sub
+
+sub onExperimentalAvTaskCompleted()
+    if not m.experimentalAvMode or m.experimentalAvTask = invalid
+        return
+    end if
+
+    responseBody = m.experimentalAvTask.responseBody
+    if responseBody = invalid or responseBody = ""
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Sessao experimental A/V sem resposta"
+        m.subtitleLabel.text = "Continuando no preview atual."
+        return
+    end if
+
+    json = ParseJson(responseBody)
+    if json = invalid
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Resposta invalida da sessao experimental"
+        m.subtitleLabel.text = "Continuando no preview atual."
+        return
+    end if
+
+    if m.experimentalAvLastAction = "session"
+        offerUrl = getString(json.offerUrl, "")
+        stateUrl = getString(json.stateUrl, "")
+        if offerUrl = "" or stateUrl = ""
+            m.statusLabel.visible = true
+            m.subtitleLabel.visible = true
+            m.statusLabel.text = "Sessao experimental incompleta"
+            m.subtitleLabel.text = "offerUrl/stateUrl ausentes."
+            return
+        end if
+
+        m.experimentalAvStateUrl = stateUrl
+        m.experimentalAvLastAction = "offer"
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Enviando offer experimental..."
+        m.subtitleLabel.text = "Sinalizacao placeholder para a janela selecionada."
+        offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
+        runExperimentalAvRequest(offerUrl, "POST", offerBody)
+        return
+    end if
+
+    if m.experimentalAvLastAction = "offer"
+        m.experimentalAvOfferPosted = true
+        m.experimentalAvLastAction = "state"
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Offer experimental aceita"
+        m.subtitleLabel.text = "Acompanhando state da sessao..."
+        scheduleExperimentalAvStatePoll()
+        return
+    end if
+
+    if m.experimentalAvLastAction = "state"
+        statusText = getString(json.status, "desconhecido")
+        offerCount = 0
+        if json.offerCount <> invalid
+            offerCount = json.offerCount
+        end if
+
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Sessao experimental: " + statusText
+        m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
+        scheduleExperimentalAvStatePoll()
+    end if
+end sub
+
+sub scheduleExperimentalAvStatePoll()
+    if not m.experimentalAvMode or m.experimentalAvStateUrl = "" or m.experimentalAvStateTimer = invalid
+        return
+    end if
+
+    m.experimentalAvStateTimer.control = "stop"
+    m.experimentalAvStateTimer.control = "start"
+end sub
+
+sub onExperimentalAvStateTimerFire()
+    if not m.experimentalAvMode or m.experimentalAvStateUrl = ""
+        return
+    end if
+
+    m.experimentalAvLastAction = "state"
+    runExperimentalAvRequest(m.experimentalAvStateUrl, "GET", "")
 end sub
 
 sub onClickControlTaskCompleted()

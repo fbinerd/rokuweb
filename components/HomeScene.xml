@@ -12,11 +12,13 @@
     <ControlTask id="controlTask" />
     <ControlTask id="clickControlTask" />
     <ControlTask id="textControlTask" />
+    <ExperimentalAvTask id="experimentalAvTask" />
     <Timer id="panelRefreshTimer" repeat="true" duration="5.0" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
     <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
+    <Timer id="experimentalAvStateTimer" repeat="false" duration="1.0" />
     <Rectangle
       id="background"
       width="1280"
