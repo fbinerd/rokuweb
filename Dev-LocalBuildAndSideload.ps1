@@ -3,7 +3,8 @@ param(
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
-    [switch]$SkipSideload
+    [switch]$SkipSideload,
+    [switch]$UseDiagnosticAvStream
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,6 +172,9 @@ function Test-TcpEndpoint {
 
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
+    if ($UseDiagnosticAvStream) {
+        $env:SUPERPAINEL_TEST_AV = "1"
+    }
     try {
         Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
@@ -183,6 +187,9 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
     finally {
         Pop-Location
         Remove-Item Env:SUPER_BUILD_CHANNEL -ErrorAction SilentlyContinue
+        if (-not $LaunchSuper) {
+            Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -201,6 +208,10 @@ if ($LaunchSuper) {
 
         Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath)
     }
+}
+
+if (-not $LaunchSuper) {
+    Remove-Item Env:SUPERPAINEL_TEST_AV -ErrorAction SilentlyContinue
 }
 
 if (-not $SkipSideload) {

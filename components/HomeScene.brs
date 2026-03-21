@@ -11,6 +11,8 @@ sub init()
     m.isClosingKeyboard = false
     m.isFullscreenRefreshInFlight = false
     m.previewRevision = 0
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
@@ -32,6 +34,7 @@ sub init()
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.cursorMarker = m.top.findNode("cursorMarker")
+    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
@@ -87,6 +90,9 @@ sub init()
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
+    end if
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
@@ -265,6 +271,7 @@ sub applyBridgeResponse()
             id: getString(window.id, "")
             title: getString(window.title, "Janela sem titulo")
             state: getString(window.state, "Desconhecido")
+            streamUrl: getString(window.streamUrl, "")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
         })
@@ -429,14 +436,31 @@ sub showFullscreen()
     m.cursorY = 360
     hideGrid()
     m.titleLabel.visible = false
-    m.statusLabel.visible = false
+    m.statusLabel.visible = true
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
-    m.activeFullscreenPoster.visible = true
-    m.bufferFullscreenPoster.visible = false
-    m.bufferFullscreenPoster.uri = ""
+    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
+    m.videoStreamUrl = getString(entry.streamUrl, "")
+    if m.videoUsesStream and m.fullscreenVideo <> invalid
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(m.videoStreamUrl)
+        content.streamFormat = "hls"
+        content.title = getString(entry.title, "Painel")
+        m.fullscreenVideo.content = content
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.visible = true
+        m.fullscreenVideo.control = "play"
+        m.activeFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.visible = false
+        m.statusLabel.text = "Iniciando stream A/V diagnostico..."
+    else
+        m.statusLabel.visible = false
+        m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.activeFullscreenPoster.visible = true
+        m.bufferFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.uri = ""
+    end if
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
@@ -449,6 +473,13 @@ sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -639,7 +670,55 @@ sub onPreviewRefreshTimerFire()
 end sub
 
 sub onFullscreenStreamTimerFire()
+    if m.videoUsesStream
+        return
+    end if
+
     refreshFullscreenPreview()
+end sub
+
+sub onFullscreenVideoStateChanged()
+    if m.fullscreenVideo = invalid or not m.videoUsesStream
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.statusLabel.text = "Stream A/V diagnostico em reproducao"
+        m.statusLabel.visible = false
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando stream A/V diagnostico..."
+        m.statusLabel.visible = true
+    else if state = "error" or state = "finished" or state = "stopped"
+        fallbackToPosterFullscreen("Falha no stream A/V; voltando ao preview")
+    end if
+end sub
+
+sub fallbackToPosterFullscreen(message as string)
+    if not m.isFullscreen or m.windowEntries.Count() = 0
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
+
+    m.statusLabel.text = message
+    m.statusLabel.visible = true
+    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+    m.activeFullscreenPoster.visible = true
+    m.bufferFullscreenPoster.visible = false
+    m.bufferFullscreenPoster.uri = ""
+    startFullscreenStream()
 end sub
 
 sub onClickControlTaskCompleted()

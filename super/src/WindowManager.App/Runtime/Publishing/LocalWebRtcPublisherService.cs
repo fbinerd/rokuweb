@@ -18,6 +18,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly DiagnosticAvHlsService _diagnosticAvHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -29,9 +30,10 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, DiagnosticAvHlsService diagnosticAvHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _diagnosticAvHlsService = diagnosticAvHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -189,6 +191,8 @@ public sealed class LocalWebRtcPublisherService
             activeIds.Add(window.Id);
         }
 
+        _diagnosticAvHlsService.EnsureStarted();
+
         foreach (var existingId in _windowSnapshots.Keys)
         {
             if (!activeIds.Contains(existingId))
@@ -318,6 +322,11 @@ public sealed class LocalWebRtcPublisherService
         if (normalizedPath.StartsWith("/thumbnails/", StringComparison.OrdinalIgnoreCase))
         {
             return await BuildThumbnailResponseAsync(normalizedPath, cancellationToken);
+        }
+
+        if (normalizedPath.StartsWith("/diag-av/", StringComparison.OrdinalIgnoreCase))
+        {
+            return await BuildDiagnosticAvResponseAsync(normalizedPath, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
@@ -591,6 +600,36 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
+    private async Task<byte[]> BuildDiagnosticAvResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_diagnosticAvHlsService.IsAvailable)
+        {
+            return BuildHttpResponse(404, "Stream A/V diagnostico indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var fileName = normalizedPath.Substring("/diag-av/".Length);
+        if (string.Equals(fileName, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_diagnosticAvHlsService.TryGetPlaylistPath(out var playlistPath))
+            {
+                return BuildHttpResponse(404, "Playlist A/V diagnostica indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var bytes = await Task.Run(() => File.ReadAllBytes(playlistPath), cancellationToken).ConfigureAwait(false);
+            return BuildBinaryHttpResponse(200, bytes, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_diagnosticAvHlsService.TryGetSegmentPath(fileName, out var segmentPath))
+        {
+            return BuildHttpResponse(404, "Segmento A/V diagnostico indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = await Task.Run(() => File.ReadAllBytes(segmentPath), cancellationToken).ConfigureAwait(false);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
     private static string ParsePath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -721,11 +760,14 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
-    private static BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
+    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var diagnosticStreamUrl = _diagnosticAvHlsService.IsAvailable
+            ? string.Format("http://{0}:{1}/diag-av/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
+            : string.Empty;
 
         return new BridgeWindowSnapshot
         {
@@ -734,7 +776,7 @@ public sealed class LocalWebRtcPublisherService
             State = window.State.ToString(),
             InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
             PublishedWebRtcUrl = publishedUrl,
-            StreamUrl = publishedUrl,
+            StreamUrl = string.IsNullOrWhiteSpace(diagnosticStreamUrl) ? publishedUrl : diagnosticStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
