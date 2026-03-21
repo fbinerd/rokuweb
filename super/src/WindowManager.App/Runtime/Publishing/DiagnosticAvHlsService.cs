@@ -166,12 +166,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
             var args =
                 "-hide_banner -loglevel error -y " +
                 "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
-                "-f lavfi -i sine=frequency=440:sample_rate=48000 " +
+                "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
                 "-map 0:v:0 -map 1:a:0 " +
                 "-t 60 " +
                 "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
-                "-c:a aac -b:a 128k -ar 48000 -ac 2 " +
-                "-movflags +faststart " +
+                "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
+                "-movflags +faststart -brand mp42 " +
                 "\"" + outputPath + "\"";
 
             using var process = Process.Start(new ProcessStartInfo

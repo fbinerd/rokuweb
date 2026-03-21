@@ -452,6 +452,7 @@ sub showFullscreen()
     if m.videoUsesStream and m.fullscreenVideo <> invalid
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
+        content.live = false
         if Instr(1, streamUrlLower, ".mp4") > 0
             content.streamFormat = "mp4"
             m.statusLabel.text = "Iniciando stream A/V diagnostico MP4..."
