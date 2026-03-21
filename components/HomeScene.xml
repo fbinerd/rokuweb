@@ -18,6 +18,7 @@
     <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
     <Timer id="audioRetryTimer" repeat="false" duration="0.25" />
+    <Timer id="audioFallbackTimer" repeat="false" duration="1.5" />
     <Audio id="panelAudioNode" />
     <Rectangle
       id="background"
