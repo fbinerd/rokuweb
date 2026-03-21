@@ -997,7 +997,7 @@ sub onExperimentalAvMediaProbeTimerFire()
     end if
 
     m.experimentalAvMediaProbeInFlight = true
-    runExperimentalAvRequest(m.experimentalAvMediaTask, m.experimentalAvMediaUrl, "GET", "")
+    runExperimentalAvRequest(m.experimentalAvMediaTask, m.experimentalAvMediaUrl, "HEAD", "")
 end sub
 
 sub onExperimentalAvMediaTaskCompleted()

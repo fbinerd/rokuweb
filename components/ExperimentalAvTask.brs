@@ -25,6 +25,9 @@ sub execute()
         transfer.SetRequest("POST")
         transfer.AddHeader("Content-Type", "application/json")
         responseBody = transfer.PostFromString(requestBody)
+    else if method = "HEAD"
+        transfer.SetRequest("HEAD")
+        responseBody = transfer.GetToString()
     else
         responseBody = transfer.GetToString()
     end if
