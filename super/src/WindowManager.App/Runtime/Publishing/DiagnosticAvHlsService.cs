@@ -131,7 +131,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
                     "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
                     "-af aresample=async=1:first_pts=0 " +
                     "-fflags +genpts -avoid_negative_ts make_zero " +
-                    "-f hls -hls_time 1 -hls_list_size 4 -hls_flags delete_segments+omit_endlist+independent_segments " +
+                    "-f hls -hls_time 2 -hls_list_size 8 -hls_flags omit_endlist+independent_segments+append_list " +
                     "-hls_segment_type fmp4 " +
                     "-hls_fmp4_init_filename \"" + Path.GetFileName(initSegment) + "\" " +
                     "-hls_segment_filename \"" + segmentPattern + "\" " +
