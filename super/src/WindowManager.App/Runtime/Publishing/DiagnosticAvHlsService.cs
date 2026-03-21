@@ -122,10 +122,9 @@ public sealed class DiagnosticAvHlsService : IDisposable
                 var initSegment = Path.Combine(_rootDirectory, "init.mp4");
                 var args =
                     "-hide_banner -loglevel error -y " +
-                    "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
-                    "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
+                    "-re -f lavfi -i testsrc2=size=1280x720:rate=24 " +
+                    "-re -f lavfi -i sine=frequency=440:sample_rate=44100 " +
                     "-map 0:v:0 -map 1:a:0 " +
-                    "-vf setpts=PTS+0.8/TB " +
                     "-c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
                     "-g 24 -keyint_min 24 -sc_threshold 0 " +
                     "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
