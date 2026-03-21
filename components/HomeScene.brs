@@ -47,6 +47,7 @@ sub init()
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
+    m.panelAudioTimer = m.top.findNode("panelAudioTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
 
     m.panelGroups = [
@@ -90,6 +91,7 @@ sub init()
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
+    m.panelAudioTimer.observeField("fire", "onPanelAudioTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
@@ -974,6 +976,10 @@ sub startPanelAudioIfNeeded(entry as object)
     m.diagnosticAudio.content = content
     m.diagnosticAudio.control = "stop"
     m.diagnosticAudio.control = "play"
+    if m.panelAudioTimer <> invalid
+        m.panelAudioTimer.control = "stop"
+        m.panelAudioTimer.control = "start"
+    end if
 end sub
 
 sub stopPanelAudio()
@@ -981,8 +987,29 @@ sub stopPanelAudio()
         return
     end if
 
+    if m.panelAudioTimer <> invalid
+        m.panelAudioTimer.control = "stop"
+    end if
     m.diagnosticAudio.control = "stop"
     m.diagnosticAudio.content = invalid
+end sub
+
+sub onPanelAudioTimerFire()
+    if not m.isFullscreen or m.windowEntries.Count() = 0
+        return
+    end if
+
+    if m.selectedIndex < 0 or m.selectedIndex >= m.windowEntries.Count()
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    audioUrl = getString(entry.audioUrl, "")
+    if audioUrl = ""
+        return
+    end if
+
+    startPanelAudioIfNeeded(entry)
 end sub
 
 function resolveAutoConnectBridgeHost() as string
