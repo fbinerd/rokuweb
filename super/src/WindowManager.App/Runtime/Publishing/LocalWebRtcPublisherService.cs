@@ -28,6 +28,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
+    private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
@@ -688,19 +689,23 @@ public sealed class LocalWebRtcPublisherService
         {
             if (!_browserPanelHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
             {
+                MaybeLogPanelHlsServe(windowId, filePart, false);
                 return BuildHttpResponse(404, "Playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
             }
 
             var playlistText = File.ReadAllText(playlistPath);
+            MaybeLogPanelHlsServe(windowId, filePart, true);
             return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
         }
 
         if (!_browserPanelHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
         {
+            MaybeLogPanelHlsServe(windowId, filePart, false);
             return BuildHttpResponse(404, "Segmento HLS do painel indisponivel.", "text/plain; charset=utf-8");
         }
 
         var segmentBytes = File.ReadAllBytes(segmentPath);
+        MaybeLogPanelHlsServe(windowId, filePart, true);
         return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
     }
 
@@ -1116,6 +1121,25 @@ public sealed class LocalWebRtcPublisherService
                 bytes,
                 seconds,
                 _browserAudioCaptureService.GetBufferedPcmBytes(windowId)));
+    }
+
+    private void MaybeLogPanelHlsServe(Guid windowId, string fileName, bool ok)
+    {
+        var key = windowId.ToString("N") + "|" + fileName;
+        var now = DateTime.UtcNow;
+        if (_lastPanelHlsLogUtc.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        _lastPanelHlsLogUtc[key] = now;
+        AppLog.Write(
+            "PanelHls",
+            string.Format(
+                "Requisicao HLS do painel: janela={0}, arquivo={1}, ok={2}",
+                windowId.ToString("N"),
+                fileName,
+                ok));
     }
 }
 
