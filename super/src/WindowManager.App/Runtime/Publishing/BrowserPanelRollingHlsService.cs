@@ -13,8 +13,8 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelRollingHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(1.25);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(1100);
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
+    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(1800);
     private const int PlaylistSize = 6;
 
     private readonly BrowserSnapshotService _snapshotService;
@@ -248,7 +248,7 @@ public sealed class BrowserPanelRollingHlsService
 
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -f mpegts \"{3}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
                         imagePath,
                         audioPath,
                         SegmentDuration.TotalSeconds,
