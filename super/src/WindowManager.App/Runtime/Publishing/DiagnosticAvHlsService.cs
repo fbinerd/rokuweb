@@ -99,6 +99,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
         return IsAvailable && _useMp4Mode && File.Exists(path);
     }
 
+    public bool TryGetFfmpegPath(out string path)
+    {
+        path = _ffmpegPath;
+        return !string.IsNullOrWhiteSpace(path);
+    }
+
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         if (_useMp4Mode)

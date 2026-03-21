@@ -281,6 +281,8 @@ sub applyBridgeResponse()
             streamUrl: getString(window.streamUrl, "")
             thumbnailUrl: getString(window.thumbnailUrl, "")
             initialUrl: getString(window.initialUrl, "")
+            audioUrl: getString(window.audioUrl, "")
+            audioAvailable: window.audioAvailable = true
         })
     end for
 
@@ -466,7 +468,7 @@ sub showFullscreen()
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
-        startDiagnosticAudioIfNeeded(entry)
+        startPanelAudioIfNeeded(entry)
         m.activeFullscreenPoster.visible = false
         m.bufferFullscreenPoster.visible = false
     else
@@ -495,7 +497,7 @@ sub hideFullscreen()
         m.fullscreenVideo.content = invalid
         m.fullscreenVideo.visible = false
     end if
-    stopDiagnosticAudio()
+    stopPanelAudio()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -903,7 +905,7 @@ sub stopFullscreenStream()
     if m.fullscreenStreamTimer <> invalid
         m.fullscreenStreamTimer.control = "stop"
     end if
-    stopDiagnosticAudio()
+    stopPanelAudio()
 end sub
 
 function getString(value as dynamic, fallback as string) as string
@@ -953,34 +955,27 @@ function normalizeBridgeHost(value as string) as string
     return host
 end function
 
-sub startDiagnosticAudioIfNeeded(entry as object)
+sub startPanelAudioIfNeeded(entry as object)
     if m.diagnosticAudio = invalid
         return
     end if
 
-    streamUrl = getString(entry.streamUrl, "")
-    if streamUrl = "" or Instr(1, LCase(streamUrl), ".mp4") = 0
-        stopDiagnosticAudio()
-        return
-    end if
-
-    mp3Url = streamUrl
-    if Right(LCase(mp3Url), 4) = ".mp4"
-        mp3Url = Left(mp3Url, Len(mp3Url) - 4) + ".mp3"
-    else
+    audioUrl = getString(entry.audioUrl, "")
+    if audioUrl = ""
+        stopPanelAudio()
         return
     end if
 
     content = CreateObject("roSGNode", "ContentNode")
-    content.url = appendCacheBust(mp3Url)
+    content.url = appendCacheBust(audioUrl)
     content.streamFormat = "mp3"
-    content.title = "Audio diagnostico"
+    content.title = "Audio do painel"
     m.diagnosticAudio.content = content
     m.diagnosticAudio.control = "stop"
     m.diagnosticAudio.control = "play"
 end sub
 
-sub stopDiagnosticAudio()
+sub stopPanelAudio()
     if m.diagnosticAudio = invalid
         return
     end if

@@ -19,6 +19,7 @@ public sealed class LocalWebRtcPublisherService
 {
     private static readonly string BridgeDebugLogPath = Path.Combine(AppDataPaths.Root, "bridge-debug.log");
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly DiagnosticAvHlsService _diagnosticAvHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
@@ -32,9 +33,10 @@ public sealed class LocalWebRtcPublisherService
     private string _activeListenerKey = string.Empty;
     private int _activeListenerPort;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, DiagnosticAvHlsService diagnosticAvHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, DiagnosticAvHlsService diagnosticAvHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _browserAudioCaptureService = browserAudioCaptureService;
         _diagnosticAvHlsService = diagnosticAvHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
@@ -390,6 +392,11 @@ public sealed class LocalWebRtcPublisherService
             return await BuildDiagnosticAvResponseAsync(normalizedPath, cancellationToken);
         }
 
+        if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
+        {
+            return await BuildPanelAudioResponseAsync(normalizedPath, cancellationToken);
+        }
+
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
         {
             return BuildHttpResponse(200, "ok", "text/plain; charset=utf-8");
@@ -719,6 +726,41 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
     }
 
+    private async Task<BridgeHttpResponse> BuildPanelAudioResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fileName = normalizedPath.Substring("/audio/".Length);
+        if (fileName.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = fileName.Substring(0, fileName.Length - 4);
+        }
+
+        if (!Guid.TryParseExact(fileName, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Audio do painel nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var waveBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId);
+        if (waveBytes is null || waveBytes.Length == 0)
+        {
+            return BuildHttpResponse(404, "Audio do painel indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        if (!_diagnosticAvHlsService.TryGetFfmpegPath(out var ffmpegPath))
+        {
+            return BuildHttpResponse(503, "ffmpeg indisponivel para audio MP3 do painel.", "text/plain; charset=utf-8");
+        }
+
+        var mp3Bytes = await Task.Run(() => EncodeWaveToMp3(ffmpegPath, waveBytes), cancellationToken).ConfigureAwait(false);
+        if (mp3Bytes is null || mp3Bytes.Length == 0)
+        {
+            return BuildHttpResponse(404, "Falha ao gerar audio MP3 do painel.", "text/plain; charset=utf-8");
+        }
+
+        return BuildBinaryHttpResponse(200, mp3Bytes, "audio/mpeg");
+    }
+
     private static string ParseRequestPath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -745,6 +787,76 @@ public sealed class LocalWebRtcPublisherService
         Buffer.BlockCopy(header, 0, result, 0, header.Length);
         Buffer.BlockCopy(response.BodyBytes, 0, result, header.Length, response.BodyBytes.Length);
         return result;
+    }
+
+    private static byte[]? EncodeWaveToMp3(string ffmpegPath, byte[] waveBytes)
+    {
+        var tempRoot = Path.Combine(AppDataPaths.Root, "panel-audio-mp3");
+        Directory.CreateDirectory(tempRoot);
+        var baseName = Guid.NewGuid().ToString("N");
+        var wavePath = Path.Combine(tempRoot, baseName + ".wav");
+        var mp3Path = Path.Combine(tempRoot, baseName + ".mp3");
+
+        try
+        {
+            File.WriteAllBytes(wavePath, waveBytes);
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                Arguments = string.Format(
+                    "-hide_banner -loglevel error -y -i \"{0}\" -c:a libmp3lame -b:a 128k -ar 44100 -ac 2 \"{1}\"",
+                    wavePath,
+                    mp3Path),
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+
+            using (var process = System.Diagnostics.Process.Start(startInfo))
+            {
+                if (process is null)
+                {
+                    return null;
+                }
+
+                process.WaitForExit(5000);
+                if (!process.HasExited || process.ExitCode != 0 || !File.Exists(mp3Path))
+                {
+                    return null;
+                }
+            }
+
+            return File.ReadAllBytes(mp3Path);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(wavePath))
+                {
+                    File.Delete(wavePath);
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (File.Exists(mp3Path))
+                {
+                    File.Delete(mp3Path);
+                }
+            }
+            catch
+            {
+            }
+        }
     }
 
     private static BridgeHttpResponse BuildHttpResponse(int statusCode, string body, string contentType)
@@ -869,7 +981,9 @@ public sealed class LocalWebRtcPublisherService
             StreamUrl = string.IsNullOrWhiteSpace(diagnosticStreamUrl) ? publishedUrl : diagnosticStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioUrl = string.Format("http://{0}:{1}/audio/{2}.mp3", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }
 
@@ -1040,6 +1154,12 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioUrl", Order = 10)]
+    public string AudioUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioAvailable", Order = 11)]
+    public bool AudioAvailable { get; set; }
 }
 
 [DataContract]
