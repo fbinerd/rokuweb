@@ -2,33 +2,34 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 using WindowManager.App.ViewModels;
 using WindowManager.Core.Models;
-using CefSharp.Wpf;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace WindowManager.App;
 
 public partial class MainWindow : Window
 {
-    private const double SharedBrowserRenderWidth = 1280;
-    private const double SharedBrowserRenderHeight = 720;
-    private const double PreviewBrowserScale = 0.246875;
     private readonly MainViewModel _viewModel;
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
-    private readonly Dictionary<Guid, Border> _previewBrowserHosts = new Dictionary<Guid, Border>();
-    private readonly Dictionary<Guid, ChromiumWebBrowser> _previewBrowsers = new Dictionary<Guid, ChromiumWebBrowser>();
+    private readonly Dictionary<Guid, Image> _previewImages = new Dictionary<Guid, Image>();
+    private readonly Dictionary<Guid, BrowserCaptureWindow> _captureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
+    private readonly DispatcherTimer _previewRefreshTimer;
     private TransmissionLogWindow? _logWindow;
     private Guid? _expandedPreviewWindowId;
+    private bool _isRefreshingPreviews;
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService)
     {
@@ -46,6 +47,12 @@ public partial class MainWindow : Window
             AddPreview(window);
         }
 
+        _previewRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(900)
+        };
+        _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
+
         Loaded += OnLoaded;
         UpdateSelectionVisuals();
     }
@@ -57,6 +64,8 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.InitializeAfterStartupAsync();
+            _previewRefreshTimer.Start();
+            _ = RefreshPreviewImagesAsync();
         }
         catch (Exception ex)
         {
@@ -88,6 +97,7 @@ public partial class MainWindow : Window
     private void AddPreview(WindowSession session)
     {
         session.PropertyChanged += OnWindowSessionPropertyChanged;
+        EnsureCaptureWindow(session);
 
         var headerTitle = new TextBlock
         {
@@ -145,7 +155,7 @@ public partial class MainWindow : Window
         header.Children.Add(headerUrl);
         header.Children.Add(headerState);
 
-        var browserHost = new Border
+        var previewHost = new Border
         {
             Margin = new Thickness(12, 0, 12, 12),
             CornerRadius = new CornerRadius(8),
@@ -153,12 +163,11 @@ public partial class MainWindow : Window
             BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
             Child = CreatePreviewContent(session)
         };
-        _previewBrowserHosts[session.Id] = browserHost;
 
         Grid.SetRow(header, 0);
-        Grid.SetRow(browserHost, 1);
+        Grid.SetRow(previewHost, 1);
         contentGrid.Children.Add(header);
-        contentGrid.Children.Add(browserHost);
+        contentGrid.Children.Add(previewHost);
 
         var card = new Border
         {
@@ -210,15 +219,15 @@ public partial class MainWindow : Window
     {
         if (AppRuntimeState.BrowserEngineAvailable)
         {
-            var browser = new ChromiumWebBrowser
+            var image = new Image
             {
-                Address = session.InitialUri?.ToString() ?? "about:blank"
+                Stretch = Stretch.Uniform,
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true
             };
 
-            ApplyEmbeddedBrowserPresentation(browser);
-            _previewBrowsers[session.Id] = browser;
-            _browserSnapshotService.Register(session.Id, browser);
-            return browser;
+            _previewImages[session.Id] = image;
+            return image;
         }
 
         var stack = new StackPanel
@@ -292,13 +301,13 @@ public partial class MainWindow : Window
             _previewCards.Remove(session.Id);
         }
 
-        _previewBrowserHosts.Remove(session.Id);
+        _previewImages.Remove(session.Id);
 
-        if (_previewBrowsers.TryGetValue(session.Id, out var browser))
+        if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
         {
             _browserSnapshotService.Unregister(session.Id);
-            browser.Dispose();
-            _previewBrowsers.Remove(session.Id);
+            captureWindow.Close();
+            _captureWindows.Remove(session.Id);
         }
 
         if (_expandedPreviewWindowId == session.Id)
@@ -499,20 +508,10 @@ public partial class MainWindow : Window
         }
 
         CloseExpandedPreview();
-
-        var sharedBrowser = _previewBrowsers.TryGetValue(session.Id, out var browser)
-            ? browser
-            : null;
-
-        if (sharedBrowser is not null && _previewBrowserHosts.TryGetValue(session.Id, out var browserHost))
-        {
-            ApplyExpandedBrowserPresentation(sharedBrowser);
-            browserHost.Child = BuildDetachedBrowserPlaceholder();
-            ExpandedPreviewHost.Child = sharedBrowser;
-            ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
-            ExpandedPreviewOverlay.Visibility = Visibility.Visible;
-            _expandedPreviewWindowId = session.Id;
-        }
+        ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
+        ExpandedPreviewOverlay.Visibility = Visibility.Visible;
+        _expandedPreviewWindowId = session.Id;
+        _ = RefreshPreviewImagesAsync();
     }
 
     private void CloseExpandedPreview()
@@ -526,8 +525,7 @@ public partial class MainWindow : Window
         _expandedPreviewWindowId = null;
         ExpandedPreviewOverlay.Visibility = Visibility.Collapsed;
         ExpandedPreviewTitle.Text = string.Empty;
-        ExpandedPreviewHost.Child = null;
-        RestorePreviewBrowser(windowId);
+        ExpandedPreviewImage.Source = null;
     }
 
     private void OnWindowSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -537,20 +535,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.PropertyName == nameof(WindowSession.InitialUri) && _previewBrowsers.TryGetValue(session.Id, out var browser))
+        if (e.PropertyName == nameof(WindowSession.InitialUri))
         {
-            var address = session.InitialUri?.ToString() ?? "about:blank";
-            if (!string.Equals(browser.Address, address, StringComparison.OrdinalIgnoreCase))
+            if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
             {
-                browser.Address = address;
+                captureWindow.UpdateAddress(session.InitialUri);
             }
-        }
 
-        if ((e.PropertyName == nameof(WindowSession.State) || e.PropertyName == nameof(WindowSession.AssignedTarget)) &&
-            session.State == WindowSessionState.Streaming &&
-            session.AssignedTarget?.TransportKind == DisplayTransportKind.Miracast)
-        {
-            Dispatcher.Invoke(() => ToggleExpandedPreview(session));
+            _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
         }
     }
 
@@ -581,6 +573,8 @@ public partial class MainWindow : Window
         Loaded -= OnLoaded;
         _viewModel.Windows.CollectionChanged -= OnWindowsCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _previewRefreshTimer.Stop();
+        _previewRefreshTimer.Tick -= OnPreviewRefreshTimerTick;
 
         foreach (var window in _viewModel.Windows)
         {
@@ -590,64 +584,85 @@ public partial class MainWindow : Window
         _logWindow?.Close();
         CloseExpandedPreview();
 
-        foreach (var browser in _previewBrowsers.Values)
+        foreach (var captureWindow in _captureWindows.Values)
         {
-            browser.Dispose();
+            captureWindow.Close();
         }
+        _captureWindows.Clear();
 
         base.OnClosed(e);
     }
 
-    private void RestorePreviewBrowser(Guid windowId)
+    private void EnsureCaptureWindow(WindowSession session)
     {
-        if (_previewBrowserHosts.TryGetValue(windowId, out var browserHost) &&
-            _previewBrowsers.TryGetValue(windowId, out var browser))
+        if (!AppRuntimeState.BrowserEngineAvailable || _captureWindows.ContainsKey(session.Id))
         {
-            ApplyEmbeddedBrowserPresentation(browser);
-            browserHost.Child = browser;
+            return;
         }
-    }
 
-    private static void ApplyEmbeddedBrowserPresentation(ChromiumWebBrowser browser)
-    {
-        browser.Width = SharedBrowserRenderWidth;
-        browser.Height = SharedBrowserRenderHeight;
-        browser.HorizontalAlignment = HorizontalAlignment.Left;
-        browser.VerticalAlignment = VerticalAlignment.Top;
-        browser.RenderTransformOrigin = new Point(0, 0);
-        browser.RenderTransform = new ScaleTransform(PreviewBrowserScale, PreviewBrowserScale);
-        browser.Margin = new Thickness(0);
-    }
-
-    private static void ApplyExpandedBrowserPresentation(ChromiumWebBrowser browser)
-    {
-        browser.ClearValue(FrameworkElement.WidthProperty);
-        browser.ClearValue(FrameworkElement.HeightProperty);
-        browser.ClearValue(FrameworkElement.HorizontalAlignmentProperty);
-        browser.ClearValue(FrameworkElement.VerticalAlignmentProperty);
-        browser.RenderTransform = Transform.Identity;
-        browser.Margin = new Thickness(0);
-    }
-
-    private static UIElement BuildDetachedBrowserPlaceholder()
-    {
-        return new Border
-        {
-            Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
-            Child = new TextBlock
-            {
-                Text = "Visualizacao ampliada aberta. Este painel esta usando a mesma janela exibida na TV.",
-                Margin = new Thickness(16),
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Brushes.DimGray,
-                VerticalAlignment = VerticalAlignment.Center
-            }
-        };
+        var captureWindow = new BrowserCaptureWindow(session.InitialUri);
+        _captureWindows[session.Id] = captureWindow;
+        _browserSnapshotService.Register(session.Id, captureWindow.Browser);
+        captureWindow.Show();
     }
 
     private void OnCloseExpandedPreviewClick(object sender, RoutedEventArgs e)
     {
         CloseExpandedPreview();
+    }
+
+    private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
+    {
+        await RefreshPreviewImagesAsync();
+    }
+
+    private async Task RefreshPreviewImagesAsync()
+    {
+        if (_isRefreshingPreviews || !AppRuntimeState.BrowserEngineAvailable)
+        {
+            return;
+        }
+
+        _isRefreshingPreviews = true;
+        try
+        {
+            foreach (var session in _viewModel.Windows.ToArray())
+            {
+                var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(session.Id, default);
+                if (jpegBytes is null || jpegBytes.Length == 0)
+                {
+                    continue;
+                }
+
+                var imageSource = CreateImageSource(jpegBytes);
+                if (_previewImages.TryGetValue(session.Id, out var image))
+                {
+                    image.Source = imageSource;
+                }
+
+                if (_expandedPreviewWindowId == session.Id)
+                {
+                    ExpandedPreviewImage.Source = imageSource;
+                }
+            }
+        }
+        finally
+        {
+            _isRefreshingPreviews = false;
+        }
+    }
+
+    private static BitmapImage CreateImageSource(byte[] jpegBytes)
+    {
+        using var stream = new MemoryStream(jpegBytes);
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
     }
 }
 

@@ -489,7 +489,12 @@
                         <Border x:Name="ExpandedPreviewHost"
                                 Margin="12"
                                 Background="#F8FAFC"
-                                CornerRadius="8" />
+                                CornerRadius="8">
+                            <Image x:Name="ExpandedPreviewImage"
+                                   Stretch="Uniform"
+                                   SnapsToDevicePixels="True"
+                                   UseLayoutRounding="True" />
+                        </Border>
                     </Border>
                 </Grid>
             </Border>
