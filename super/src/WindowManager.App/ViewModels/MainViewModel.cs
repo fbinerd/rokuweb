@@ -103,6 +103,7 @@ public sealed class MainViewModel : ViewModelBase
         DeleteSelectedPanelCommand = new AsyncRelayCommand(DeleteSelectedPanelAsync, CanDeleteSelectedPanel);
         SearchUpdatesCommand = new AsyncRelayCommand(SearchUpdatesAsync, CanSearchUpdates);
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, CanInstallUpdate);
+        MigrateToRemoteBuildCommand = new AsyncRelayCommand(MigrateToRemoteBuildAsync, CanMigrateToRemoteBuild);
         UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
 
@@ -123,6 +124,10 @@ public sealed class MainViewModel : ViewModelBase
 
     public IReadOnlyList<string> UpdateChannels { get; } = new[] { UpdateChannelNames.Stable, UpdateChannelNames.Develop };
 
+    public bool IsLocalDevelopmentBuild => string.Equals(BuildVersionInfo.CurrentBuildChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsAutomaticUpdateToggleEnabled => !IsLocalDevelopmentBuild;
+
     public AsyncRelayCommand CreateWindowCommand { get; }
     public AsyncRelayCommand NavigateSelectedWindowCommand { get; }
     public AsyncRelayCommand RefreshTargetsCommand { get; }
@@ -139,6 +144,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand DeleteSelectedPanelCommand { get; }
     public AsyncRelayCommand SearchUpdatesCommand { get; }
     public AsyncRelayCommand InstallUpdateCommand { get; }
+    public AsyncRelayCommand MigrateToRemoteBuildCommand { get; }
     public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
 
@@ -330,6 +336,7 @@ public sealed class MainViewModel : ViewModelBase
             {
                 SearchUpdatesCommand.RaiseCanExecuteChanged();
                 InstallUpdateCommand.RaiseCanExecuteChanged();
+                MigrateToRemoteBuildCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -339,6 +346,16 @@ public sealed class MainViewModel : ViewModelBase
         get => _autoUpdateEnabled;
         set
         {
+            if (IsLocalDevelopmentBuild)
+            {
+                if (SetProperty(ref _autoUpdateEnabled, false))
+                {
+                    _ = PersistUpdatePreferencesAsync();
+                }
+
+                return;
+            }
+
             if (SetProperty(ref _autoUpdateEnabled, value))
             {
                 _ = PersistUpdatePreferencesAsync();
@@ -504,7 +521,7 @@ public sealed class MainViewModel : ViewModelBase
     private async Task LoadPreferencesAsync()
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
-        AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : preferences.AutoUpdateEnabled;
         SelectedUpdateChannel = preferences.UpdateChannel;
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
@@ -524,7 +541,9 @@ public sealed class MainViewModel : ViewModelBase
         try
         {
             IsCheckingForUpdates = true;
-            UpdateStatusMessage = "Consultando atualizacoes do super...";
+            UpdateStatusMessage = IsLocalDevelopmentBuild
+                ? "Build local detectado. Auto-update automatico desabilitado."
+                : "Consultando atualizacoes do super...";
             var result = await RefreshUpdateInfoAsync();
 
             AppLog.Write(
@@ -555,6 +574,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool CanSearchUpdates() => !IsCheckingForUpdates;
 
     private bool CanInstallUpdate() => !IsCheckingForUpdates && IsUpdateAvailable && _lastUpdateCheckResult is not null;
+    private bool CanMigrateToRemoteBuild() => !IsCheckingForUpdates && IsLocalDevelopmentBuild;
     private bool CanUpdateSelectedTarget() => SelectedTarget is not null && !string.IsNullOrWhiteSpace(SelectedTarget.NetworkAddress);
 
     private async Task SearchUpdatesAsync()
@@ -583,6 +603,29 @@ public sealed class MainViewModel : ViewModelBase
             }
 
             await DownloadAndApplyUpdateAsync(_lastUpdateCheckResult, automatic: false);
+        }
+        finally
+        {
+            IsCheckingForUpdates = false;
+        }
+    }
+
+    private async Task MigrateToRemoteBuildAsync()
+    {
+        IsCheckingForUpdates = true;
+        try
+        {
+            UpdateStatusMessage = string.Format("Build local detectado. Buscando release remota do canal {0}...", SelectedUpdateChannel);
+            var result = await RefreshUpdateInfoAsync(ignoreLocalBuildRestriction: true);
+            if (!result.UpdateAvailable)
+            {
+                UpdateStatusMessage = string.IsNullOrWhiteSpace(result.StatusMessage)
+                    ? "Nenhuma release remota mais recente foi encontrada para migracao."
+                    : result.StatusMessage;
+                return;
+            }
+
+            await DownloadAndApplyUpdateAsync(result, automatic: false, customActionLabel: "Migracao para build remota");
         }
         finally
         {
@@ -621,8 +664,21 @@ public sealed class MainViewModel : ViewModelBase
                 result));
     }
 
-    private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync()
+    private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync(bool ignoreLocalBuildRestriction = false)
     {
+        if (IsLocalDevelopmentBuild && !ignoreLocalBuildRestriction)
+        {
+            AppVersionStatus = string.Format("Versao local: {0} ({1})", BuildVersionInfo.Version, BuildVersionInfo.ReleaseId);
+            LatestAvailableVersion = "Build local";
+            IsUpdateAvailable = false;
+            RecommendedUpdatePackageUrl = string.Empty;
+            UpdateStatusMessage = "Build local detectado. Use o script local para compilar e fazer sideload.";
+            _lastUpdateCheckResult = AppUpdateCheckResult.Failure(string.Empty, UpdateStatusMessage);
+            InstallUpdateCommand.RaiseCanExecuteChanged();
+            MigrateToRemoteBuildCommand.RaiseCanExecuteChanged();
+            return _lastUpdateCheckResult;
+        }
+
         var result = await _appUpdateManifestService.CheckForUpdateAsync(SelectedUpdateChannel, CancellationToken.None);
 
         AppVersionStatus = string.Format("Versao local: {0} ({1})", result.CurrentVersion, result.CurrentReleaseId);
@@ -634,12 +690,13 @@ public sealed class MainViewModel : ViewModelBase
         UpdateStatusMessage = result.StatusMessage;
         _lastUpdateCheckResult = result;
         InstallUpdateCommand.RaiseCanExecuteChanged();
+        MigrateToRemoteBuildCommand.RaiseCanExecuteChanged();
         return result;
     }
 
-    private async Task DownloadAndApplyUpdateAsync(AppUpdateCheckResult result, bool automatic)
+    private async Task DownloadAndApplyUpdateAsync(AppUpdateCheckResult result, bool automatic, string? customActionLabel = null)
     {
-        var actionLabel = automatic ? "Auto-update" : "Atualizacao manual";
+        var actionLabel = customActionLabel ?? (automatic ? "Auto-update" : "Atualizacao manual");
         UpdateStatusMessage = string.Format("{0}: baixando pacote {1}...", actionLabel, result.RecommendedPackageUrl);
         AppLog.Write("Updater", UpdateStatusMessage);
 

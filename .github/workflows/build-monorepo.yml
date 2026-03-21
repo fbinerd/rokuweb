@@ -10,6 +10,25 @@ on:
       - stable
       - develop
   workflow_dispatch:
+    inputs:
+      channels:
+        description: "Canais para compilar"
+        required: false
+        default: "current"
+        type: choice
+        options:
+          - current
+          - stable
+          - develop
+          - both
+      artifact_mode:
+        description: "Quantidade de artifacts do run"
+        required: false
+        default: "minimal"
+        type: choice
+        options:
+          - minimal
+          - full
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -20,6 +39,7 @@ jobs:
     outputs:
       build_stable: ${{ steps.flags.outputs.build_stable }}
       build_develop: ${{ steps.flags.outputs.build_develop }}
+      artifact_mode: ${{ steps.flags.outputs.artifact_mode }}
     steps:
       - name: Resolve channel builds
         id: flags
@@ -28,10 +48,25 @@ jobs:
           set -euo pipefail
           build_stable=false
           build_develop=false
+          artifact_mode=minimal
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            build_stable=true
-            build_develop=true
+            selected_channels="${{ github.event.inputs.channels }}"
+            artifact_mode="${{ github.event.inputs.artifact_mode }}"
+            if [ "$selected_channels" = "both" ]; then
+              build_stable=true
+              build_develop=true
+            elif [ "$selected_channels" = "stable" ]; then
+              build_stable=true
+            elif [ "$selected_channels" = "develop" ]; then
+              build_develop=true
+            else
+              if [ "${{ github.ref_name }}" = "stable" ]; then
+                build_stable=true
+              elif [ "${{ github.ref_name }}" = "develop" ]; then
+                build_develop=true
+              fi
+            fi
           elif [ "${{ github.event_name }}" = "push" ]; then
             if [ "${{ github.ref_name }}" = "stable" ]; then
               build_stable=true
@@ -50,6 +85,7 @@ jobs:
 
           echo "build_stable=$build_stable" >> "$GITHUB_OUTPUT"
           echo "build_develop=$build_develop" >> "$GITHUB_OUTPUT"
+          echo "artifact_mode=$artifact_mode" >> "$GITHUB_OUTPUT"
 
   build-stable:
     runs-on: windows-latest
@@ -57,7 +93,7 @@ jobs:
     if: needs.resolve-builds.outputs.build_stable == 'true'
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout stable
@@ -95,18 +131,37 @@ jobs:
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/'
+        run: |
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/stable-super-full-latest/stable-super-${{ steps.meta.outputs.release_id }}-full.zip'
+          ./scripts/New-ReleaseArtifacts.ps1 -Channel 'stable' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/stable/' -SuperCurrentFullPackageUrl $fullUrl
 
-      - name: Prepare patch artifact content
+      - name: Publish stable super full package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTag = 'stable-super-full-latest'
+          $releaseTitle = 'stable super full latest'
+          $assetPath = Join-Path $PWD ('dist\stable-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (-not (Test-Path $assetPath)) {
+            throw "Pacote full do super nao encontrado: $assetPath"
+          }
+
+          gh release view $releaseTag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $releaseTag $assetPath --title $releaseTitle --notes 'Pacote full mais recente do canal stable.' --repo '${{ github.repository }}'
+          }
+          else {
+            gh release upload $releaseTag $assetPath --clobber --repo '${{ github.repository }}'
+          }
+
+      - name: Remove stable super full package from Pages payload
         shell: pwsh
         run: |
-          $patchRoot = Join-Path $PWD "patch-artifacts"
-          if (Test-Path $patchRoot) {
-            Remove-Item -Recurse -Force $patchRoot
+          $assetPath = Join-Path $PWD ('dist\stable-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (Test-Path $assetPath) {
+            Remove-Item $assetPath -Force
           }
-          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
-          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
 
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
@@ -114,22 +169,30 @@ jobs:
           name: stable-roku-package-${{ steps.meta.outputs.release_id }}
           path: stable-roku.zip
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload super release
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload patch debug artifacts
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
-          path: patch-artifacts/**
+          path: |
+            dist/*-delta-from-*.zip
+            dist/*-changes.json
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload latest rokuweb manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
@@ -137,6 +200,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest super manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: stable-latest-super-json-${{ steps.meta.outputs.release_id }}
@@ -149,6 +213,7 @@ jobs:
           name: pages-source-stable
           path: dist/**
           if-no-files-found: error
+          compression-level: 0
 
   build-develop:
     runs-on: windows-latest
@@ -156,7 +221,7 @@ jobs:
     if: needs.resolve-builds.outputs.build_develop == 'true'
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout develop
@@ -194,18 +259,37 @@ jobs:
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/'
+        run: |
+          $fullUrl = 'https://github.com/${{ github.repository }}/releases/download/develop-super-full-latest/develop-super-${{ steps.meta.outputs.release_id }}-full.zip'
+          ./scripts/New-ReleaseArtifacts.ps1 -Channel 'develop' -BaseUrl 'https://fbinerd.github.io/rokuweb/updates/develop/' -SuperCurrentFullPackageUrl $fullUrl
 
-      - name: Prepare patch artifact content
+      - name: Publish develop super full package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseTag = 'develop-super-full-latest'
+          $releaseTitle = 'develop super full latest'
+          $assetPath = Join-Path $PWD ('dist\develop-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (-not (Test-Path $assetPath)) {
+            throw "Pacote full do super nao encontrado: $assetPath"
+          }
+
+          gh release view $releaseTag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $releaseTag $assetPath --title $releaseTitle --notes 'Pacote full mais recente do canal develop.' --repo '${{ github.repository }}'
+          }
+          else {
+            gh release upload $releaseTag $assetPath --clobber --repo '${{ github.repository }}'
+          }
+
+      - name: Remove develop super full package from Pages payload
         shell: pwsh
         run: |
-          $patchRoot = Join-Path $PWD "patch-artifacts"
-          if (Test-Path $patchRoot) {
-            Remove-Item -Recurse -Force $patchRoot
+          $assetPath = Join-Path $PWD ('dist\develop-super-{0}-full.zip' -f '${{ steps.meta.outputs.release_id }}')
+          if (Test-Path $assetPath) {
+            Remove-Item $assetPath -Force
           }
-          New-Item -ItemType Directory -Path $patchRoot -Force | Out-Null
-          Copy-Item -Path dist\*-delta-from-*.zip -Destination $patchRoot -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path dist\*-changes.json -Destination $patchRoot -Force
 
       - name: Upload Roku package
         uses: actions/upload-artifact@v4
@@ -213,22 +297,30 @@ jobs:
           name: develop-roku-package-${{ steps.meta.outputs.release_id }}
           path: develop-roku.zip
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload super release
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-super-release-${{ steps.meta.outputs.release_id }}
           path: super/src/WindowManager.App/bin/Release/**
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload patch debug artifacts
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-patch-debug-artifacts-${{ steps.meta.outputs.release_id }}
-          path: patch-artifacts/**
+          path: |
+            dist/*-delta-from-*.zip
+            dist/*-changes.json
           if-no-files-found: error
+          compression-level: 0
 
       - name: Upload latest rokuweb manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-latest-rokuweb-json-${{ steps.meta.outputs.release_id }}
@@ -236,6 +328,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload latest super manifest
+        if: needs.resolve-builds.outputs.artifact_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: develop-latest-super-json-${{ steps.meta.outputs.release_id }}
@@ -248,6 +341,7 @@ jobs:
           name: pages-source-develop
           path: dist/**
           if-no-files-found: error
+          compression-level: 0
 
   publish-pages:
     runs-on: ubuntu-latest

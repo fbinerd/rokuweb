@@ -43,9 +43,9 @@ public sealed class AppSelfUpdateService
             update.LatestReleaseId);
 
         var extractRoot = Path.Combine(tempRoot, "extracted");
-        var scriptPath = Path.Combine(tempRoot, "apply-update.cmd");
+        var scriptPath = Path.Combine(tempRoot, "apply-update.ps1");
         var targetDirectory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var exePath = Path.Combine(targetDirectory, "WindowManager.App.exe");
+        var exePath = Path.Combine(targetDirectory, "SuperPainel.exe");
         var extractedDirectories = new List<string>();
         var lastPackagePath = string.Empty;
 
@@ -81,20 +81,33 @@ public sealed class AppSelfUpdateService
             lastPackagePath = packagePath;
         }
 
+        var expectedExecutableHash = string.Empty;
+        var extractedExecutablePath = Path.Combine(extractedDirectories.LastOrDefault() ?? string.Empty, "SuperPainel.exe");
+        if (File.Exists(extractedExecutablePath))
+        {
+            expectedExecutableHash = ComputeSha256(extractedExecutablePath);
+        }
+
         var currentProcess = Process.GetCurrentProcess();
         var scriptContent = BuildUpdateScript(
             currentProcess.Id,
             extractedDirectories.ToArray(),
             targetDirectory,
-            exePath);
+            exePath,
+            expectedExecutableHash,
+            Path.Combine(tempRoot, "apply-update.log"));
 
         File.WriteAllText(scriptPath, scriptContent, Encoding.ASCII);
 
         Process.Start(new ProcessStartInfo
         {
-            FileName = scriptPath,
+            FileName = "powershell.exe",
+            Arguments = string.Format(
+                "-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{0}\"",
+                scriptPath),
             WorkingDirectory = tempRoot,
-            UseShellExecute = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
         });
 
@@ -105,34 +118,77 @@ public sealed class AppSelfUpdateService
             scriptPath);
     }
 
-    private static string BuildUpdateScript(int processId, string[] sourceDirectories, string targetDirectory, string executablePath)
+    private static string BuildUpdateScript(
+        int processId,
+        string[] sourceDirectories,
+        string targetDirectory,
+        string executablePath,
+        string expectedExecutableHash,
+        string logPath)
     {
-        string Escape(string value) => value.Replace("\"", "\"\"");
+        string EscapePowerShell(string value) => value.Replace("'", "''");
+        string ToLiteralArray(IEnumerable<string> values) => string.Join(", ", values.Select(x => "'" + EscapePowerShell(x) + "'"));
 
         var scriptLines = new List<string>
         {
-            "@echo off",
-            "setlocal",
-            string.Format("set \"TARGET={0}\"", Escape(targetDirectory)),
-            string.Format("set \"EXE={0}\"", Escape(executablePath)),
-            string.Format("set \"PID={0}\"", processId),
-            ":waitloop",
-            "tasklist /FI \"PID eq %PID%\" | findstr /I \"%PID%\" >nul",
-            "if not errorlevel 1 (",
-            "  timeout /t 1 /nobreak >nul",
-            "  goto waitloop",
-            ")"
+            "$ErrorActionPreference = 'Stop'",
+            string.Format("$target = '{0}'", EscapePowerShell(targetDirectory)),
+            string.Format("$exe = '{0}'", EscapePowerShell(executablePath)),
+            string.Format("$expectedExecutableHash = '{0}'", EscapePowerShell(expectedExecutableHash ?? string.Empty)),
+            string.Format("$logPath = '{0}'", EscapePowerShell(logPath)),
+            string.Format("$processId = {0}", processId),
+            string.Format("$sourceDirectories = @({0})", ToLiteralArray(sourceDirectories)),
+            "function Write-UpdateLog([string]$message) {",
+            "  $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'",
+            "  Add-Content -Path $logPath -Value (\"[$timestamp] \" + $message)",
+            "}",
+            "Write-UpdateLog 'Atualizacao iniciada.'",
+            "while (Get-Process -Id $processId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }",
+            "Start-Sleep -Seconds 1",
+            "try {",
+            "  Get-CimInstance Win32_Process -Filter \"name = 'CefSharp.BrowserSubprocess.exe'\" -ErrorAction SilentlyContinue |",
+            "    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($target, [System.StringComparison]::OrdinalIgnoreCase) } |",
+            "    ForEach-Object {",
+            "      Write-UpdateLog (\"Encerrando subprocesso CEF PID=\" + $_.ProcessId)",
+            "      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue",
+            "    }",
+            "} catch {",
+            "  Write-UpdateLog (\"Falha ao encerrar subprocessos CEF: \" + $_.Exception.Message)",
+            "}",
+            "foreach ($sourceDirectory in $sourceDirectories) {",
+            "  Write-UpdateLog (\"Copiando arquivos de \" + $sourceDirectory)",
+            "  & robocopy $sourceDirectory $target /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null",
+            "  $robocopyExitCode = $LASTEXITCODE",
+            "  Write-UpdateLog (\"robocopy exit code=\" + $robocopyExitCode)",
+            "  if ($robocopyExitCode -ge 8) {",
+            "    throw \"Falha ao copiar arquivos da atualizacao. Codigo do robocopy: $robocopyExitCode\"",
+            "  }",
+            "}",
+            "if (-not [string]::IsNullOrWhiteSpace($expectedExecutableHash)) {",
+            "  if (-not (Test-Path $exe)) {",
+            "    throw \"Executavel atualizado nao encontrado: $exe\"",
+            "  }",
+            "  $actualExecutableHash = (Get-FileHash -Path $exe -Algorithm SHA256).Hash",
+            "  Write-UpdateLog (\"Hash esperado=\" + $expectedExecutableHash)",
+            "  Write-UpdateLog (\"Hash atual=\" + $actualExecutableHash)",
+            "  if (-not [string]::Equals($actualExecutableHash, $expectedExecutableHash, [System.StringComparison]::OrdinalIgnoreCase)) {",
+            "    throw 'O executavel reiniciado nao corresponde ao pacote atualizado.'",
+            "  }",
+            "}",
+            "Write-UpdateLog 'Atualizacao aplicada. Reiniciando SuperPainel.'",
+            "Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)",
+            "Write-UpdateLog 'Reinicio solicitado com sucesso.'"
         };
 
-        foreach (var sourceDirectory in sourceDirectories)
-        {
-            scriptLines.Add(string.Format("robocopy \"{0}\" \"%TARGET%\" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul", Escape(sourceDirectory)));
-        }
-
-        scriptLines.Add("start \"\" \"%EXE%\"");
-        scriptLines.Add("endlocal");
-
         return string.Join(Environment.NewLine, scriptLines);
+    }
+
+    private static string ComputeSha256(string filePath)
+    {
+        using var stream = File.OpenRead(filePath);
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var hash = sha256.ComputeHash(stream);
+        return BitConverter.ToString(hash).Replace("-", string.Empty);
     }
 }
 

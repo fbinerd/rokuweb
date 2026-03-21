@@ -31,12 +31,12 @@ function Remove-BuildArtifacts {
 }
 
 function Stop-RunningAppInstances {
-    $processes = Get-Process -Name "WindowManager.App" -ErrorAction SilentlyContinue
+    $processes = Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue
     if (-not $processes) {
         return
     }
 
-    Write-Host "Encerrando instancias abertas de WindowManager.App..."
+    Write-Host "Encerrando instancias abertas de SuperPainel..."
     $processes | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
 }
@@ -46,7 +46,7 @@ Remove-BuildArtifacts
 Invoke-DotNet restore $projectPath --configfile (Join-Path $scriptRoot "NuGet.Config")
 Invoke-DotNet build $projectPath -c Release --no-restore
 
-$exeFile = Get-ChildItem -Path $releaseRoot -Recurse -Filter "WindowManager.App.exe" |
+$exeFile = Get-ChildItem -Path $releaseRoot -Recurse -Filter "SuperPainel.exe" |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 

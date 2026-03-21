@@ -2,5 +2,5 @@
 
 internal static class Program
 {
-    public static string Name => "WindowManager.App";
+    public static string Name => "SuperPainel";
 }

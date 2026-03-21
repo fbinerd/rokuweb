@@ -1,9 +1,13 @@
-title=Roku Bridge Viewer
-subtitle=Integracao com app .NET
+title=SuperPainel TV
+subtitle=Paineis conectados ao app super
 major_version=1
 minor_version=0
 build_version=35
-mm_icon_focus_hd=
-mm_icon_side_hd=
+mm_icon_focus_hd=images/mm_icon_focus_hd.png
+mm_icon_focus_sd=images/mm_icon_focus_sd.png
+mm_icon_side_hd=images/mm_icon_side_hd.png
+mm_icon_side_sd=images/mm_icon_side_sd.png
+splash_screen_hd=images/splash_screen_hd.png
+splash_screen_sd=images/splash_screen_sd.png
 splash_min_time=1200
 ui_resolutions=hd

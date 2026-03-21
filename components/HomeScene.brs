@@ -15,7 +15,6 @@ sub init()
     m.cursorX = 640
     m.cursorY = 360
     m.autoConnectAttempts = 0
-    m.autoConnectMaxAttempts = 10
     m.isAutoConnecting = true
     m.keyboardPurpose = ""
     deviceInfo = CreateObject("roDeviceInfo")
@@ -38,6 +37,7 @@ sub init()
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
+    m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
@@ -80,6 +80,7 @@ sub init()
     ]
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.panelRefreshTimer.observeField("fire", "onPanelRefreshTimerFire")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
@@ -90,9 +91,10 @@ sub init()
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.top.setFocus(true)
 
+    m.titleLabel.text = GetRokuAppShortName()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
     m.subtitleLabel.text = "Procurando automaticamente o super..."
-    m.versionLabel.text = "Canal " + GetRokuChannelReleaseId()
+    m.versionLabel.text = "Canal " + GetRokuChannelName() + " | " + GetRokuChannelReleaseId()
     hideGrid()
     beginAutoConnect()
 end sub
@@ -201,11 +203,11 @@ sub reportInputKey(key as string)
     m.inputLogTask.control = "RUN"
 end sub
 
-sub loadWindows()
-    if m.isAutoConnecting
+sub loadWindows(silent = false as boolean)
+    if not silent and m.isAutoConnecting
         m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
-        m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " de " + m.autoConnectMaxAttempts.ToStr()
-    else
+        m.subtitleLabel.text = "Tentativa " + (m.autoConnectAttempts + 1).ToStr() + " em andamento. Tentando automaticamente..."
+    else if not silent
         m.statusLabel.text = "Consultando bridge em " + m.bridgeHost
         m.subtitleLabel.text = "Aguarde a resposta do servidor"
     end if
@@ -231,17 +233,13 @@ sub applyBridgeResponse()
     if responseCode <> 200 or responseBody = invalid or responseBody = ""
         if m.isAutoConnecting
             m.autoConnectAttempts = m.autoConnectAttempts + 1
-            if m.autoConnectAttempts < m.autoConnectMaxAttempts
-                scheduleAutoConnectRetry()
-            else
-                m.isAutoConnecting = false
-                m.statusLabel.text = "Nao foi possivel encontrar " + m.defaultBridgeHost
-                m.subtitleLabel.text = "Informe o IP do super para conectar"
-                promptForBridgeHost()
-            end if
+            m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
+            m.subtitleLabel.text = "Ainda nao foi possivel conectar. Tentando novamente automaticamente..."
+            scheduleAutoConnectRetry()
         else
+            startPanelRefresh()
             m.statusLabel.text = "Falha ao conectar em " + m.bridgeHost
-            m.subtitleLabel.text = "Verifique se o app .NET esta aberto na mesma rede"
+            m.subtitleLabel.text = "Tentando reconectar automaticamente..."
         end if
         hideGrid()
         return
@@ -255,9 +253,12 @@ sub applyBridgeResponse()
         return
     end if
 
+    previousSelectedId = ""
+    if m.windowEntries.Count() > 0 and m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
+        previousSelectedId = getString(m.windowEntries[m.selectedIndex].id, "")
+    end if
+
     m.windowEntries = []
-    m.selectedIndex = 0
-    m.pageStart = 0
 
     for each window in json.windows
         m.windowEntries.Push({
@@ -271,13 +272,27 @@ sub applyBridgeResponse()
 
     if m.windowEntries.Count() = 0
         m.statusLabel.text = "Bridge conectado, sem paineis disponiveis"
-        m.subtitleLabel.text = "Nenhuma janela publicada no app .NET ainda."
+        m.subtitleLabel.text = "Nenhuma janela publicada ainda. Atualizando automaticamente..."
+        startPanelRefresh()
         hideGrid()
         return
     end if
 
+    m.selectedIndex = 0
+    if previousSelectedId <> ""
+        for i = 0 to m.windowEntries.Count() - 1
+            if getString(m.windowEntries[i].id, "") = previousSelectedId
+                m.selectedIndex = i
+                exit for
+            end if
+        end for
+    end if
+
+    m.pageStart = 0
+
     m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
     m.isAutoConnecting = false
+    startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
 end sub
@@ -285,7 +300,33 @@ end sub
 sub beginAutoConnect()
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
+    startPanelRefresh()
     loadWindows()
+end sub
+
+sub startPanelRefresh()
+    if m.panelRefreshTimer = invalid
+        return
+    end if
+
+    m.panelRefreshTimer.control = "stop"
+    m.panelRefreshTimer.control = "start"
+end sub
+
+sub stopPanelRefresh()
+    if m.panelRefreshTimer = invalid
+        return
+    end if
+
+    m.panelRefreshTimer.control = "stop"
+end sub
+
+sub onPanelRefreshTimerFire()
+    if m.isKeyboardOpen or m.isFullscreen
+        return
+    end if
+
+    loadWindows(true)
 end sub
 
 sub scheduleAutoConnectRetry()
@@ -295,7 +336,7 @@ sub scheduleAutoConnectRetry()
     end if
 
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
-    m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente..."
+    m.subtitleLabel.text = "Tentativa " + m.autoConnectAttempts.ToStr() + " falhou. Tentando novamente automaticamente..."
     m.autoConnectTimer.control = "stop"
     m.autoConnectTimer.control = "start"
 end sub
@@ -398,6 +439,7 @@ sub showFullscreen()
     m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
+    stopPanelRefresh()
     updateCursorMarker()
     startFullscreenStream()
     m.top.setFocus(true)
@@ -413,6 +455,7 @@ sub hideFullscreen()
     m.titleLabel.visible = true
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
+    startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
 end sub

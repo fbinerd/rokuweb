@@ -3,6 +3,7 @@
   <interface>
     <field id="statusText" type="string" />
   </interface>
+  <script type="text/brightscript" uri="pkg:/source/AppBranding.brs" />
   <script type="text/brightscript" uri="pkg:/source/BuildInfo.brs" />
   <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
   <children>
@@ -11,6 +12,7 @@
     <ControlTask id="controlTask" />
     <ControlTask id="clickControlTask" />
     <ControlTask id="textControlTask" />
+    <Timer id="panelRefreshTimer" repeat="true" duration="5.0" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.2" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
     <Timer id="fullscreenStreamTimer" repeat="true" duration="0.35" />
@@ -27,7 +29,7 @@
       translation="[50, 32]"
       color="0xFFFFFFFF"
       font="font:LargeBoldSystemFont"
-      text="Roku HTTP Bridge" />
+      text="SuperPainel" />
     <Label
       id="subtitleLabel"
       width="1180"
