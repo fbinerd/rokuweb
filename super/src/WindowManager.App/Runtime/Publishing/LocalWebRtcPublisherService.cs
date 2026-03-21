@@ -239,7 +239,6 @@ public sealed class LocalWebRtcPublisherService
     {
         var cancellation = new CancellationTokenSource();
         var listener = new TcpListener(endpoint);
-        listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         listener.Start();
         WriteBridgeDebug("START listener " + listenerKey);
 
