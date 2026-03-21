@@ -26,8 +26,9 @@ public sealed class Bootstrapper
         var routingService = new RoutingService(captureSessionFactory, transportResolver);
         var profileStore = new ProfileStore();
         var browserSnapshotService = new BrowserSnapshotService();
+        var browserAudioCaptureService = new BrowserAudioCaptureService();
         var experimentalWebRtcAvService = new ExperimentalWebRtcAvService();
-        var experimentalAvMediaService = new ExperimentalAvMediaService();
+        var experimentalAvMediaService = new ExperimentalAvMediaService(browserSnapshotService, browserAudioCaptureService);
         var experimentalMediaHttpServer = new ExperimentalMediaHttpServer(experimentalAvMediaService);
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
@@ -37,6 +38,6 @@ public sealed class Bootstrapper
         var appDataMaintenanceService = new AppDataMaintenanceService();
         var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);
 
-        return new MainWindow(viewModel, browserSnapshotService);
+        return new MainWindow(viewModel, browserSnapshotService, browserAudioCaptureService);
     }
 }

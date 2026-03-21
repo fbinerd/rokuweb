@@ -180,11 +180,11 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
         var activePort = EnsureListener(endpoint);
-        _experimentalAvMediaService.EnsureStarted();
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
+            _experimentalAvMediaService.EnsureStarted(window.Id);
             var snapshot = BuildWindowSnapshot(window, activePort, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
@@ -914,19 +914,19 @@ public sealed class LocalWebRtcPublisherService
         return _experimentalWebRtcAvService.BuildMediaUrl(windowId, publicHost, port);
     }
 
-    private string BuildExperimentalTransportStatus()
+    private string BuildExperimentalTransportStatus(Guid windowId)
     {
         if (!_experimentalAvMediaService.IsAvailable)
         {
             return "ffmpeg-unavailable";
         }
 
-        if (_experimentalAvMediaService.TryGetMp4Path(out _))
+        if (_experimentalAvMediaService.TryGetMp4Path(windowId, out _))
         {
             return "bridge-media-ready";
         }
 
-        return "diagnostic-media-starting";
+        return "awaiting-browser-media";
     }
 
     private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
@@ -977,8 +977,9 @@ public sealed class LocalWebRtcPublisherService
         var routeSuffix = segments.Length > 1 ? segments[1] : string.Empty;
         var sessionState = _experimentalWebRtcAvService.GetOrCreateSession(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl);
         sessionState.MediaUrl = BuildExperimentalMediaUrl(windowId);
-        sessionState.TransportStatus = BuildExperimentalTransportStatus();
-        sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(out _);
+        _experimentalAvMediaService.EnsureStarted(windowId);
+        sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId);
+        sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
         sessionState.MediaReady = sessionState.MediaTransportImplemented;
 
         if (string.Equals(routeSuffix, "state", StringComparison.OrdinalIgnoreCase))
@@ -1006,7 +1007,7 @@ public sealed class LocalWebRtcPublisherService
                     "Midia experimental solicitada: janela={0}, transportStatus={1}",
                     windowId.ToString("N"),
                     sessionState.TransportStatus));
-            if (_experimentalAvMediaService.TryGetMp4Path(out var mp4Path))
+            if (_experimentalAvMediaService.TryGetMp4Path(windowId, out var mp4Path))
             {
                 headers.TryGetValue("Range", out var rangeHeader);
                 return await BuildFileResponseAsync(mp4Path, "video/mp4", rangeHeader, string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase), cancellationToken);
@@ -1067,7 +1068,7 @@ public sealed class LocalWebRtcPublisherService
                 {
                     "Offer recebida pelo super.",
                     "Resposta SDP placeholder gerada.",
-                    "O transporte experimental atual usa midia diagnostica MP4 com audio."
+                    "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador."
                 }
             };
 
@@ -1102,12 +1103,12 @@ public sealed class LocalWebRtcPublisherService
                 "media-endpoint"
             },
             MediaUrl = BuildExperimentalMediaUrl(windowId),
-            TransportStatus = BuildExperimentalTransportStatus(),
-            MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(out _),
+            TransportStatus = BuildExperimentalTransportStatus(windowId),
+            MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _),
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",
-                "O transporte experimental atual usa um MP4 diagnostico com audio, separado do navegador real."
+                "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador."
             }
         };
 

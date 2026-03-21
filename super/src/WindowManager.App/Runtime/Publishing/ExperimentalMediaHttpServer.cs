@@ -102,14 +102,8 @@ public sealed class ExperimentalMediaHttpServer : IDisposable
     {
         try
         {
-            if (!_mediaService.TryGetMp4Path(out var filePath))
-            {
-                context.Response.StatusCode = 404;
-                context.Response.Close();
-                return;
-            }
-
-            await WriteFileResponseAsync(context, filePath, "video/mp4", cancellationToken).ConfigureAwait(false);
+            context.Response.StatusCode = 501;
+            context.Response.Close();
         }
         catch (Exception ex)
         {

@@ -1,7 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace WindowManager.App.Runtime.Publishing;
@@ -11,11 +11,14 @@ public sealed class ExperimentalAvMediaService : IDisposable
     private readonly bool _enabled;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
-    private CancellationTokenSource? _cancellation;
-    private Task? _worker;
+    private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly BrowserAudioCaptureService _browserAudioCaptureService;
+    private readonly ConcurrentDictionary<Guid, Task> _windowBuilds = new ConcurrentDictionary<Guid, Task>();
 
-    public ExperimentalAvMediaService()
+    public ExperimentalAvMediaService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
+        _browserSnapshotService = browserSnapshotService;
+        _browserAudioCaptureService = browserAudioCaptureService;
         _enabled = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_EXPERIMENT_WEBRTC_AV"), "1", StringComparison.OrdinalIgnoreCase);
         _rootDirectory = Path.Combine(AppDataPaths.Root, "experimental-av-media");
         Directory.CreateDirectory(_rootDirectory);
@@ -36,45 +39,88 @@ public sealed class ExperimentalAvMediaService : IDisposable
 
     public bool IsAvailable => _enabled && !string.IsNullOrWhiteSpace(_ffmpegPath);
 
-    public void EnsureStarted()
+    public void EnsureStarted(Guid windowId)
     {
         if (!IsAvailable)
         {
             return;
         }
 
-        if (_worker is not null && !_worker.IsCompleted)
+        if (!_browserAudioCaptureService.HasRecentAudio(windowId))
         {
             return;
         }
 
-        _cancellation?.Cancel();
-        _cancellation?.Dispose();
-        _cancellation = new CancellationTokenSource();
-        _worker = Task.Run(() => GenerateDiagnosticMp4Async(_cancellation.Token));
+        if (TryGetMp4Path(windowId, out var existingPath))
+        {
+            try
+            {
+                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(existingPath);
+                if (age <= TimeSpan.FromSeconds(2))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (_windowBuilds.TryGetValue(windowId, out var activeBuild) && !activeBuild.IsCompleted)
+        {
+            return;
+        }
+
+        var buildTask = Task.Run(() => GenerateWindowMp4Async(windowId));
+        _windowBuilds[windowId] = buildTask;
+        _ = buildTask.ContinueWith(_ => _windowBuilds.TryRemove(windowId, out _), TaskScheduler.Default);
     }
 
-    public bool TryGetMp4Path(out string path)
+    public bool TryGetMp4Path(Guid windowId, out string path)
     {
-        path = Path.Combine(_rootDirectory, "experimental-diagnostic.mp4");
+        path = Path.Combine(_rootDirectory, windowId.ToString("N"), "panel-experimental.mp4");
         return IsAvailable && File.Exists(path);
     }
 
-    private async Task GenerateDiagnosticMp4Async(CancellationToken cancellationToken)
+    private async Task GenerateWindowMp4Async(Guid windowId)
     {
         try
         {
-            var outputPath = Path.Combine(_rootDirectory, "experimental-diagnostic.mp4");
+            var waveBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId);
+            if (waveBytes is null || waveBytes.Length == 0)
+            {
+                AppLog.Write("ExpWebRtc", $"Sem audio recente para gerar midia experimental da janela {windowId:N}.");
+                return;
+            }
+
+            var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default).ConfigureAwait(false);
+            if (jpegBytes is null || jpegBytes.Length == 0)
+            {
+                AppLog.Write("ExpWebRtc", $"Sem frame recente para gerar midia experimental da janela {windowId:N}.");
+                return;
+            }
+
+            var windowDirectory = Path.Combine(_rootDirectory, windowId.ToString("N"));
+            Directory.CreateDirectory(windowDirectory);
+
+            var stillPath = Path.Combine(windowDirectory, "panel.jpg");
+            var wavePath = Path.Combine(windowDirectory, "panel.wav");
+            var outputPath = Path.Combine(windowDirectory, "panel-experimental.mp4");
+            var tempPath = outputPath + ".tmp";
+
+            File.WriteAllBytes(stillPath, jpegBytes);
+            File.WriteAllBytes(wavePath, waveBytes);
+
             var args =
                 "-hide_banner -loglevel error -y " +
-                "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
-                "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
+                "-loop 1 -framerate 24 -i \"" + stillPath + "\" " +
+                "-i \"" + wavePath + "\" " +
                 "-map 0:v:0 -map 1:a:0 " +
-                "-t 600 " +
-                "-c:v libx264 -preset veryfast -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
-                "-c:a aac -profile:a aac_low -b:a 96k -ar 44100 -ac 2 " +
+                "-shortest " +
+                "-c:v libx264 -preset veryfast -tune stillimage -profile:v baseline -level 3.1 -pix_fmt yuv420p " +
+                "-c:a aac -profile:a aac_low -b:a 128k -ar 44100 -ac 2 " +
                 "-movflags +faststart -brand mp42 " +
-                "\"" + outputPath + "\"";
+                "\"" + tempPath + "\"";
 
             using var process = Process.Start(new ProcessStartInfo
             {
@@ -91,24 +137,27 @@ public sealed class ExperimentalAvMediaService : IDisposable
                 return;
             }
 
-            AppLog.Write("ExpWebRtc", "Gerador de midia experimental MP4 iniciado.");
-            await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+            AppLog.Write("ExpWebRtc", $"Gerador de midia experimental MP4 real iniciado: janela={windowId:N}");
+            await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
             if (process.ExitCode == 0)
             {
-                AppLog.Write("ExpWebRtc", "Arquivo MP4 diagnostico experimental pronto.");
+                if (File.Exists(outputPath))
+                {
+                    File.Delete(outputPath);
+                }
+
+                File.Move(tempPath, outputPath);
+                AppLog.Write("ExpWebRtc", $"Arquivo MP4 experimental real pronto: janela={windowId:N}");
             }
             else
             {
                 var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                AppLog.Write("ExpWebRtc", "ffmpeg experimental encerrou com erro: " + error);
+                AppLog.Write("ExpWebRtc", $"ffmpeg experimental encerrou com erro na janela {windowId:N}: {error}");
             }
-        }
-        catch (OperationCanceledException)
-        {
         }
         catch (Exception ex)
         {
-            AppLog.Write("ExpWebRtc", "Falha no gerador de midia experimental: " + ex.Message);
+            AppLog.Write("ExpWebRtc", $"Falha no gerador de midia experimental da janela {windowId:N}: {ex.Message}");
         }
     }
 
@@ -197,12 +246,5 @@ public sealed class ExperimentalAvMediaService : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            _cancellation?.Cancel();
-        }
-        catch
-        {
-        }
     }
 }
