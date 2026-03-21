@@ -8,6 +8,7 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class ExperimentalAvMediaService : IDisposable
 {
+    private const double MinimumBufferedAudioSeconds = 3.0;
     private readonly bool _enabled;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
@@ -104,8 +105,10 @@ public sealed class ExperimentalAvMediaService : IDisposable
         var deadlineUtc = DateTime.UtcNow.AddSeconds(15);
         while (DateTime.UtcNow < deadlineUtc)
         {
-            if (_browserAudioCaptureService.HasRecentAudio(windowId))
+            var bufferedSeconds = _browserAudioCaptureService.GetBufferedDurationSeconds(windowId);
+            if (_browserAudioCaptureService.HasRecentAudio(windowId) && bufferedSeconds >= MinimumBufferedAudioSeconds)
             {
+                AppLog.Write("ExpWebRtc", $"Audio suficiente para midia experimental: janela={windowId:N}, segundos={bufferedSeconds:F2}");
                 await GenerateWindowMp4Async(windowId).ConfigureAwait(false);
                 return;
             }
@@ -113,7 +116,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
             await Task.Delay(300).ConfigureAwait(false);
         }
 
-        AppLog.Write("ExpWebRtc", $"Audio do navegador nao ficou pronto a tempo para a janela {windowId:N}.");
+        AppLog.Write("ExpWebRtc", $"Audio do navegador nao ficou pronto a tempo para a janela {windowId:N}. segundos={_browserAudioCaptureService.GetBufferedDurationSeconds(windowId):F2}");
     }
 
     private async Task GenerateWindowMp4Async(Guid windowId)
@@ -126,6 +129,8 @@ public sealed class ExperimentalAvMediaService : IDisposable
                 AppLog.Write("ExpWebRtc", $"Sem audio recente para gerar midia experimental da janela {windowId:N}.");
                 return;
             }
+
+            AppLog.Write("ExpWebRtc", $"Gerando MP4 experimental com audio buffered={_browserAudioCaptureService.GetBufferedDurationSeconds(windowId):F2}s para janela={windowId:N}");
 
             var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default).ConfigureAwait(false);
             if (jpegBytes is null || jpegBytes.Length == 0)

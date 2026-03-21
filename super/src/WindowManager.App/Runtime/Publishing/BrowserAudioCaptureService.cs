@@ -39,6 +39,16 @@ public sealed class BrowserAudioCaptureService
         return buffer.BuildWaveSnapshot();
     }
 
+    public double GetBufferedDurationSeconds(Guid windowId)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return 0;
+        }
+
+        return buffer.GetBufferedDurationSeconds();
+    }
+
     internal bool TryConfigure(Guid windowId, CefSharp.Structs.AudioParameters parameters, int channels)
     {
         var sampleRate = Math.Max(1, parameters.SampleRate);
@@ -204,6 +214,25 @@ public sealed class BrowserAudioCaptureService
                 }
 
                 return BuildWaveFile(_pcmBytes, _sampleRate, _channels);
+            }
+        }
+
+        public double GetBufferedDurationSeconds()
+        {
+            lock (_gate)
+            {
+                if (_sampleRate <= 0 || _channels <= 0 || _pcmBytes.Length == 0)
+                {
+                    return 0;
+                }
+
+                var bytesPerSecond = _sampleRate * _channels * 2.0;
+                if (bytesPerSecond <= 0)
+                {
+                    return 0;
+                }
+
+                return _pcmBytes.Length / bytesPerSecond;
             }
         }
 
