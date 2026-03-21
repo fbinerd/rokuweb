@@ -16,16 +16,19 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserSnapshotService
 {
-    private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(90);
+    private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(140);
+    private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(66);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
     private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();
     private readonly ConcurrentDictionary<Guid, Task<byte[]?>> _captureTasks = new ConcurrentDictionary<Guid, Task<byte[]?>>();
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _captureLoops = new ConcurrentDictionary<Guid, CancellationTokenSource>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
     {
         _browsers[windowId] = browser;
         _cachedFrames.TryRemove(windowId, out _);
+        StartCaptureLoop(windowId, browser);
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
     }
 
@@ -34,6 +37,18 @@ public sealed class BrowserSnapshotService
         _browsers.TryRemove(windowId, out _);
         _cachedFrames.TryRemove(windowId, out _);
         _captureTasks.TryRemove(windowId, out _);
+        if (_captureLoops.TryRemove(windowId, out var cancellation))
+        {
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch
+            {
+            }
+
+            cancellation.Dispose();
+        }
         _cursorStates.TryRemove(windowId, out _);
     }
 
@@ -282,6 +297,61 @@ public sealed class BrowserSnapshotService
         catch
         {
             return null;
+        }
+    }
+
+    private void StartCaptureLoop(Guid windowId, ChromiumWebBrowser browser)
+    {
+        if (_captureLoops.TryRemove(windowId, out var existingCancellation))
+        {
+            try
+            {
+                existingCancellation.Cancel();
+            }
+            catch
+            {
+            }
+
+            existingCancellation.Dispose();
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _captureLoops[windowId] = cancellation;
+        _ = Task.Run(() => RunCaptureLoopAsync(windowId, browser, cancellation.Token), cancellation.Token);
+    }
+
+    private async Task RunCaptureLoopAsync(Guid windowId, ChromiumWebBrowser browser, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!_browsers.TryGetValue(windowId, out var currentBrowser) || !ReferenceEquals(currentBrowser, browser))
+                {
+                    break;
+                }
+
+                if (!_captureTasks.ContainsKey(windowId))
+                {
+                    var jpegBytes = await CaptureFreshJpegAsync(windowId, browser).ConfigureAwait(false);
+                    if (jpegBytes is not null && jpegBytes.Length > 0)
+                    {
+                        _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await Task.Delay(BackgroundCaptureInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
 
