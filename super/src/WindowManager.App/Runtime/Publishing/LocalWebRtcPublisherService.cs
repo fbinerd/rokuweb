@@ -25,6 +25,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
@@ -636,9 +637,11 @@ public sealed class LocalWebRtcPublisherService
         var wavBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId, TimeSpan.FromSeconds(seconds));
         if (wavBytes is null || wavBytes.Length == 0)
         {
+            MaybeLogAudioServe(windowId, 0, seconds, false);
             return BuildHttpResponse(404, "Audio indisponivel.", "text/plain; charset=utf-8");
         }
 
+        MaybeLogAudioServe(windowId, wavBytes.Length, seconds, true);
         return BuildBinaryHttpResponse(200, wavBytes, "audio/wav");
     }
 
@@ -990,6 +993,26 @@ public sealed class LocalWebRtcPublisherService
         }
 
         return string.Empty;
+    }
+
+    private void MaybeLogAudioServe(Guid windowId, int bytes, double seconds, bool ok)
+    {
+        var now = DateTime.UtcNow;
+        if (_lastAudioServeLogUtc.TryGetValue(windowId, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        _lastAudioServeLogUtc[windowId] = now;
+        AppLog.Write(
+            "BrowserAudio",
+            string.Format(
+                "Snapshot de audio solicitado: janela={0}, ok={1}, bytes={2}, seconds={3:0.0}, bufferedPcm={4}",
+                windowId.ToString("N"),
+                ok,
+                bytes,
+                seconds,
+                _browserAudioCaptureService.GetBufferedPcmBytes(windowId)));
     }
 }
 

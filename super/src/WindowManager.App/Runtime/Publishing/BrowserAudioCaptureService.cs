@@ -150,6 +150,7 @@ public sealed class BrowserAudioCaptureService
         private int _maxBytes;
         private DateTime _lastPacketUtc = DateTime.MinValue;
         private long _sequence;
+        private bool _loggedFirstPacket;
 
         public void Configure(int sampleRate, int channels, int maxBytes)
         {
@@ -160,6 +161,7 @@ public sealed class BrowserAudioCaptureService
                 _maxBytes = Math.Max(4096, maxBytes);
                 _pcmBytes = Array.Empty<byte>();
                 _lastPacketUtc = DateTime.MinValue;
+                _loggedFirstPacket = false;
             }
         }
 
@@ -209,6 +211,11 @@ public sealed class BrowserAudioCaptureService
 
                 AppendBytes(packetBytes);
                 _sequence++;
+                if (!_loggedFirstPacket)
+                {
+                    _loggedFirstPacket = true;
+                    AppLog.Write("BrowserAudio", string.Format("Primeiro pacote de audio recebido: sampleRate={0}, channels={1}, bytes={2}", _sampleRate, _channels, packetBytes.Length));
+                }
                 _livePackets.Enqueue(new LiveAudioPacket
                 {
                     Sequence = _sequence,
@@ -355,5 +362,23 @@ public sealed class BrowserAudioCaptureService
                 return stream.ToArray();
             }
         }
+
+        public int GetBufferedPcmBytes()
+        {
+            lock (_gate)
+            {
+                return _pcmBytes.Length;
+            }
+        }
+    }
+
+    public int GetBufferedPcmBytes(Guid windowId)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return 0;
+        }
+
+        return buffer.GetBufferedPcmBytes();
     }
 }
