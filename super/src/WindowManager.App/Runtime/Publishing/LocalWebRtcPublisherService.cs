@@ -315,6 +315,7 @@ public sealed class LocalWebRtcPublisherService
         using (var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, true))
         {
             string? requestLine;
+            Dictionary<string, string>? requestHeaders = null;
             try
             {
                 requestLine = await reader.ReadLineAsync().ConfigureAwait(false);
@@ -323,10 +324,21 @@ public sealed class LocalWebRtcPublisherService
                     return;
                 }
 
+                requestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 string? headerLine;
                 do
                 {
                     headerLine = await reader.ReadLineAsync().ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(headerLine))
+                    {
+                        var separatorIndex = headerLine.IndexOf(':');
+                        if (separatorIndex > 0)
+                        {
+                            var key = headerLine.Substring(0, separatorIndex).Trim();
+                            var value = headerLine.Substring(separatorIndex + 1).Trim();
+                            requestHeaders[key] = value;
+                        }
+                    }
                 }
                 while (!string.IsNullOrEmpty(headerLine));
             }
@@ -340,7 +352,7 @@ public sealed class LocalWebRtcPublisherService
             try
             {
                 WriteBridgeDebug("HANDLE " + path + " from " + (string.IsNullOrWhiteSpace(remoteAddress) ? "(unknown)" : remoteAddress));
-                var response = await BuildResponseAsync(path, remoteAddress, cancellationToken);
+                var response = await BuildResponseAsync(path, remoteAddress, requestHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), cancellationToken);
                 var bytes = BuildRawHttpResponse(response);
                 await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
                 WriteBridgeDebug("RESPONDED " + path + " bytes=" + response.BodyBytes.Length.ToString());
@@ -377,7 +389,7 @@ public sealed class LocalWebRtcPublisherService
         }
     }
 
-    private async Task<BridgeHttpResponse> BuildResponseAsync(string path, string remoteAddress, CancellationToken cancellationToken)
+    private async Task<BridgeHttpResponse> BuildResponseAsync(string path, string remoteAddress, Dictionary<string, string> requestHeaders, CancellationToken cancellationToken)
     {
         var requestTarget = path ?? "/";
         var normalizedPath = requestTarget.Split('?')[0];
@@ -389,7 +401,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/diag-av/", StringComparison.OrdinalIgnoreCase))
         {
-            return await BuildDiagnosticAvResponseAsync(normalizedPath, cancellationToken);
+            return await BuildDiagnosticAvResponseAsync(normalizedPath, requestHeaders, cancellationToken);
         }
 
         if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
@@ -674,7 +686,7 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
-    private async Task<BridgeHttpResponse> BuildDiagnosticAvResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    private async Task<BridgeHttpResponse> BuildDiagnosticAvResponseAsync(string normalizedPath, Dictionary<string, string> requestHeaders, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -691,8 +703,8 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(404, "Arquivo A/V diagnostico MP4 indisponivel.", "text/plain; charset=utf-8");
             }
 
-            var mp4Bytes = await Task.Run(() => File.ReadAllBytes(mp4Path), cancellationToken).ConfigureAwait(false);
-            return BuildBinaryHttpResponse(200, mp4Bytes, "video/mp4");
+            requestHeaders.TryGetValue("Range", out var rangeHeader);
+            return await BuildFileHttpResponseAsync(mp4Path, "video/mp4", rangeHeader, cancellationToken).ConfigureAwait(false);
         }
 
         if (string.Equals(fileName, "diagnostic.mp3", StringComparison.OrdinalIgnoreCase))
@@ -713,8 +725,8 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(404, "Arquivo A/V diagnostico TS indisponivel.", "text/plain; charset=utf-8");
             }
 
-            var tsBytes = await Task.Run(() => File.ReadAllBytes(tsPath), cancellationToken).ConfigureAwait(false);
-            return BuildBinaryHttpResponse(200, tsBytes, "video/mp2t");
+            requestHeaders.TryGetValue("Range", out var rangeHeader);
+            return await BuildFileHttpResponseAsync(tsPath, "video/mp2t", rangeHeader, cancellationToken).ConfigureAwait(false);
         }
 
         if (string.Equals(fileName, "index.m3u8", StringComparison.OrdinalIgnoreCase))
@@ -789,14 +801,24 @@ public sealed class LocalWebRtcPublisherService
 
     private static byte[] BuildRawHttpResponse(BridgeHttpResponse response)
     {
-        var reason = response.StatusCode == 200 ? "OK" : response.StatusCode == 404 ? "Not Found" : response.StatusCode == 400 ? "Bad Request" : "Error";
-        var header = Encoding.ASCII.GetBytes(
-            string.Format(
-                "HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n",
-                response.StatusCode,
-                reason,
-                response.ContentType,
-                response.BodyBytes.Length));
+        var reason = response.StatusCode == 200 ? "OK"
+            : response.StatusCode == 206 ? "Partial Content"
+            : response.StatusCode == 404 ? "Not Found"
+            : response.StatusCode == 400 ? "Bad Request"
+            : response.StatusCode == 416 ? "Range Not Satisfiable"
+            : "Error";
+        var headerBuilder = new StringBuilder();
+        headerBuilder.AppendFormat("HTTP/1.1 {0} {1}\r\n", response.StatusCode, reason);
+        headerBuilder.AppendFormat("Content-Type: {0}\r\n", response.ContentType);
+        headerBuilder.AppendFormat("Content-Length: {0}\r\n", response.BodyBytes.Length);
+        headerBuilder.Append("Connection: close\r\n");
+        headerBuilder.Append("Cache-Control: no-store\r\n");
+        foreach (var responseHeader in response.Headers)
+        {
+            headerBuilder.AppendFormat("{0}: {1}\r\n", responseHeader.Key, responseHeader.Value);
+        }
+        headerBuilder.Append("\r\n");
+        var header = Encoding.ASCII.GetBytes(headerBuilder.ToString());
 
         var result = new byte[header.Length + response.BodyBytes.Length];
         Buffer.BlockCopy(header, 0, result, 0, header.Length);
@@ -883,6 +905,104 @@ public sealed class LocalWebRtcPublisherService
     private static BridgeHttpResponse BuildBinaryHttpResponse(int statusCode, byte[] bodyBytes, string contentType)
     {
         return new BridgeHttpResponse(statusCode, contentType, bodyBytes);
+    }
+
+    private static async Task<BridgeHttpResponse> BuildFileHttpResponseAsync(string filePath, string contentType, string? rangeHeader, CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(filePath);
+        if (!fileInfo.Exists)
+        {
+            return BuildHttpResponse(404, "Arquivo nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var totalLength = fileInfo.Length;
+        if (string.IsNullOrWhiteSpace(rangeHeader) || !TryParseRangeHeader(rangeHeader!, totalLength, out var start, out var end))
+        {
+            var fullBytes = await Task.Run(() => File.ReadAllBytes(filePath), cancellationToken).ConfigureAwait(false);
+            return new BridgeHttpResponse(200, contentType, fullBytes, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Accept-Ranges"] = "bytes"
+            });
+        }
+
+        if (start < 0 || end < start || end >= totalLength)
+        {
+            return new BridgeHttpResponse(416, contentType, Array.Empty<byte>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Accept-Ranges"] = "bytes",
+                ["Content-Range"] = $"bytes */{totalLength}"
+            });
+        }
+
+        var length = checked((int)(end - start + 1));
+        var buffer = new byte[length];
+        using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            fs.Seek(start, SeekOrigin.Begin);
+            var offset = 0;
+            while (offset < length)
+            {
+                var read = await fs.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                offset += read;
+            }
+        }
+
+        return new BridgeHttpResponse(206, contentType, buffer, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Accept-Ranges"] = "bytes",
+            ["Content-Range"] = $"bytes {start}-{start + buffer.Length - 1}/{totalLength}"
+        });
+    }
+
+    private static bool TryParseRangeHeader(string rangeHeader, long totalLength, out long start, out long end)
+    {
+        start = 0;
+        end = totalLength - 1;
+
+        if (string.IsNullOrWhiteSpace(rangeHeader) || !rangeHeader.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var value = rangeHeader.Substring("bytes=".Length);
+        var separatorIndex = value.IndexOf('-');
+        if (separatorIndex < 0)
+        {
+            return false;
+        }
+
+        var startText = value.Substring(0, separatorIndex).Trim();
+        var endText = value.Substring(separatorIndex + 1).Trim();
+
+        if (startText.Length == 0)
+        {
+            if (!long.TryParse(endText, out var suffixLength) || suffixLength <= 0)
+            {
+                return false;
+            }
+
+            start = Math.Max(0, totalLength - suffixLength);
+            end = totalLength - 1;
+            return true;
+        }
+
+        if (!long.TryParse(startText, out start) || start < 0)
+        {
+            return false;
+        }
+
+        if (endText.Length == 0)
+        {
+            end = totalLength - 1;
+            return true;
+        }
+
+        return long.TryParse(endText, out end);
     }
 
     private static string BuildIndexPage()
@@ -1219,10 +1339,16 @@ public sealed class RegisteredDisplaySnapshot
 internal sealed class BridgeHttpResponse
 {
     public BridgeHttpResponse(int statusCode, string contentType, byte[] bodyBytes)
+        : this(statusCode, contentType, bodyBytes, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+    {
+    }
+
+    public BridgeHttpResponse(int statusCode, string contentType, byte[] bodyBytes, Dictionary<string, string> headers)
     {
         StatusCode = statusCode;
         ContentType = contentType;
         BodyBytes = bodyBytes;
+        Headers = headers;
     }
 
     public int StatusCode { get; }
@@ -1230,5 +1356,7 @@ internal sealed class BridgeHttpResponse
     public string ContentType { get; }
 
     public byte[] BodyBytes { get; }
+
+    public Dictionary<string, string> Headers { get; }
 }
 
