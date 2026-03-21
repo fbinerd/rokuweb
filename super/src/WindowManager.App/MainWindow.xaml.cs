@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private TransmissionLogWindow? _logWindow;
     private Guid? _expandedPreviewWindowId;
     private bool _isRefreshingPreviews;
+    private Point? _lastExpandedPreviewMousePoint;
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService)
     {
@@ -511,6 +512,7 @@ public partial class MainWindow : Window
         ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
         ExpandedPreviewOverlay.Visibility = Visibility.Visible;
         _expandedPreviewWindowId = session.Id;
+        ExpandedPreviewHost.Focus();
         _ = RefreshPreviewImagesAsync();
     }
 
@@ -523,6 +525,7 @@ public partial class MainWindow : Window
 
         var windowId = _expandedPreviewWindowId.Value;
         _expandedPreviewWindowId = null;
+        _lastExpandedPreviewMousePoint = null;
         ExpandedPreviewOverlay.Visibility = Visibility.Collapsed;
         ExpandedPreviewTitle.Text = string.Empty;
         ExpandedPreviewImage.Source = null;
@@ -611,6 +614,101 @@ public partial class MainWindow : Window
         CloseExpandedPreview();
     }
 
+    private async void OnExpandedPreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_expandedPreviewWindowId.HasValue)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(ExpandedPreviewImage);
+        if (!TryMapExpandedPreviewPoint(point, out var mappedPoint))
+        {
+            return;
+        }
+
+        if (_lastExpandedPreviewMousePoint.HasValue)
+        {
+            var previous = _lastExpandedPreviewMousePoint.Value;
+            if (Math.Abs(previous.X - mappedPoint.X) < 2 && Math.Abs(previous.Y - mappedPoint.Y) < 2)
+            {
+                return;
+            }
+        }
+
+        _lastExpandedPreviewMousePoint = mappedPoint;
+        await _browserSnapshotService.SendRemoteCommandAsync(
+            _expandedPreviewWindowId.Value,
+            "move",
+            (int)Math.Round(mappedPoint.X),
+            (int)Math.Round(mappedPoint.Y),
+            null,
+            default);
+    }
+
+    private async void OnExpandedPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_expandedPreviewWindowId.HasValue)
+        {
+            return;
+        }
+
+        ExpandedPreviewHost.Focus();
+
+        var point = e.GetPosition(ExpandedPreviewImage);
+        if (!TryMapExpandedPreviewPoint(point, out var mappedPoint))
+        {
+            return;
+        }
+
+        _lastExpandedPreviewMousePoint = mappedPoint;
+        await _browserSnapshotService.SendRemoteCommandAsync(
+            _expandedPreviewWindowId.Value,
+            "click",
+            (int)Math.Round(mappedPoint.X),
+            (int)Math.Round(mappedPoint.Y),
+            null,
+            default);
+    }
+
+    private async void OnExpandedPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_expandedPreviewWindowId.HasValue)
+        {
+            return;
+        }
+
+        if (e.Key == Key.System)
+        {
+            return;
+        }
+
+        if (IsTextProducingKey(e.Key))
+        {
+            return;
+        }
+
+        var handled = await _browserSnapshotService.SendKeyInputAsync(_expandedPreviewWindowId.Value, e.Key, default);
+        if (handled)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private async void OnExpandedPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (!_expandedPreviewWindowId.HasValue || string.IsNullOrEmpty(e.Text))
+        {
+            return;
+        }
+
+        var handled = await _browserSnapshotService.SendTextInputAsync(_expandedPreviewWindowId.Value, e.Text, default);
+        if (handled)
+        {
+            e.Handled = true;
+        }
+    }
+
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
@@ -663,6 +761,93 @@ public partial class MainWindow : Window
         image.EndInit();
         image.Freeze();
         return image;
+    }
+
+    private static bool IsTextProducingKey(Key key)
+    {
+        if (key >= Key.A && key <= Key.Z)
+        {
+            return true;
+        }
+
+        if (key >= Key.D0 && key <= Key.D9)
+        {
+            return true;
+        }
+
+        if (key >= Key.NumPad0 && key <= Key.NumPad9)
+        {
+            return true;
+        }
+
+        switch (key)
+        {
+            case Key.Space:
+            case Key.OemMinus:
+            case Key.OemPlus:
+            case Key.OemOpenBrackets:
+            case Key.Oem6:
+            case Key.Oem5:
+            case Key.Oem1:
+            case Key.Oem7:
+            case Key.OemComma:
+            case Key.OemPeriod:
+            case Key.Oem2:
+            case Key.Oem3:
+            case Key.Decimal:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool TryMapExpandedPreviewPoint(Point point, out Point mappedPoint)
+    {
+        mappedPoint = default;
+        if (ExpandedPreviewImage.Source is not BitmapSource source)
+        {
+            return false;
+        }
+
+        var containerWidth = ExpandedPreviewImage.ActualWidth;
+        var containerHeight = ExpandedPreviewImage.ActualHeight;
+        if (containerWidth <= 0 || containerHeight <= 0 || source.PixelWidth <= 0 || source.PixelHeight <= 0)
+        {
+            return false;
+        }
+
+        var sourceAspect = (double)source.PixelWidth / source.PixelHeight;
+        var containerAspect = containerWidth / containerHeight;
+
+        double renderWidth;
+        double renderHeight;
+        double offsetX;
+        double offsetY;
+
+        if (containerAspect > sourceAspect)
+        {
+            renderHeight = containerHeight;
+            renderWidth = renderHeight * sourceAspect;
+            offsetX = (containerWidth - renderWidth) / 2;
+            offsetY = 0;
+        }
+        else
+        {
+            renderWidth = containerWidth;
+            renderHeight = renderWidth / sourceAspect;
+            offsetX = 0;
+            offsetY = (containerHeight - renderHeight) / 2;
+        }
+
+        if (point.X < offsetX || point.Y < offsetY || point.X > offsetX + renderWidth || point.Y > offsetY + renderHeight)
+        {
+            return false;
+        }
+
+        var normalizedX = (point.X - offsetX) / renderWidth;
+        var normalizedY = (point.Y - offsetY) / renderHeight;
+        mappedPoint = new Point(normalizedX * source.PixelWidth, normalizedY * source.PixelHeight);
+        return true;
     }
 }
 

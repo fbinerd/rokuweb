@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using CefSharp;
 using CefSharp.Wpf;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WindowManager.App.Runtime;
@@ -147,6 +148,91 @@ public sealed class BrowserSnapshotService
                     return RemoteCommandResult.Failure();
             }
         }).Task.Unwrap();
+    }
+
+    public async Task<bool> SendKeyInputAsync(Guid windowId, Key key, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_browsers.TryGetValue(windowId, out var browser))
+        {
+            return false;
+        }
+
+        return await browser.Dispatcher.InvokeAsync(() =>
+        {
+            var cefBrowser = browser.GetBrowser();
+            var host = cefBrowser?.GetHost();
+            if (host is null)
+            {
+                return false;
+            }
+
+            host.SetFocus(true);
+            host.SendFocusEvent(true);
+
+            var keyCode = KeyInterop.VirtualKeyFromKey(key);
+            if (keyCode <= 0)
+            {
+                return false;
+            }
+
+            host.SendKeyEvent(new KeyEvent
+            {
+                Type = KeyEventType.RawKeyDown,
+                WindowsKeyCode = keyCode,
+                NativeKeyCode = keyCode,
+                FocusOnEditableField = true
+            });
+
+            host.SendKeyEvent(new KeyEvent
+            {
+                Type = KeyEventType.KeyUp,
+                WindowsKeyCode = keyCode,
+                NativeKeyCode = keyCode,
+                FocusOnEditableField = true
+            });
+
+            AppLog.Write("SuperPreviewControl", string.Format("Tecla local enviada ao CEF: key={0}, code={1}, janela={2}", key, keyCode, windowId.ToString("N")));
+            return true;
+        });
+    }
+
+    public async Task<bool> SendTextInputAsync(Guid windowId, string text, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrEmpty(text) || !_browsers.TryGetValue(windowId, out var browser))
+        {
+            return false;
+        }
+
+        return await browser.Dispatcher.InvokeAsync(() =>
+        {
+            var cefBrowser = browser.GetBrowser();
+            var host = cefBrowser?.GetHost();
+            if (host is null)
+            {
+                return false;
+            }
+
+            host.SetFocus(true);
+            host.SendFocusEvent(true);
+
+            foreach (var ch in text)
+            {
+                host.SendKeyEvent(new KeyEvent
+                {
+                    Type = KeyEventType.Char,
+                    WindowsKeyCode = ch,
+                    NativeKeyCode = ch,
+                    FocusOnEditableField = true
+                });
+            }
+
+            AppLog.Write("SuperPreviewControl", string.Format("Texto local enviado ao CEF: length={0}, janela={1}", text.Length, windowId.ToString("N")));
+            return true;
+        });
     }
 
     private static void SendKey(IBrowserHost host, int keyCode)
