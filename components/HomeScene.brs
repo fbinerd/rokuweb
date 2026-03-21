@@ -39,7 +39,9 @@ sub init()
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
-    m.experimentalAvTask = m.top.findNode("experimentalAvTask")
+    m.experimentalAvSessionTask = m.top.findNode("experimentalAvSessionTask")
+    m.experimentalAvOfferTask = m.top.findNode("experimentalAvOfferTask")
+    m.experimentalAvStateTask = m.top.findNode("experimentalAvStateTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
@@ -98,7 +100,9 @@ sub init()
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
-    m.experimentalAvTask.observeField("completedToken", "onExperimentalAvTaskCompleted")
+    m.experimentalAvSessionTask.observeField("completedToken", "onExperimentalAvSessionTaskCompleted")
+    m.experimentalAvOfferTask.observeField("completedToken", "onExperimentalAvOfferTaskCompleted")
+    m.experimentalAvStateTask.observeField("completedToken", "onExperimentalAvStateTaskCompleted")
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -683,7 +687,7 @@ sub maybeStartExperimentalAv(entry as object)
     m.statusLabel.text = "Sessao experimental A/V detectada"
     m.subtitleLabel.text = "Consultando sessao experimental..."
     ? "[ExpAV] session GET => "; experimentalAvUrl
-    runExperimentalAvRequest(experimentalAvUrl, "GET", "")
+    runExperimentalAvRequest(m.experimentalAvSessionTask, experimentalAvUrl, "GET", "")
 end sub
 
 sub stopExperimentalAv()
@@ -696,28 +700,28 @@ sub stopExperimentalAv()
     end if
 end sub
 
-sub runExperimentalAvRequest(url as string, method as string, body as string)
-    if m.experimentalAvTask = invalid or url = ""
+sub runExperimentalAvRequest(task as object, url as string, method as string, body as string)
+    if task = invalid or url = ""
         return
     end if
 
     ? "[ExpAV] request => "; method; " "; url
-    m.experimentalAvTask.bridgeUrl = url
-    m.experimentalAvTask.httpMethod = method
-    m.experimentalAvTask.requestBody = body
-    m.experimentalAvTask.responseCode = 0
-    m.experimentalAvTask.responseBody = ""
-    m.experimentalAvTask.errorMessage = ""
-    m.experimentalAvTask.control = "RUN"
+    task.bridgeUrl = url
+    task.httpMethod = method
+    task.requestBody = body
+    task.responseCode = 0
+    task.responseBody = ""
+    task.errorMessage = ""
+    task.control = "RUN"
 end sub
 
-sub onExperimentalAvTaskCompleted()
-    if not m.experimentalAvMode or m.experimentalAvTask = invalid
+sub onExperimentalAvSessionTaskCompleted()
+    if not m.experimentalAvMode or m.experimentalAvSessionTask = invalid
         return
     end if
 
-    responseBody = m.experimentalAvTask.responseBody
-    ? "[ExpAV] responseCode="; m.experimentalAvTask.responseCode; " action="; m.experimentalAvLastAction
+    responseBody = m.experimentalAvSessionTask.responseBody
+    ? "[ExpAV] responseCode="; m.experimentalAvSessionTask.responseCode; " action=session"
     if responseBody = invalid or responseBody = ""
         ? "[ExpAV] empty response"
         m.statusLabel.visible = true
@@ -737,56 +741,84 @@ sub onExperimentalAvTaskCompleted()
         return
     end if
 
-    if m.experimentalAvLastAction = "session"
-        offerUrl = getString(json.offerUrl, "")
-        stateUrl = getString(json.stateUrl, "")
-        if offerUrl = "" or stateUrl = ""
-            ? "[ExpAV] missing offer/state url"
-            m.statusLabel.visible = true
-            m.subtitleLabel.visible = true
-            m.statusLabel.text = "Sessao experimental incompleta"
-            m.subtitleLabel.text = "offerUrl/stateUrl ausentes."
-            return
-        end if
-
-        m.experimentalAvStateUrl = stateUrl
-        m.experimentalAvLastAction = "offer"
-        ? "[ExpAV] session ok => offer="; offerUrl; " state="; stateUrl
+    offerUrl = getString(json.offerUrl, "")
+    stateUrl = getString(json.stateUrl, "")
+    if offerUrl = "" or stateUrl = ""
+        ? "[ExpAV] missing offer/state url"
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
-        m.statusLabel.text = "Sessao experimental encontrada"
-        m.subtitleLabel.text = "Enviando offer para " + trimTitle(offerUrl)
-        offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
-        runExperimentalAvRequest(offerUrl, "POST", offerBody)
+        m.statusLabel.text = "Sessao experimental incompleta"
+        m.subtitleLabel.text = "offerUrl/stateUrl ausentes."
         return
     end if
 
-    if m.experimentalAvLastAction = "offer"
-        m.experimentalAvOfferPosted = true
-        m.experimentalAvLastAction = "state"
-        ? "[ExpAV] offer accepted"
-        m.statusLabel.visible = true
-        m.subtitleLabel.visible = true
-        m.statusLabel.text = "Offer experimental entregue"
-        m.subtitleLabel.text = "Acompanhando state da sessao..."
-        scheduleExperimentalAvStatePoll()
+    m.experimentalAvStateUrl = stateUrl
+    m.experimentalAvLastAction = "offer"
+    ? "[ExpAV] session ok => offer="; offerUrl; " state="; stateUrl
+    m.statusLabel.visible = true
+    m.subtitleLabel.visible = true
+    m.statusLabel.text = "Sessao experimental encontrada"
+    m.subtitleLabel.text = "Enviando offer para " + trimTitle(offerUrl)
+    offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
+    runExperimentalAvRequest(m.experimentalAvOfferTask, offerUrl, "POST", offerBody)
+end sub
+
+sub onExperimentalAvOfferTaskCompleted()
+    if not m.experimentalAvMode or m.experimentalAvOfferTask = invalid
         return
     end if
 
-    if m.experimentalAvLastAction = "state"
-        statusText = getString(json.status, "desconhecido")
-        offerCount = 0
-        if json.offerCount <> invalid
-            offerCount = json.offerCount
-        end if
+    responseBody = m.experimentalAvOfferTask.responseBody
+    ? "[ExpAV] responseCode="; m.experimentalAvOfferTask.responseCode; " action=offer"
+    if responseBody = invalid or responseBody = ""
+        ? "[ExpAV] empty offer response"
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Offer experimental sem resposta"
+        m.subtitleLabel.text = "Continuando no preview atual."
+        return
+    end if
 
-        ? "[ExpAV] state => "; statusText; " offers="; offerCount
+    m.experimentalAvOfferPosted = true
+    m.experimentalAvLastAction = "state"
+    ? "[ExpAV] offer accepted"
+    m.statusLabel.visible = true
+    m.subtitleLabel.visible = true
+    m.statusLabel.text = "Offer experimental entregue"
+    m.subtitleLabel.text = "Acompanhando state da sessao..."
+    scheduleExperimentalAvStatePoll()
+end sub
+
+sub onExperimentalAvStateTaskCompleted()
+    if not m.experimentalAvMode or m.experimentalAvStateTask = invalid
+        return
+    end if
+
+    responseBody = m.experimentalAvStateTask.responseBody
+    ? "[ExpAV] responseCode="; m.experimentalAvStateTask.responseCode; " action=state"
+    if responseBody = invalid or responseBody = ""
+        ? "[ExpAV] empty state response"
+        return
+    end if
+
+    json = ParseJson(responseBody)
+    if json = invalid
+        ? "[ExpAV] invalid state json"
+        return
+    end if
+
+    statusText = getString(json.status, "desconhecido")
+    offerCount = 0
+    if json.offerCount <> invalid
+        offerCount = json.offerCount
+    end if
+
+    ? "[ExpAV] state => "; statusText; " offers="; offerCount
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
         m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
         scheduleExperimentalAvStatePoll()
-    end if
 end sub
 
 sub scheduleExperimentalAvStatePoll()
@@ -804,7 +836,7 @@ sub onExperimentalAvStateTimerFire()
     end if
 
     m.experimentalAvLastAction = "state"
-    runExperimentalAvRequest(m.experimentalAvStateUrl, "GET", "")
+    runExperimentalAvRequest(m.experimentalAvStateTask, m.experimentalAvStateUrl, "GET", "")
 end sub
 
 sub onClickControlTaskCompleted()
