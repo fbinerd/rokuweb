@@ -129,14 +129,14 @@ function Invoke-RokuSideload {
 function Test-TcpEndpoint {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Host,
+        [string]$TargetHost,
         [Parameter(Mandatory = $true)]
         [int]$Port
     )
 
     $tcp = New-Object System.Net.Sockets.TcpClient
     try {
-        $connectTask = $tcp.ConnectAsync($Host, $Port)
+        $connectTask = $tcp.ConnectAsync($TargetHost, $Port)
         if (-not $connectTask.Wait(3000)) {
             return $false
         }
@@ -192,8 +192,8 @@ if (-not $SkipSideload) {
 
     Invoke-Step -Label "Verificar conectividade da Roku em $RokuIp" -Action {
         $rokuHost = $RokuIp.Trim()
-        $devPortOk = Test-TcpEndpoint -Host $rokuHost -Port 80
-        $ecpPortOk = Test-TcpEndpoint -Host $rokuHost -Port 8060
+        $devPortOk = Test-TcpEndpoint -TargetHost $rokuHost -Port 80
+        $ecpPortOk = Test-TcpEndpoint -TargetHost $rokuHost -Port 8060
 
         Write-Host ("porta 80 => {0}" -f $(if ($devPortOk) { "ok" } else { "falhou" }))
         Write-Host ("porta 8060 => {0}" -f $(if ($ecpPortOk) { "ok" } else { "falhou" }))
