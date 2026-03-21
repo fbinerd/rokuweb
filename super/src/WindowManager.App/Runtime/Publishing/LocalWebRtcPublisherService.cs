@@ -688,6 +688,17 @@ public sealed class LocalWebRtcPublisherService
             return BuildBinaryHttpResponse(200, mp4Bytes, "video/mp4");
         }
 
+        if (string.Equals(fileName, "diagnostic.mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_diagnosticAvHlsService.TryGetMp3Path(out var mp3Path))
+            {
+                return BuildHttpResponse(404, "Arquivo de audio diagnostico MP3 indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var mp3Bytes = await Task.Run(() => File.ReadAllBytes(mp3Path), cancellationToken).ConfigureAwait(false);
+            return BuildBinaryHttpResponse(200, mp3Bytes, "audio/mpeg");
+        }
+
         if (string.Equals(fileName, "index.m3u8", StringComparison.OrdinalIgnoreCase))
         {
             if (!_diagnosticAvHlsService.TryGetPlaylistPath(out var playlistPath))

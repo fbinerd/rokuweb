@@ -93,6 +93,12 @@ public sealed class DiagnosticAvHlsService : IDisposable
         return IsAvailable && _useMp4Mode && File.Exists(path);
     }
 
+    public bool TryGetMp3Path(out string path)
+    {
+        path = Path.Combine(_rootDirectory, "diagnostic.mp3");
+        return IsAvailable && _useMp4Mode && File.Exists(path);
+    }
+
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         if (_useMp4Mode)
@@ -163,6 +169,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
         try
         {
             var outputPath = Path.Combine(_rootDirectory, "diagnostic.mp4");
+            var audioPath = Path.Combine(_rootDirectory, "diagnostic.mp3");
             var args =
                 "-hide_banner -loglevel error -y " +
                 "-f lavfi -i testsrc2=size=1280x720:rate=24 " +
@@ -194,6 +201,7 @@ public sealed class DiagnosticAvHlsService : IDisposable
             if (process.ExitCode == 0)
             {
                 AppLog.Write("DiagAv", "Arquivo diagnostico MP4 pronto.");
+                await GenerateMp3Async(audioPath, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -207,6 +215,42 @@ public sealed class DiagnosticAvHlsService : IDisposable
         catch (Exception ex)
         {
             AppLog.Write("DiagAv", "Falha no gerador A/V diagnostico MP4: " + ex.Message);
+        }
+    }
+
+    private async Task GenerateMp3Async(string outputPath, CancellationToken cancellationToken)
+    {
+        var args =
+            "-hide_banner -loglevel error -y " +
+            "-f lavfi -i sine=frequency=440:sample_rate=44100 " +
+            "-t 60 " +
+            "-c:a libmp3lame -b:a 128k -ar 44100 -ac 2 " +
+            "\"" + outputPath + "\"";
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = _ffmpegPath,
+            Arguments = args,
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        });
+
+        if (process is null)
+        {
+            return;
+        }
+
+        await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+        if (process.ExitCode == 0)
+        {
+            AppLog.Write("DiagAv", "Arquivo diagnostico MP3 pronto.");
+        }
+        else
+        {
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            AppLog.Write("DiagAv", "ffmpeg do diagnostico MP3 encerrou com erro: " + error);
         }
     }
 

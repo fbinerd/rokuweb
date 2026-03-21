@@ -23,6 +23,9 @@
       height="720"
       translation="[0, 0]"
       visible="false" />
+    <Audio
+      id="diagnosticAudio"
+      visible="false" />
     <Rectangle
       id="background"
       width="1280"
