@@ -34,6 +34,7 @@ sub init()
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.cursorMarker = m.top.findNode("cursorMarker")
+    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
     m.controlTask = m.top.findNode("controlTask")
@@ -98,6 +99,9 @@ sub init()
     m.experimentalAvStateTimer.observeField("fire", "onExperimentalAvStateTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
+    end if
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
     m.experimentalAvSessionTask.observeField("completedToken", "onExperimentalAvSessionTaskCompleted")
@@ -454,6 +458,11 @@ sub showFullscreen()
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
     m.activeFullscreenPoster.visible = true
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
     m.bufferFullscreenPoster.visible = false
     m.bufferFullscreenPoster.uri = ""
     m.cursorMarker.visible = true
@@ -475,6 +484,11 @@ sub hideFullscreen()
     stopFullscreenStream()
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
     m.cursorMarker.visible = false
     m.titleLabel.visible = true
     m.statusLabel.visible = true
@@ -843,6 +857,10 @@ sub onExperimentalAvStateTaskCompleted()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
+        if transportImplemented and mediaUrl <> "" and mediaReady = false
+            startExperimentalMediaPlayback(mediaUrl)
+            mediaReady = true
+        end if
         if transportImplemented
             m.subtitleLabel.text = "Offers recebidas pelo super: " + offerCount.ToStr()
         else
@@ -853,6 +871,48 @@ sub onExperimentalAvStateTaskCompleted()
             end if
         end if
         scheduleExperimentalAvStatePoll()
+end sub
+
+sub startExperimentalMediaPlayback(mediaUrl as string)
+    if m.fullscreenVideo = invalid or mediaUrl = ""
+        return
+    end if
+
+    ? "[ExpAV] play media => "; mediaUrl
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(mediaUrl)
+    content.streamFormat = "mp4"
+    content.live = false
+    content.title = "Experimental AV"
+    m.fullscreenVideo.content = content
+    m.fullscreenVideo.control = "stop"
+    m.fullscreenVideo.visible = true
+    m.fullscreenVideo.control = "play"
+    m.activeFullscreenPoster.visible = false
+    m.bufferFullscreenPoster.visible = false
+end sub
+
+sub onFullscreenVideoStateChanged()
+    if m.fullscreenVideo = invalid or not m.isFullscreen
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    ? "[ExpAV] video state => "; state
+    if state = "error" or state = "stopped" or state = "finished"
+        m.fullscreenVideo.visible = false
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.activeFullscreenPoster.visible = true
+        m.statusLabel.visible = true
+        m.subtitleLabel.visible = true
+        m.statusLabel.text = "Falha na midia experimental"
+        m.subtitleLabel.text = "Voltando ao preview por imagem."
+    end if
 end sub
 
 sub scheduleExperimentalAvStatePoll()

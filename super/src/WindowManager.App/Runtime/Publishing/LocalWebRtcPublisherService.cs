@@ -19,6 +19,8 @@ public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly ExperimentalWebRtcAvService _experimentalWebRtcAvService;
+    private readonly ExperimentalAvMediaService _experimentalAvMediaService;
+    private readonly ExperimentalMediaHttpServer _experimentalMediaHttpServer;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -30,10 +32,12 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, ExperimentalWebRtcAvService experimentalWebRtcAvService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, ExperimentalWebRtcAvService experimentalWebRtcAvService, ExperimentalAvMediaService experimentalAvMediaService, ExperimentalMediaHttpServer experimentalMediaHttpServer, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _experimentalWebRtcAvService = experimentalWebRtcAvService;
+        _experimentalAvMediaService = experimentalAvMediaService;
+        _experimentalMediaHttpServer = experimentalMediaHttpServer;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -178,6 +182,9 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
         var activePort = EnsureListener(endpoint);
+        var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
+        _experimentalAvMediaService.EnsureStarted();
+        _experimentalMediaHttpServer.TryEnsureStarted(publicHost, activePort + 20, out _);
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
@@ -788,6 +795,33 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
+    private string BuildExperimentalMediaUrl(Guid windowId)
+    {
+        var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty);
+        var port = (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090;
+        if (_experimentalMediaHttpServer.TryEnsureStarted(publicHost, port + 20, out var mediaPort))
+        {
+            return _experimentalMediaHttpServer.BuildUrl(mediaPort, windowId);
+        }
+
+        return _experimentalWebRtcAvService.BuildMediaUrl(windowId, publicHost, port);
+    }
+
+    private string BuildExperimentalTransportStatus()
+    {
+        if (!_experimentalAvMediaService.IsAvailable)
+        {
+            return "ffmpeg-unavailable";
+        }
+
+        if (_experimentalAvMediaService.TryGetMp4Path(out _))
+        {
+            return "diagnostic-media-ready";
+        }
+
+        return "diagnostic-media-starting";
+    }
+
     private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
         var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
@@ -835,6 +869,10 @@ public sealed class LocalWebRtcPublisherService
 
         var routeSuffix = segments.Length > 1 ? segments[1] : string.Empty;
         var sessionState = _experimentalWebRtcAvService.GetOrCreateSession(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl);
+        sessionState.MediaUrl = BuildExperimentalMediaUrl(windowId);
+        sessionState.TransportStatus = BuildExperimentalTransportStatus();
+        sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(out _);
+        sessionState.MediaReady = sessionState.MediaTransportImplemented;
 
         if (string.Equals(routeSuffix, "state", StringComparison.OrdinalIgnoreCase))
         {
@@ -861,6 +899,11 @@ public sealed class LocalWebRtcPublisherService
                     "Midia experimental solicitada: janela={0}, transportStatus={1}",
                     windowId.ToString("N"),
                     sessionState.TransportStatus));
+            if (!string.IsNullOrWhiteSpace(sessionState.MediaUrl))
+            {
+                return BuildHttpResponse(302, sessionState.MediaUrl, "text/plain; charset=utf-8");
+            }
+
             return BuildHttpResponse(501, "Experimental AV media transport not implemented yet.", "text/plain; charset=utf-8");
         }
 
@@ -890,7 +933,7 @@ public sealed class LocalWebRtcPublisherService
                 return BuildHttpResponse(400, "{\"ok\":false,\"error\":\"invalid_offer\"}", "application/json; charset=utf-8");
             }
 
-            var mediaUrl = _experimentalWebRtcAvService.BuildMediaUrl(windowId, LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty), (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090);
+            var mediaUrl = BuildExperimentalMediaUrl(windowId);
             var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, mediaUrl, payload);
             AppLog.Write(
                 "ExpWebRtc",
@@ -916,7 +959,7 @@ public sealed class LocalWebRtcPublisherService
                 {
                     "Offer recebida pelo super.",
                     "Resposta SDP placeholder gerada.",
-                    "O transporte experimental de audio/video ainda nao esta conectado."
+                    "O transporte experimental atual usa midia diagnostica MP4 com audio."
                 }
             };
 
@@ -950,13 +993,13 @@ public sealed class LocalWebRtcPublisherService
                 "state-poll",
                 "media-endpoint"
             },
-            MediaUrl = _experimentalWebRtcAvService.BuildMediaUrl(windowId, LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty), (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? 8090),
-            TransportStatus = sessionState.TransportStatus,
-            MediaTransportImplemented = false,
+            MediaUrl = BuildExperimentalMediaUrl(windowId),
+            TransportStatus = BuildExperimentalTransportStatus(),
+            MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(out _),
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",
-                "Ainda nao ha peer connection ou transporte WebRTC A/V real implementado."
+                "O transporte experimental atual usa um MP4 diagnostico com audio, separado do navegador real."
             }
         };
 
