@@ -50,7 +50,7 @@ public partial class MainWindow : Window
 
         _previewRefreshTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(250)
+            Interval = TimeSpan.FromMilliseconds(120)
         };
         _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
 
@@ -540,6 +540,7 @@ public partial class MainWindow : Window
 
         if (e.PropertyName == nameof(WindowSession.InitialUri))
         {
+            _browserSnapshotService.InvalidateCapture(session.Id);
             if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
             {
                 captureWindow.UpdateAddress(session.InitialUri);
