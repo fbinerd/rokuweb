@@ -21,6 +21,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly DiagnosticAvHlsService _diagnosticAvHlsService;
+    private readonly DiagnosticMediaHttpServer _diagnosticMediaHttpServer;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
@@ -33,11 +34,12 @@ public sealed class LocalWebRtcPublisherService
     private string _activeListenerKey = string.Empty;
     private int _activeListenerPort;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, DiagnosticAvHlsService diagnosticAvHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, DiagnosticAvHlsService diagnosticAvHlsService, DiagnosticMediaHttpServer diagnosticMediaHttpServer, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _browserAudioCaptureService = browserAudioCaptureService;
         _diagnosticAvHlsService = diagnosticAvHlsService;
+        _diagnosticMediaHttpServer = diagnosticMediaHttpServer;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -192,6 +194,10 @@ public sealed class LocalWebRtcPublisherService
         }
 
         _diagnosticAvHlsService.EnsureStarted();
+        if (_diagnosticAvHlsService.IsAvailable)
+        {
+            _diagnosticMediaHttpServer.TryEnsureStarted(LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), activePort + 20, out _);
+        }
 
         foreach (var existingId in _windowSnapshots.Keys)
         {
@@ -1118,11 +1124,19 @@ public sealed class LocalWebRtcPublisherService
         var diagnosticStreamUrl = string.Empty;
         if (_diagnosticAvHlsService.IsAvailable)
         {
-            diagnosticStreamUrl = _diagnosticAvHlsService.UsesMp4
-                ? string.Format("http://{0}:{1}/diag-av/diagnostic.mp4", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
-                : _diagnosticAvHlsService.UsesTs
-                    ? string.Format("http://{0}:{1}/diag-av/diagnostic.ts", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port)
-                : string.Format("http://{0}:{1}/diag-av/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port);
+            var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
+            if (_diagnosticMediaHttpServer.TryEnsureStarted(publicHost, port + 20, out var diagnosticPort))
+            {
+                diagnosticStreamUrl = _diagnosticMediaHttpServer.BuildUrl(diagnosticPort);
+            }
+            else
+            {
+                diagnosticStreamUrl = _diagnosticAvHlsService.UsesMp4
+                    ? string.Format("http://{0}:{1}/diag-av/diagnostic.mp4", publicHost, port)
+                    : _diagnosticAvHlsService.UsesTs
+                        ? string.Format("http://{0}:{1}/diag-av/diagnostic.ts", publicHost, port)
+                    : string.Format("http://{0}:{1}/diag-av/index.m3u8", publicHost, port);
+            }
         }
 
         return new BridgeWindowSnapshot

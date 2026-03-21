@@ -28,9 +28,10 @@ public sealed class Bootstrapper
         var browserSnapshotService = new BrowserSnapshotService();
         var browserAudioCaptureService = new BrowserAudioCaptureService();
         var diagnosticAvHlsService = new DiagnosticAvHlsService();
+        var diagnosticMediaHttpServer = new DiagnosticMediaHttpServer(diagnosticAvHlsService);
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
-        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, browserAudioCaptureService, diagnosticAvHlsService, appUpdatePreferenceStore);
+        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, browserAudioCaptureService, diagnosticAvHlsService, diagnosticMediaHttpServer, appUpdatePreferenceStore);
         var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();
