@@ -10,9 +10,6 @@ sub execute()
         return
     end if
 
-    port = CreateObject("roMessagePort")
-    socket.setPort(port)
-
     ok = socket.bindToLocalPort(0)
     if not ok
         reason = ""
@@ -31,19 +28,7 @@ sub execute()
     m.top.completedToken = "ready-" + m.top.receiverPort.ToStr()
 
     while true
-        message = wait(1000, port)
-        if Type(message) = "roDatagramEvent"
-            byteArray = message.getByteArray()
-            bytesReceived = 0
-            if byteArray <> invalid
-                bytesReceived = byteArray.Count()
-            end if
-
-            m.top.packetCount = m.top.packetCount + 1
-            m.top.byteCount = m.top.byteCount + bytesReceived
-            m.top.lastSourceHost = getString(message.getSourceHost(), "")
-            m.top.completedToken = "packet-" + m.top.packetCount.ToStr()
-        end if
+        sleep(1000)
     end while
 end sub
 
