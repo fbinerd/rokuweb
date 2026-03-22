@@ -41,6 +41,16 @@ public sealed class BrowserAudioCaptureService
         return buffer.BuildWaveSnapshot();
     }
 
+    public byte[]? CaptureWaveSnapshot(Guid windowId, TimeSpan maxDuration)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return null;
+        }
+
+        return buffer.BuildWaveSnapshot(maxDuration);
+    }
+
     internal bool TryConfigure(Guid windowId, CefSharp.Structs.AudioParameters parameters, int channels)
     {
         var sampleRate = Math.Max(1, parameters.SampleRate);
@@ -198,6 +208,11 @@ public sealed class BrowserAudioCaptureService
 
         public byte[]? BuildWaveSnapshot()
         {
+            return BuildWaveSnapshot(TimeSpan.Zero);
+        }
+
+        public byte[]? BuildWaveSnapshot(TimeSpan maxDuration)
+        {
             lock (_gate)
             {
                 if (_sampleRate <= 0 || _channels <= 0 || _pcmBytes.Length == 0)
@@ -205,7 +220,13 @@ public sealed class BrowserAudioCaptureService
                     return null;
                 }
 
-                return BuildWaveFile(_pcmBytes, _sampleRate, _channels);
+                var pcmBytes = SliceRecentPcmBytes(maxDuration);
+                if (pcmBytes.Length == 0)
+                {
+                    return null;
+                }
+
+                return BuildWaveFile(pcmBytes, _sampleRate, _channels);
             }
         }
 
@@ -230,6 +251,42 @@ public sealed class BrowserAudioCaptureService
             var bytesToCopyFromPacket = Math.Min(packetBytes.Length, targetLength);
             Buffer.BlockCopy(packetBytes, packetBytes.Length - bytesToCopyFromPacket, combined, targetLength - bytesToCopyFromPacket, bytesToCopyFromPacket);
             _pcmBytes = combined;
+        }
+
+        private byte[] SliceRecentPcmBytes(TimeSpan maxDuration)
+        {
+            if (maxDuration <= TimeSpan.Zero)
+            {
+                return _pcmBytes;
+            }
+
+            var bytesPerFrame = _channels * 2;
+            if (bytesPerFrame <= 0)
+            {
+                return _pcmBytes;
+            }
+
+            var targetFrames = (int)Math.Round(_sampleRate * maxDuration.TotalSeconds);
+            if (targetFrames <= 0)
+            {
+                return _pcmBytes;
+            }
+
+            var targetBytes = targetFrames * bytesPerFrame;
+            if (targetBytes <= 0 || _pcmBytes.Length <= targetBytes)
+            {
+                return _pcmBytes;
+            }
+
+            var alignedBytes = targetBytes - (targetBytes % bytesPerFrame);
+            if (alignedBytes <= 0)
+            {
+                return _pcmBytes;
+            }
+
+            var slice = new byte[alignedBytes];
+            Buffer.BlockCopy(_pcmBytes, _pcmBytes.Length - alignedBytes, slice, 0, alignedBytes);
+            return slice;
         }
 
         private static byte[] BuildWaveFile(byte[] pcmBytes, int sampleRate, int channels)

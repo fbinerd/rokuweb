@@ -237,7 +237,7 @@ public sealed class BrowserPanelRollingHlsService
                     var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
                     var wavBytes = UseSyntheticAudio
                         ? BuildSineWaveSnapshot()
-                        : audioCaptureService.CaptureWaveSnapshot(_windowId);
+                        : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
                     if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
