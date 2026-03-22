@@ -60,6 +60,8 @@ sub init()
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
     m.experimentalAvMediaProbeInFlight = false
+    m.experimentalAvCurrentMediaVersion = 0
+    m.experimentalAvLastPlayedMediaVersion = 0
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -482,6 +484,8 @@ sub showFullscreen()
     m.experimentalAvStateUrl = ""
     m.experimentalAvLastAction = ""
     m.experimentalAvPlaybackStarted = false
+    m.experimentalAvCurrentMediaVersion = 0
+    m.experimentalAvLastPlayedMediaVersion = 0
     stopPanelRefresh()
     updateCursorMarker()
     maybeStartExperimentalAv(entry)
@@ -724,6 +728,7 @@ sub stopExperimentalAv()
     m.experimentalAvPlaybackStarted = false
     m.experimentalAvStateRequestInFlight = false
     m.experimentalAvMediaProbeInFlight = false
+    m.experimentalAvCurrentMediaVersion = 0
     if m.experimentalAvStateTimer <> invalid
         m.experimentalAvStateTimer.control = "stop"
     end if
@@ -909,6 +914,7 @@ sub onExperimentalAvStateTaskCompleted()
     end if
     transportStatus = getString(json.transportStatus, "")
     mediaUrl = getString(json.mediaUrl, "")
+    mediaVersion = 0
     realtimeMode = getString(json.realtimeMode, "")
     realtimeProtocol = getString(json.realtimeProtocol, "")
     realtimeHost = getString(json.realtimeHost, "")
@@ -928,6 +934,10 @@ sub onExperimentalAvStateTaskCompleted()
     if json.realtimeVideoPacketsReceived <> invalid
         realtimeVideoPackets = json.realtimeVideoPacketsReceived
     end if
+    if json.mediaVersion <> invalid
+        mediaVersion = json.mediaVersion
+        m.experimentalAvCurrentMediaVersion = mediaVersion
+    end if
     if mediaUrl <> ""
         m.experimentalAvMediaUrl = mediaUrl
     end if
@@ -939,9 +949,9 @@ sub onExperimentalAvStateTaskCompleted()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
-        if mediaReady and m.experimentalAvMediaUrl <> "" and not m.experimentalAvPlaybackStarted
+        if mediaReady and m.experimentalAvMediaUrl <> "" and not m.experimentalAvPlaybackStarted and mediaVersion > m.experimentalAvLastPlayedMediaVersion
             ? "[ExpAV] state ready => play media"
-            startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+            startExperimentalMediaPlayback(m.experimentalAvMediaUrl, mediaVersion)
             m.experimentalAvPlaybackStarted = true
         end if
         if transportImplemented
@@ -959,12 +969,16 @@ sub onExperimentalAvStateTaskCompleted()
         scheduleExperimentalAvStatePoll()
 end sub
 
-sub startExperimentalMediaPlayback(mediaUrl as string)
+sub startExperimentalMediaPlayback(mediaUrl as string, mediaVersion as dynamic)
     if m.fullscreenVideo = invalid or mediaUrl = ""
         return
     end if
 
-    ? "[ExpAV] play media => "; mediaUrl
+    if mediaVersion > 0
+        m.experimentalAvLastPlayedMediaVersion = mediaVersion
+    end if
+
+    ? "[ExpAV] play media => "; mediaUrl; " version="; mediaVersion
     content = CreateObject("roSGNode", "ContentNode")
     content.url = appendCacheBust(mediaUrl)
     content.streamFormat = "mp4"
@@ -998,13 +1012,9 @@ sub onFullscreenVideoStateChanged()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Clip experimental concluido"
-        m.subtitleLabel.text = "Buscando proximo trecho..."
+        m.subtitleLabel.text = "Aguardando trecho novo..."
         scheduleExperimentalAvStatePoll()
         scheduleExperimentalAvMediaProbe()
-        if m.experimentalAvDelayedPlayTimer <> invalid
-            m.experimentalAvDelayedPlayTimer.control = "stop"
-            m.experimentalAvDelayedPlayTimer.control = "start"
-        end if
         return
     end if
 
@@ -1088,20 +1098,25 @@ sub onExperimentalAvMediaTaskCompleted()
     code = m.experimentalAvMediaTask.responseCode
     responseBody = m.experimentalAvMediaTask.responseBody
     ready = false
+    mediaVersion = 0
     if responseBody <> invalid and responseBody <> ""
         probeJson = ParseJson(responseBody)
         if probeJson <> invalid and probeJson.ready <> invalid
             ready = probeJson.ready = true
         end if
+        if probeJson <> invalid and probeJson.mediaVersion <> invalid
+            mediaVersion = probeJson.mediaVersion
+            m.experimentalAvCurrentMediaVersion = mediaVersion
+        end if
     end if
-    ? "[ExpAV] media probe => "; code; " ready="; ready
+    ? "[ExpAV] media probe => "; code; " ready="; ready; " version="; mediaVersion
 
     if m.experimentalAvPlaybackStarted
         return
     end if
 
-    if ready and m.experimentalAvMediaUrl <> ""
-        startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
+    if ready and m.experimentalAvMediaUrl <> "" and mediaVersion > m.experimentalAvLastPlayedMediaVersion
+        startExperimentalMediaPlayback(m.experimentalAvMediaUrl, mediaVersion)
         m.experimentalAvPlaybackStarted = true
         return
     end if
@@ -1114,9 +1129,9 @@ sub onExperimentalAvDelayedPlayTimerFire()
         return
     end if
 
-    ? "[ExpAV] delayed play => "; m.experimentalAvMediaUrl
-    startExperimentalMediaPlayback(m.experimentalAvMediaUrl)
-    m.experimentalAvPlaybackStarted = true
+    ? "[ExpAV] delayed probe => "; m.experimentalAvMediaUrl
+    scheduleExperimentalAvStatePoll()
+    scheduleExperimentalAvMediaProbe()
 end sub
 
 sub onClickControlTaskCompleted()

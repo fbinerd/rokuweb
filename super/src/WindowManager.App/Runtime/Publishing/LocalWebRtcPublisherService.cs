@@ -998,6 +998,7 @@ public sealed class LocalWebRtcPublisherService
         sessionState.RealtimeLastPacketUtc = realtimeCandidate?.LastPacketUtc ?? string.Empty;
         sessionState.RealtimeAudioPacketsSent = realtimeCandidate?.AudioPacketsSent ?? 0;
         sessionState.RealtimeAudioBytesSent = realtimeCandidate?.AudioBytesSent ?? 0;
+        sessionState.MediaVersion = _experimentalAvMediaService.GetMediaVersion(windowId);
         _experimentalAvMediaService.EnsureStarted(windowId);
         sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId, realtimeCandidate);
         sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
@@ -1039,7 +1040,8 @@ public sealed class LocalWebRtcPublisherService
             if (queryValues.TryGetValue("probe", out var probeValue) && string.Equals(probeValue, "1", StringComparison.OrdinalIgnoreCase))
             {
                 var ready = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
-                return BuildHttpResponse(200, ready ? "{\"ready\":true}" : "{\"ready\":false}", "application/json; charset=utf-8");
+                var mediaVersion = _experimentalAvMediaService.GetMediaVersion(windowId);
+                return BuildHttpResponse(200, ready ? "{\"ready\":true,\"mediaVersion\":" + mediaVersion.ToString() + "}" : "{\"ready\":false,\"mediaVersion\":0}", "application/json; charset=utf-8");
             }
 
             if (_experimentalAvMediaService.TryGetMp4Path(windowId, out var mp4Path))
@@ -1114,6 +1116,7 @@ public sealed class LocalWebRtcPublisherService
                 RealtimeLastPacketUtc = updated.RealtimeLastPacketUtc,
                 RealtimeAudioPacketsSent = updated.RealtimeAudioPacketsSent,
                 RealtimeAudioBytesSent = updated.RealtimeAudioBytesSent,
+                MediaVersion = updated.MediaVersion,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
@@ -1170,6 +1173,7 @@ public sealed class LocalWebRtcPublisherService
             RealtimeLastPacketUtc = sessionState.RealtimeLastPacketUtc,
             RealtimeAudioPacketsSent = sessionState.RealtimeAudioPacketsSent,
             RealtimeAudioBytesSent = sessionState.RealtimeAudioBytesSent,
+            MediaVersion = sessionState.MediaVersion,
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",

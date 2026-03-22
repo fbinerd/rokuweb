@@ -222,6 +222,9 @@ public sealed class WindowSessionSessionInfo
 
     [DataMember(Name = "realtimeAudioBytesSent", Order = 28)]
     public long RealtimeAudioBytesSent { get; set; }
+
+    [DataMember(Name = "mediaVersion", Order = 29)]
+    public long MediaVersion { get; set; }
 }
 
 [DataContract]
@@ -329,6 +332,9 @@ public sealed class ExperimentalWebRtcSessionState
 
     [DataMember(Name = "realtimeAudioBytesSent", Order = 30)]
     public long RealtimeAudioBytesSent { get; set; }
+
+    [DataMember(Name = "mediaVersion", Order = 31)]
+    public long MediaVersion { get; set; }
 }
 
 [DataContract]
@@ -402,4 +408,7 @@ public sealed class ExperimentalWebRtcOfferAccepted
 
     [DataMember(Name = "realtimeAudioBytesSent", Order = 23)]
     public long RealtimeAudioBytesSent { get; set; }
+
+    [DataMember(Name = "mediaVersion", Order = 24)]
+    public long MediaVersion { get; set; }
 }

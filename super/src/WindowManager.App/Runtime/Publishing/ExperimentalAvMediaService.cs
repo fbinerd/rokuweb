@@ -17,6 +17,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly ConcurrentDictionary<Guid, Task> _windowBuilds = new ConcurrentDictionary<Guid, Task>();
+    private readonly ConcurrentDictionary<Guid, long> _mediaVersions = new ConcurrentDictionary<Guid, long>();
 
     public ExperimentalAvMediaService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
@@ -70,6 +71,27 @@ public sealed class ExperimentalAvMediaService : IDisposable
         return IsAvailable && File.Exists(path);
     }
 
+    public long GetMediaVersion(Guid windowId)
+    {
+        if (_mediaVersions.TryGetValue(windowId, out var version))
+        {
+            return version;
+        }
+
+        if (TryGetMp4Path(windowId, out var path))
+        {
+            try
+            {
+                return File.GetLastWriteTimeUtc(path).Ticks;
+            }
+            catch
+            {
+            }
+        }
+
+        return 0;
+    }
+
     public void Invalidate(Guid windowId)
     {
         try
@@ -84,6 +106,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
             DeleteIfExists(Path.Combine(windowDirectory, "panel-experimental.tmp.mp4"));
             DeleteIfExists(Path.Combine(windowDirectory, "panel.wav"));
             DeleteIfExists(Path.Combine(windowDirectory, "panel.jpg"));
+            _mediaVersions.TryRemove(windowId, out _);
             AppLog.Write("ExpWebRtc", $"Midia experimental invalidada: janela={windowId:N}");
         }
         catch (Exception ex)
@@ -179,6 +202,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
                 }
 
                 File.Move(tempPath, outputPath);
+                _mediaVersions[windowId] = DateTime.UtcNow.Ticks;
                 AppLog.Write("ExpWebRtc", $"Arquivo MP4 experimental real pronto: janela={windowId:N}");
             }
             else
