@@ -14,7 +14,7 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class BrowserPanelRollingHlsService
 {
     private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(2000);
     private const int PlaylistSize = 4;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
