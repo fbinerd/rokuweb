@@ -132,6 +132,11 @@ public sealed class RokuDevDeploymentService
                             (int)response.StatusCode,
                             SummarizeResponseBody(responseBody)));
 
+                    if ((int)response.StatusCode == 403)
+                    {
+                        return "ecp_bloqueado_403";
+                    }
+
                     if (response.IsSuccessStatusCode)
                     {
                         return keyName == attemptedKeys[0] ? "ok" : "ok_fallback_" + keyName;
