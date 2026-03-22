@@ -779,6 +779,17 @@ sub onExperimentalAvSessionTaskCompleted()
 
     offerUrl = getString(json.offerUrl, "")
     stateUrl = getString(json.stateUrl, "")
+    realtimeMode = getString(json.realtimeMode, "")
+    realtimeProtocol = getString(json.realtimeProtocol, "")
+    realtimeHost = getString(json.realtimeHost, "")
+    realtimeAudioPort = 0
+    realtimeVideoPort = 0
+    if json.realtimeAudioPort <> invalid
+        realtimeAudioPort = json.realtimeAudioPort
+    end if
+    if json.realtimeVideoPort <> invalid
+        realtimeVideoPort = json.realtimeVideoPort
+    end if
     if offerUrl = "" or stateUrl = ""
         ? "[ExpAV] missing offer/state url"
         m.statusLabel.visible = true
@@ -791,6 +802,9 @@ sub onExperimentalAvSessionTaskCompleted()
     m.experimentalAvStateUrl = stateUrl
     m.experimentalAvLastAction = "offer"
     ? "[ExpAV] session ok => offer="; offerUrl; " state="; stateUrl
+    if realtimeMode <> ""
+        ? "[ExpAV] realtime session => "; realtimeMode; " "; realtimeProtocol; " "; realtimeHost; ":"; realtimeAudioPort; "/"; realtimeVideoPort
+    end if
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
     m.statusLabel.text = "Sessao experimental encontrada"
@@ -829,6 +843,20 @@ sub onExperimentalAvOfferTaskCompleted()
         transportStatus = getString(json.transportStatus, "")
         if transportStatus <> ""
             ? "[ExpAV] transport => "; transportStatus
+        end if
+        realtimeMode = getString(json.realtimeMode, "")
+        realtimeProtocol = getString(json.realtimeProtocol, "")
+        realtimeHost = getString(json.realtimeHost, "")
+        realtimeAudioPort = 0
+        realtimeVideoPort = 0
+        if json.realtimeAudioPort <> invalid
+            realtimeAudioPort = json.realtimeAudioPort
+        end if
+        if json.realtimeVideoPort <> invalid
+            realtimeVideoPort = json.realtimeVideoPort
+        end if
+        if realtimeMode <> ""
+            ? "[ExpAV] realtime offer => "; realtimeMode; " "; realtimeProtocol; " "; realtimeHost; ":"; realtimeAudioPort; "/"; realtimeVideoPort
         end if
     end if
 
@@ -881,11 +909,33 @@ sub onExperimentalAvStateTaskCompleted()
     end if
     transportStatus = getString(json.transportStatus, "")
     mediaUrl = getString(json.mediaUrl, "")
+    realtimeMode = getString(json.realtimeMode, "")
+    realtimeProtocol = getString(json.realtimeProtocol, "")
+    realtimeHost = getString(json.realtimeHost, "")
+    realtimeAudioPort = 0
+    realtimeVideoPort = 0
+    realtimeAudioPackets = 0
+    realtimeVideoPackets = 0
+    if json.realtimeAudioPort <> invalid
+        realtimeAudioPort = json.realtimeAudioPort
+    end if
+    if json.realtimeVideoPort <> invalid
+        realtimeVideoPort = json.realtimeVideoPort
+    end if
+    if json.realtimeAudioPacketsReceived <> invalid
+        realtimeAudioPackets = json.realtimeAudioPacketsReceived
+    end if
+    if json.realtimeVideoPacketsReceived <> invalid
+        realtimeVideoPackets = json.realtimeVideoPacketsReceived
+    end if
     if mediaUrl <> ""
         m.experimentalAvMediaUrl = mediaUrl
     end if
 
     ? "[ExpAV] state => "; statusText; " offers="; offerCount; " mediaReady="; mediaReady; " transport="; transportImplemented; " transportStatus="; transportStatus; " mediaUrl="; mediaUrl
+    if realtimeMode <> ""
+        ? "[ExpAV] realtime state => "; realtimeMode; " "; realtimeProtocol; " "; realtimeHost; ":"; realtimeAudioPort; "/"; realtimeVideoPort; " packetsA="; realtimeAudioPackets; " packetsV="; realtimeVideoPackets
+    end if
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Sessao experimental: " + statusText
