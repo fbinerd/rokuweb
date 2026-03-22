@@ -13,6 +13,10 @@ public sealed class BrowserAudioCaptureService
     private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromSeconds(12);
     private readonly ConcurrentDictionary<Guid, WindowAudioBuffer> _buffers = new ConcurrentDictionary<Guid, WindowAudioBuffer>();
 
+    public event Action<Guid, int, int>? AudioStreamStarted;
+
+    public event Action<Guid, byte[]>? AudioPacketCaptured;
+
     public IAudioHandler CreateHandler(Guid windowId)
     {
         return new WindowAudioHandler(windowId, this);
@@ -57,6 +61,7 @@ public sealed class BrowserAudioCaptureService
         var buffer = _buffers.GetOrAdd(windowId, _ => new WindowAudioBuffer());
         buffer.Configure(sampleRate, resolvedChannels, maxBytes);
         AppLog.Write("BrowserAudio", string.Format("Audio stream iniciado: janela={0}, sampleRate={1}, channels={2}", windowId.ToString("N"), sampleRate, resolvedChannels));
+        AudioStreamStarted?.Invoke(windowId, sampleRate, resolvedChannels);
         return true;
     }
 
@@ -67,7 +72,11 @@ public sealed class BrowserAudioCaptureService
             return;
         }
 
-        buffer.AppendPacket(data, frames);
+        var packetBytes = buffer.AppendPacket(data, frames);
+        if (packetBytes is not null && packetBytes.Length > 0)
+        {
+            AudioPacketCaptured?.Invoke(windowId, packetBytes);
+        }
     }
 
     internal void MarkStopped(Guid windowId)
@@ -136,13 +145,13 @@ public sealed class BrowserAudioCaptureService
             }
         }
 
-        public void AppendPacket(IntPtr data, int frames)
+        public byte[]? AppendPacket(IntPtr data, int frames)
         {
             lock (_gate)
             {
                 if (_sampleRate <= 0 || _channels <= 0 || frames <= 0 || data == IntPtr.Zero)
                 {
-                    return;
+                    return null;
                 }
 
                 var channelPointers = new IntPtr[_channels];
@@ -182,6 +191,7 @@ public sealed class BrowserAudioCaptureService
 
                 AppendBytes(packetBytes);
                 _lastPacketUtc = DateTime.UtcNow;
+                return packetBytes;
             }
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace WindowManager.App.Runtime.Publishing;
@@ -52,6 +53,26 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         _transports.Clear();
     }
 
+    public void OnBrowserAudioStreamStarted(Guid windowId, int sampleRate, int channels)
+    {
+        if (!_transports.TryGetValue(windowId, out var reserved))
+        {
+            return;
+        }
+
+        reserved.OnAudioStreamStarted(sampleRate, channels);
+    }
+
+    public void OnBrowserAudioPacketCaptured(Guid windowId, byte[] pcmBytes)
+    {
+        if (pcmBytes.Length == 0 || !_transports.TryGetValue(windowId, out var reserved))
+        {
+            return;
+        }
+
+        reserved.SendAudioPacket(pcmBytes);
+    }
+
     private static ReservedRealtimeTransport CreateReservedTransport(Guid windowId, string publicHost)
     {
         var audioSocket = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
@@ -60,6 +81,7 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         var videoPort = ((IPEndPoint)videoSocket.Client.LocalEndPoint).Port;
         var candidate = new RealtimeTransportCandidate
         {
+            WindowId = windowId.ToString("N"),
             Host = publicHost,
             Protocol = "udp",
             AudioPort = audioPort,
@@ -84,19 +106,81 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
     {
         private readonly UdpClient _audioSocket;
         private readonly UdpClient _videoSocket;
+        private readonly UdpClient _audioSender;
         private readonly Task _audioLoop;
         private readonly Task _videoLoop;
+        private bool _audioStreamAnnounced;
+        private bool _audioPacketMirroringAnnounced;
 
         public ReservedRealtimeTransport(RealtimeTransportCandidate candidate, UdpClient audioSocket, UdpClient videoSocket)
         {
             Candidate = candidate;
             _audioSocket = audioSocket;
             _videoSocket = videoSocket;
+            _audioSender = new UdpClient(AddressFamily.InterNetwork);
             _audioLoop = Task.Run(() => ReceiveLoopAsync(_audioSocket, true));
             _videoLoop = Task.Run(() => ReceiveLoopAsync(_videoSocket, false));
         }
 
         public RealtimeTransportCandidate Candidate { get; }
+
+        public void OnAudioStreamStarted(int sampleRate, int channels)
+        {
+            Candidate.AudioSampleRate = sampleRate;
+            Candidate.AudioChannels = channels;
+
+            if (_audioStreamAnnounced)
+            {
+                return;
+            }
+
+            _audioStreamAnnounced = true;
+            AppLog.Write(
+                "ExpWebRtc",
+                string.Format(
+                    "Fluxo de audio continuo experimental conectado: sampleRate={0}, channels={1}, port={2}",
+                    sampleRate,
+                    channels,
+                    Candidate.AudioPort));
+        }
+
+        public void SendAudioPacket(byte[] pcmBytes)
+        {
+            if (pcmBytes.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                var header = Encoding.ASCII.GetBytes("SPAUD1");
+                var payload = new byte[header.Length + pcmBytes.Length];
+                Buffer.BlockCopy(header, 0, payload, 0, header.Length);
+                Buffer.BlockCopy(pcmBytes, 0, payload, header.Length, pcmBytes.Length);
+                _audioSender.Send(payload, payload.Length, IPAddress.Loopback.ToString(), Candidate.AudioPort);
+                Candidate.AudioPacketsSent += 1;
+                Candidate.AudioBytesSent += payload.Length;
+
+                if (_audioPacketMirroringAnnounced)
+                {
+                    return;
+                }
+
+                _audioPacketMirroringAnnounced = true;
+                AppLog.Write(
+                    "ExpWebRtc",
+                    string.Format(
+                        "Espelhamento de audio continuo experimental ativo: janela={0}, audioPort={1}",
+                        Candidate.WindowId,
+                        Candidate.AudioPort));
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+        }
 
         private async Task ReceiveLoopAsync(UdpClient socket, bool audio)
         {
@@ -136,6 +220,7 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
 
         public void Dispose()
         {
+            _audioSender.Dispose();
             _audioSocket.Dispose();
             _videoSocket.Dispose();
         }
@@ -144,6 +229,8 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
 
 public sealed class RealtimeTransportCandidate
 {
+    public string WindowId { get; set; } = string.Empty;
+
     public string Host { get; set; } = string.Empty;
 
     public string Protocol { get; set; } = "udp";
@@ -165,4 +252,12 @@ public sealed class RealtimeTransportCandidate
     public long VideoBytesReceived { get; set; }
 
     public string LastPacketUtc { get; set; } = string.Empty;
+
+    public int AudioSampleRate { get; set; }
+
+    public int AudioChannels { get; set; }
+
+    public long AudioPacketsSent { get; set; }
+
+    public long AudioBytesSent { get; set; }
 }

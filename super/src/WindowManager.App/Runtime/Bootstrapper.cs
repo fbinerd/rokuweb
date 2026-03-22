@@ -29,6 +29,8 @@ public sealed class Bootstrapper
         var browserAudioCaptureService = new BrowserAudioCaptureService();
         var experimentalWebRtcAvService = new ExperimentalWebRtcAvService();
         var experimentalRealtimeTransportService = new ExperimentalRealtimeTransportService();
+        browserAudioCaptureService.AudioStreamStarted += experimentalRealtimeTransportService.OnBrowserAudioStreamStarted;
+        browserAudioCaptureService.AudioPacketCaptured += experimentalRealtimeTransportService.OnBrowserAudioPacketCaptured;
         var experimentalAvMediaService = new ExperimentalAvMediaService(browserSnapshotService, browserAudioCaptureService);
         var experimentalMediaHttpServer = new ExperimentalMediaHttpServer(experimentalAvMediaService);
         var appUpdateManifestService = new AppUpdateManifestService();
