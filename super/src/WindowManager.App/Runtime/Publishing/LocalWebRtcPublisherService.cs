@@ -986,6 +986,11 @@ public sealed class LocalWebRtcPublisherService
         sessionState.RealtimeAudioPort = realtimeCandidate?.AudioPort ?? 0;
         sessionState.RealtimeVideoPort = realtimeCandidate?.VideoPort ?? 0;
         sessionState.RealtimeTransportReady = realtimeCandidate?.Ready ?? false;
+        sessionState.RealtimeAudioPacketsReceived = realtimeCandidate?.AudioPacketsReceived ?? 0;
+        sessionState.RealtimeAudioBytesReceived = realtimeCandidate?.AudioBytesReceived ?? 0;
+        sessionState.RealtimeVideoPacketsReceived = realtimeCandidate?.VideoPacketsReceived ?? 0;
+        sessionState.RealtimeVideoBytesReceived = realtimeCandidate?.VideoBytesReceived ?? 0;
+        sessionState.RealtimeLastPacketUtc = realtimeCandidate?.LastPacketUtc ?? string.Empty;
         _experimentalAvMediaService.EnsureStarted(windowId);
         sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId);
         sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
@@ -1095,6 +1100,11 @@ public sealed class LocalWebRtcPublisherService
                 RealtimeAudioPort = updated.RealtimeAudioPort,
                 RealtimeVideoPort = updated.RealtimeVideoPort,
                 RealtimeTransportReady = updated.RealtimeTransportReady,
+                RealtimeAudioPacketsReceived = updated.RealtimeAudioPacketsReceived,
+                RealtimeAudioBytesReceived = updated.RealtimeAudioBytesReceived,
+                RealtimeVideoPacketsReceived = updated.RealtimeVideoPacketsReceived,
+                RealtimeVideoBytesReceived = updated.RealtimeVideoBytesReceived,
+                RealtimeLastPacketUtc = updated.RealtimeLastPacketUtc,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
@@ -1144,6 +1154,11 @@ public sealed class LocalWebRtcPublisherService
             RealtimeAudioPort = sessionState.RealtimeAudioPort,
             RealtimeVideoPort = sessionState.RealtimeVideoPort,
             RealtimeTransportReady = sessionState.RealtimeTransportReady,
+            RealtimeAudioPacketsReceived = sessionState.RealtimeAudioPacketsReceived,
+            RealtimeAudioBytesReceived = sessionState.RealtimeAudioBytesReceived,
+            RealtimeVideoPacketsReceived = sessionState.RealtimeVideoPacketsReceived,
+            RealtimeVideoBytesReceived = sessionState.RealtimeVideoBytesReceived,
+            RealtimeLastPacketUtc = sessionState.RealtimeLastPacketUtc,
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",

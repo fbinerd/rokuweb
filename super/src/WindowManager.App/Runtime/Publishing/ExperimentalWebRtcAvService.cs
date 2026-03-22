@@ -201,6 +201,21 @@ public sealed class WindowSessionSessionInfo
 
     [DataMember(Name = "realtimeTransportReady", Order = 21)]
     public bool RealtimeTransportReady { get; set; }
+
+    [DataMember(Name = "realtimeAudioPacketsReceived", Order = 22)]
+    public long RealtimeAudioPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesReceived", Order = 23)]
+    public long RealtimeAudioBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoPacketsReceived", Order = 24)]
+    public long RealtimeVideoPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoBytesReceived", Order = 25)]
+    public long RealtimeVideoBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeLastPacketUtc", Order = 26)]
+    public string RealtimeLastPacketUtc { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -287,6 +302,21 @@ public sealed class ExperimentalWebRtcSessionState
 
     [DataMember(Name = "realtimeTransportReady", Order = 23)]
     public bool RealtimeTransportReady { get; set; }
+
+    [DataMember(Name = "realtimeAudioPacketsReceived", Order = 24)]
+    public long RealtimeAudioPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesReceived", Order = 25)]
+    public long RealtimeAudioBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoPacketsReceived", Order = 26)]
+    public long RealtimeVideoPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoBytesReceived", Order = 27)]
+    public long RealtimeVideoBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeLastPacketUtc", Order = 28)]
+    public string RealtimeLastPacketUtc { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -339,4 +369,19 @@ public sealed class ExperimentalWebRtcOfferAccepted
 
     [DataMember(Name = "realtimeTransportReady", Order = 16)]
     public bool RealtimeTransportReady { get; set; }
+
+    [DataMember(Name = "realtimeAudioPacketsReceived", Order = 17)]
+    public long RealtimeAudioPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesReceived", Order = 18)]
+    public long RealtimeAudioBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoPacketsReceived", Order = 19)]
+    public long RealtimeVideoPacketsReceived { get; set; }
+
+    [DataMember(Name = "realtimeVideoBytesReceived", Order = 20)]
+    public long RealtimeVideoBytesReceived { get; set; }
+
+    [DataMember(Name = "realtimeLastPacketUtc", Order = 21)]
+    public string RealtimeLastPacketUtc { get; set; } = string.Empty;
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading.Tasks;
 
 namespace WindowManager.App.Runtime.Publishing;
 
@@ -83,15 +84,55 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
     {
         private readonly UdpClient _audioSocket;
         private readonly UdpClient _videoSocket;
+        private readonly Task _audioLoop;
+        private readonly Task _videoLoop;
 
         public ReservedRealtimeTransport(RealtimeTransportCandidate candidate, UdpClient audioSocket, UdpClient videoSocket)
         {
             Candidate = candidate;
             _audioSocket = audioSocket;
             _videoSocket = videoSocket;
+            _audioLoop = Task.Run(() => ReceiveLoopAsync(_audioSocket, true));
+            _videoLoop = Task.Run(() => ReceiveLoopAsync(_videoSocket, false));
         }
 
         public RealtimeTransportCandidate Candidate { get; }
+
+        private async Task ReceiveLoopAsync(UdpClient socket, bool audio)
+        {
+            while (true)
+            {
+                try
+                {
+                    var result = await socket.ReceiveAsync().ConfigureAwait(false);
+                    Candidate.Ready = true;
+                    Candidate.LastPacketUtc = DateTime.UtcNow.ToString("O");
+
+                    if (audio)
+                    {
+                        Candidate.AudioPacketsReceived += 1;
+                        Candidate.AudioBytesReceived += result.Buffer?.Length ?? 0;
+                    }
+                    else
+                    {
+                        Candidate.VideoPacketsReceived += 1;
+                        Candidate.VideoBytesReceived += result.Buffer?.Length ?? 0;
+                    }
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+                catch (SocketException)
+                {
+                    return;
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
 
         public void Dispose()
         {
@@ -114,4 +155,14 @@ public sealed class RealtimeTransportCandidate
     public string Mode { get; set; } = "continuous-udp-prototype";
 
     public bool Ready { get; set; }
+
+    public long AudioPacketsReceived { get; set; }
+
+    public long AudioBytesReceived { get; set; }
+
+    public long VideoPacketsReceived { get; set; }
+
+    public long VideoBytesReceived { get; set; }
+
+    public string LastPacketUtc { get; set; } = string.Empty;
 }
