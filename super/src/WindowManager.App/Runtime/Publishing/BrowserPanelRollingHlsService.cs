@@ -55,6 +55,7 @@ public sealed class BrowserPanelRollingHlsService
         }
 
         var stream = _streams.GetOrAdd(windowId, id => new WindowRollingStream(id, Path.Combine(_rootDirectory, id.ToString("N"))));
+        stream.ResetIfAwaitingFreshAudio(!_audioCaptureService.HasRecentAudio(windowId));
         stream.Touch();
         stream.EnsureStarted(_snapshotService, _audioCaptureService, _ffmpegPath);
     }
@@ -204,6 +205,31 @@ public sealed class BrowserPanelRollingHlsService
         public void Touch()
         {
             _lastTouchedUtc = DateTime.UtcNow;
+        }
+
+        public void ResetIfAwaitingFreshAudio(bool awaitingFreshAudio)
+        {
+            if (!awaitingFreshAudio)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (_segments.Count == 0 && !File.Exists(Path.Combine(OutputDirectory, "index.m3u8")))
+                {
+                    return;
+                }
+
+                _segments.Clear();
+                _sequence = 0;
+                _loggedPlaylistReady = false;
+                TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
+                foreach (var stale in Directory.GetFiles(OutputDirectory, "segment-*.ts"))
+                {
+                    TryDelete(stale);
+                }
+            }
         }
 
         public void EnsureStarted(BrowserSnapshotService snapshotService, BrowserAudioCaptureService audioCaptureService, string ffmpegPath)

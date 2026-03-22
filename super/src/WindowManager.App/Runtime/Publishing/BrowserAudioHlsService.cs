@@ -43,6 +43,7 @@ public sealed class BrowserAudioHlsService
         }
 
         var stream = _streams.GetOrAdd(windowId, id => new WindowAudioHlsStream(id, Path.Combine(_rootDirectory, id.ToString("N"))));
+        stream.ResetIfAwaitingFreshAudio(!_audioCaptureService.HasRecentAudio(windowId));
         stream.Touch();
         stream.EnsureStarted(_audioCaptureService, _ffmpegPath);
     }
@@ -190,6 +191,25 @@ public sealed class BrowserAudioHlsService
         public void Touch()
         {
             _lastTouchedUtc = DateTime.UtcNow;
+        }
+
+        public void ResetIfAwaitingFreshAudio(bool awaitingFreshAudio)
+        {
+            if (!awaitingFreshAudio)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                _loggedPlaylistReady = false;
+                TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
+                TryDelete(Path.Combine(OutputDirectory, "input.wav"));
+                foreach (var stale in Directory.GetFiles(OutputDirectory, "*.ts"))
+                {
+                    TryDelete(stale);
+                }
+            }
         }
 
         public void EnsureStarted(BrowserAudioCaptureService audioCaptureService, string ffmpegPath)
