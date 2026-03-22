@@ -916,8 +916,13 @@ public sealed class LocalWebRtcPublisherService
         return _experimentalWebRtcAvService.BuildMediaUrl(windowId, publicHost, port);
     }
 
-    private string BuildExperimentalTransportStatus(Guid windowId)
+    private string BuildExperimentalTransportStatus(Guid windowId, RealtimeTransportCandidate? realtimeCandidate = null)
     {
+        if (realtimeCandidate is not null && realtimeCandidate.AudioPacketsReceived > 0)
+        {
+            return "continuous-udp-active";
+        }
+
         if (!_experimentalAvMediaService.IsAvailable)
         {
             return "ffmpeg-unavailable";
@@ -991,8 +996,10 @@ public sealed class LocalWebRtcPublisherService
         sessionState.RealtimeVideoPacketsReceived = realtimeCandidate?.VideoPacketsReceived ?? 0;
         sessionState.RealtimeVideoBytesReceived = realtimeCandidate?.VideoBytesReceived ?? 0;
         sessionState.RealtimeLastPacketUtc = realtimeCandidate?.LastPacketUtc ?? string.Empty;
+        sessionState.RealtimeAudioPacketsSent = realtimeCandidate?.AudioPacketsSent ?? 0;
+        sessionState.RealtimeAudioBytesSent = realtimeCandidate?.AudioBytesSent ?? 0;
         _experimentalAvMediaService.EnsureStarted(windowId);
-        sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId);
+        sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId, realtimeCandidate);
         sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
         sessionState.MediaReady = sessionState.MediaTransportImplemented;
 
@@ -1105,6 +1112,8 @@ public sealed class LocalWebRtcPublisherService
                 RealtimeVideoPacketsReceived = updated.RealtimeVideoPacketsReceived,
                 RealtimeVideoBytesReceived = updated.RealtimeVideoBytesReceived,
                 RealtimeLastPacketUtc = updated.RealtimeLastPacketUtc,
+                RealtimeAudioPacketsSent = updated.RealtimeAudioPacketsSent,
+                RealtimeAudioBytesSent = updated.RealtimeAudioBytesSent,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
@@ -1146,7 +1155,7 @@ public sealed class LocalWebRtcPublisherService
                 "continuous-udp-prototype"
             },
             MediaUrl = BuildExperimentalMediaUrl(windowId),
-            TransportStatus = BuildExperimentalTransportStatus(windowId),
+            TransportStatus = BuildExperimentalTransportStatus(windowId, realtimeCandidate),
             MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _),
             RealtimeMode = sessionState.RealtimeMode,
             RealtimeProtocol = sessionState.RealtimeProtocol,
@@ -1159,6 +1168,8 @@ public sealed class LocalWebRtcPublisherService
             RealtimeVideoPacketsReceived = sessionState.RealtimeVideoPacketsReceived,
             RealtimeVideoBytesReceived = sessionState.RealtimeVideoBytesReceived,
             RealtimeLastPacketUtc = sessionState.RealtimeLastPacketUtc,
+            RealtimeAudioPacketsSent = sessionState.RealtimeAudioPacketsSent,
+            RealtimeAudioBytesSent = sessionState.RealtimeAudioBytesSent,
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",

@@ -216,6 +216,12 @@ public sealed class WindowSessionSessionInfo
 
     [DataMember(Name = "realtimeLastPacketUtc", Order = 26)]
     public string RealtimeLastPacketUtc { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPacketsSent", Order = 27)]
+    public long RealtimeAudioPacketsSent { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesSent", Order = 28)]
+    public long RealtimeAudioBytesSent { get; set; }
 }
 
 [DataContract]
@@ -317,6 +323,12 @@ public sealed class ExperimentalWebRtcSessionState
 
     [DataMember(Name = "realtimeLastPacketUtc", Order = 28)]
     public string RealtimeLastPacketUtc { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPacketsSent", Order = 29)]
+    public long RealtimeAudioPacketsSent { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesSent", Order = 30)]
+    public long RealtimeAudioBytesSent { get; set; }
 }
 
 [DataContract]
@@ -384,4 +396,10 @@ public sealed class ExperimentalWebRtcOfferAccepted
 
     [DataMember(Name = "realtimeLastPacketUtc", Order = 21)]
     public string RealtimeLastPacketUtc { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPacketsSent", Order = 22)]
+    public long RealtimeAudioPacketsSent { get; set; }
+
+    [DataMember(Name = "realtimeAudioBytesSent", Order = 23)]
+    public long RealtimeAudioBytesSent { get; set; }
 }

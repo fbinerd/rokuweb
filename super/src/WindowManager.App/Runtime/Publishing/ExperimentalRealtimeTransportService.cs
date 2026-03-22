@@ -160,6 +160,18 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
                 _audioSender.Send(payload, payload.Length, IPAddress.Loopback.ToString(), Candidate.AudioPort);
                 Candidate.AudioPacketsSent += 1;
                 Candidate.AudioBytesSent += payload.Length;
+                if (Candidate.AudioPacketsSent == 1 || Candidate.AudioPacketsSent % 200 == 0)
+                {
+                    AppLog.Write(
+                        "ExpWebRtc",
+                        string.Format(
+                            "UDP audio experimental espelhado: janela={0}, packetsSent={1}, packetsReceived={2}, bytesSent={3}, bytesReceived={4}",
+                            Candidate.WindowId,
+                            Candidate.AudioPacketsSent,
+                            Candidate.AudioPacketsReceived,
+                            Candidate.AudioBytesSent,
+                            Candidate.AudioBytesReceived));
+                }
 
                 if (_audioPacketMirroringAnnounced)
                 {
