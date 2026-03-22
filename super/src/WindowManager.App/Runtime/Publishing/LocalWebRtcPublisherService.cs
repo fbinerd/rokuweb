@@ -18,20 +18,28 @@ namespace WindowManager.App.Runtime.Publishing;
 public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly BrowserAudioCaptureService _browserAudioCaptureService;
+    private readonly BrowserAudioHlsService _browserAudioHlsService;
+    private readonly BrowserPanelRollingHlsService _browserPanelRollingHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
+    private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
+        _browserAudioCaptureService = browserAudioCaptureService;
+        _browserAudioHlsService = browserAudioHlsService;
+        _browserPanelRollingHlsService = browserPanelRollingHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
 
@@ -184,6 +192,8 @@ public sealed class LocalWebRtcPublisherService
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
+            _browserAudioHlsService.EnsureWindow(window.Id);
+            _browserPanelRollingHlsService.EnsureWindow(window.Id);
             var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
@@ -194,6 +204,8 @@ public sealed class LocalWebRtcPublisherService
             if (!activeIds.Contains(existingId))
             {
                 _windowSnapshots.TryRemove(existingId, out _);
+                _browserAudioHlsService.Unregister(existingId);
+                _browserPanelRollingHlsService.Unregister(existingId);
             }
         }
     }
@@ -305,7 +317,22 @@ public sealed class LocalWebRtcPublisherService
 
             var path = ParsePath(requestLine);
             var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
-            var bytes = await BuildResponseAsync(path, remoteAddress, cancellationToken);
+            var normalizedPath = (path ?? "/").Split('?')[0];
+            if (normalizedPath.StartsWith("/audio-hls/", StringComparison.OrdinalIgnoreCase))
+            {
+                var hlsResponseBytes = await BuildAudioHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(hlsResponseBytes, 0, hlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (normalizedPath.StartsWith("/panel-roll/", StringComparison.OrdinalIgnoreCase))
+            {
+                var panelHlsResponseBytes = await BuildPanelHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var bytes = await BuildResponseAsync(path ?? "/", remoteAddress, cancellationToken);
             await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
         }
     }
@@ -318,6 +345,11 @@ public sealed class LocalWebRtcPublisherService
         if (normalizedPath.StartsWith("/thumbnails/", StringComparison.OrdinalIgnoreCase))
         {
             return await BuildThumbnailResponseAsync(normalizedPath, cancellationToken);
+        }
+
+        if (normalizedPath.StartsWith("/audio/", StringComparison.OrdinalIgnoreCase))
+        {
+            return await BuildAudioResponseAsync(requestTarget, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/health", StringComparison.OrdinalIgnoreCase))
@@ -591,6 +623,125 @@ public sealed class LocalWebRtcPublisherService
         return BuildBinaryHttpResponse(200, jpegBytes, "image/jpeg");
     }
 
+    private async Task<byte[]> BuildAudioHlsResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/audio-hls/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Playlist HLS nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Janela de audio HLS invalida.", "text/plain; charset=utf-8");
+        }
+
+        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_browserAudioHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            {
+                return BuildHttpResponse(404, "Playlist HLS indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var playlistText = File.ReadAllText(playlistPath);
+            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserAudioHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        {
+            return BuildHttpResponse(404, "Segmento HLS indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = File.ReadAllBytes(segmentPath);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
+    private async Task<byte[]> BuildPanelHlsResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/panel-roll/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Playlist HLS do painel nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Janela HLS do painel invalida.", "text/plain; charset=utf-8");
+        }
+
+        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_browserPanelRollingHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            {
+                MaybeLogPanelHlsServe(windowId, filePart, false);
+                return BuildHttpResponse(404, "Playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var playlistText = File.ReadAllText(playlistPath);
+            MaybeLogPanelHlsServe(windowId, filePart, true);
+            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserPanelRollingHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        {
+            MaybeLogPanelHlsServe(windowId, filePart, false);
+            return BuildHttpResponse(404, "Segmento HLS do painel indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = File.ReadAllBytes(segmentPath);
+        MaybeLogPanelHlsServe(windowId, filePart, true);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
+    private async Task<byte[]> BuildAudioResponseAsync(string requestTarget, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedPath = requestTarget.Split('?')[0];
+        var fileName = normalizedPath.Substring("/audio/".Length);
+        if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = fileName.Substring(0, fileName.Length - 4);
+        }
+
+        if (!Guid.TryParseExact(fileName, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Audio nao encontrado.", "text/plain; charset=utf-8");
+        }
+
+        var seconds = 2.5;
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
+        {
+            var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+            if (double.TryParse(GetValue(values, "seconds"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedSeconds) &&
+                parsedSeconds > 0.25 && parsedSeconds < 10)
+            {
+                seconds = parsedSeconds;
+            }
+        }
+
+        var wavBytes = _browserAudioCaptureService.CaptureWaveSnapshot(windowId, TimeSpan.FromSeconds(seconds));
+        if (wavBytes is null || wavBytes.Length == 0)
+        {
+            MaybeLogAudioServe(windowId, 0, seconds, false);
+            return BuildHttpResponse(404, "Audio indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        MaybeLogAudioServe(windowId, wavBytes.Length, seconds, true);
+        return BuildBinaryHttpResponse(200, wavBytes, "audio/wav");
+    }
+
     private static string ParsePath(string requestLine)
     {
         var parts = requestLine.Split(' ');
@@ -721,11 +872,14 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
-    private static BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
+    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var unifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
+            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            : string.Empty;
 
         return new BridgeWindowSnapshot
         {
@@ -734,10 +888,14 @@ public sealed class LocalWebRtcPublisherService
             State = window.State.ToString(),
             InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
             PublishedWebRtcUrl = publishedUrl,
-            StreamUrl = publishedUrl,
+            StreamUrl = string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? publishedUrl : unifiedPanelStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
-            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioStreamUrl = _browserAudioHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+                : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
+            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
         };
     }
 
@@ -864,6 +1022,45 @@ public sealed class LocalWebRtcPublisherService
 
         return string.Empty;
     }
+
+    private void MaybeLogAudioServe(Guid windowId, int bytes, double seconds, bool ok)
+    {
+        var now = DateTime.UtcNow;
+        if (_lastAudioServeLogUtc.TryGetValue(windowId, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        _lastAudioServeLogUtc[windowId] = now;
+        AppLog.Write(
+            "BrowserAudio",
+            string.Format(
+                "Snapshot de audio solicitado: janela={0}, ok={1}, bytes={2}, seconds={3:0.0}, bufferedPcm={4}",
+                windowId.ToString("N"),
+                ok,
+                bytes,
+                seconds,
+                -1));
+    }
+
+    private void MaybeLogPanelHlsServe(Guid windowId, string fileName, bool ok)
+    {
+        var key = windowId.ToString("N") + "|" + fileName;
+        var now = DateTime.UtcNow;
+        if (_lastPanelHlsLogUtc.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        _lastPanelHlsLogUtc[key] = now;
+        AppLog.Write(
+            "PanelHls",
+            string.Format(
+                "Requisicao HLS do painel: janela={0}, arquivo={1}, ok={2}",
+                windowId.ToString("N"),
+                fileName,
+                ok));
+    }
 }
 
 [DataContract]
@@ -908,6 +1105,12 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "thumbnailUrl", Order = 9)]
     public string ThumbnailUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioStreamUrl", Order = 10)]
+    public string AudioStreamUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "audioAvailable", Order = 11)]
+    public bool AudioAvailable { get; set; }
 }
 
 [DataContract]

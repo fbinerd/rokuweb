@@ -1,12 +1,13 @@
 using System;
 using System.Windows;
 using CefSharp.Wpf;
+using WindowManager.App.Runtime.Publishing;
 
 namespace WindowManager.App;
 
 public sealed class BrowserCaptureWindow : Window
 {
-    public BrowserCaptureWindow(Uri? initialUri)
+    public BrowserCaptureWindow(Guid windowId, Uri? initialUri, BrowserAudioCaptureService audioCaptureService)
     {
         Width = 1280;
         Height = 720;
@@ -22,6 +23,7 @@ public sealed class BrowserCaptureWindow : Window
         {
             Address = initialUri?.ToString() ?? "about:blank"
         };
+        Browser.AudioHandler = audioCaptureService.CreateHandler(windowId);
 
         Content = Browser;
     }
