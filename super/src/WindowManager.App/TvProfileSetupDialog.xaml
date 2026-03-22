@@ -1,0 +1,134 @@
+<Window x:Class="WindowManager.App.TvProfileSetupDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Setup TV"
+        Width="760"
+        Height="560"
+        MinWidth="700"
+        MinHeight="520"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="Nome do perfil de TV" FontWeight="SemiBold" />
+            <TextBox Margin="0,8,0,0"
+                     Height="34"
+                     VerticalContentAlignment="Center"
+                     Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <GroupBox Header="TVs disponiveis">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <ListBox ItemsSource="{Binding AvailableTargets}"
+                             SelectedItem="{Binding SelectedAvailableTarget}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,4">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Button Grid.Row="1"
+                            Margin="0,12,0,0"
+                            Height="34"
+                            Content="Adicionar TV selecionada"
+                            Click="OnAddSelectedTargetClick" />
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Grid.Column="2" Header="Grupo de TVs">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="120" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.ColumnSpan="2"
+                               Text="Se a TV nao aparecer, informe o IP manualmente."
+                               TextWrapping="Wrap" />
+                    <TextBox Grid.Row="1"
+                             Margin="0,8,8,0"
+                             Height="34"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding ManualIp, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Grid.Row="1"
+                            Grid.Column="1"
+                            Margin="0,8,0,0"
+                            Height="34"
+                            Content="Inserir IP"
+                            Click="OnAddManualIpClick" />
+
+                    <ListBox Grid.Row="2"
+                             Grid.ColumnSpan="2"
+                             Margin="0,12,0,0"
+                             ItemsSource="{Binding IncludedTargets}"
+                             SelectedItem="{Binding SelectedIncludedTarget}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,4">
+                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Button Grid.Row="3"
+                            Grid.ColumnSpan="2"
+                            Margin="0,12,0,0"
+                            Height="34"
+                            Content="Remover TV selecionada"
+                            Click="OnRemoveIncludedTargetClick" />
+                </Grid>
+            </GroupBox>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="1"
+                    Width="90"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Content="Cancelar"
+                    IsCancel="True" />
+
+            <Button Grid.Column="2"
+                    Width="90"
+                    Height="34"
+                    Content="Salvar"
+                    IsDefault="True"
+                    Click="OnSaveClick" />
+        </Grid>
+    </Grid>
+</Window>

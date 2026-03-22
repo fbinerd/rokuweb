@@ -1,0 +1,136 @@
+<Window x:Class="WindowManager.App.WindowProfileSetupDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Setup Janelas"
+        Width="760"
+        Height="600"
+        MinWidth="700"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Configure o grupo de janelas e depois atribua um perfil de TV para concluir."
+                   TextWrapping="Wrap" />
+
+        <TabControl Grid.Row="1" Margin="0,16,0,0">
+            <TabItem Header="1. Janelas">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.ColumnSpan="2"
+                               Text="Nome do perfil de janelas"
+                               FontWeight="SemiBold" />
+                    <TextBox Grid.Row="1"
+                             Grid.ColumnSpan="2"
+                             Margin="0,8,0,0"
+                             Height="34"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBox Grid.Row="2"
+                             Margin="0,16,8,0"
+                             Height="34"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding Nickname, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox Grid.Row="2"
+                             Grid.Column="1"
+                             Margin="8,16,0,0"
+                             Height="34"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding Url, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <ListBox Grid.Row="3"
+                             Grid.ColumnSpan="2"
+                             Margin="0,12,0,0"
+                             ItemsSource="{Binding Windows}"
+                             SelectedItem="{Binding SelectedWindow}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,4">
+                                    <TextBlock Text="{Binding Nickname}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Url}" Foreground="DimGray" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Grid Grid.Row="4" Grid.ColumnSpan="2" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0"
+                                Height="34"
+                                Content="Inserir"
+                                Click="OnAddWindowClick" />
+                        <Button Grid.Column="2"
+                                Height="34"
+                                Content="Excluir selecionada"
+                                Click="OnRemoveWindowClick" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="2. Perfil de TV">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Selecione o perfil de TV que sera usado por este grupo de janelas."
+                               TextWrapping="Wrap" />
+                    <ComboBox Grid.Row="1"
+                              Margin="0,12,0,0"
+                              Height="34"
+                              ItemsSource="{Binding AvailableTvProfiles}"
+                              SelectedItem="{Binding SelectedTvProfile}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Grid Grid.Row="2" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="1"
+                    Width="90"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Content="Cancelar"
+                    IsCancel="True" />
+
+            <Button Grid.Column="2"
+                    Width="90"
+                    Height="34"
+                    Content="Concluir"
+                    IsDefault="True"
+                    Click="OnSaveClick" />
+        </Grid>
+    </Grid>
+</Window>

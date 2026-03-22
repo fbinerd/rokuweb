@@ -108,21 +108,77 @@
                     </Grid>
                 </GroupBox>
 
-                <GroupBox Header="Sessoes Ativas" Margin="0,12,0,0">
+                <GroupBox Header="Setup TV" Margin="0,12,0,0">
                     <StackPanel Margin="12">
-                        <TextBlock Text="Instancie perfis como sessoes simultaneas e vincule TVs fisicas a cada sessao."
+                        <TextBlock Text="Crie um perfil de TVs escolhendo os aparelhos disponiveis ou inserindo um IP manual quando a TV nao aparecer."
                                    TextWrapping="Wrap" />
-                        <TextBlock Margin="0,12,0,0"
-                                   Text="Perfil para nova sessao"
-                                   FontWeight="SemiBold" />
-                        <ComboBox Margin="0,8,0,0"
-                                  Height="34"
-                                  ItemsSource="{Binding AvailableProfiles}"
-                                  SelectedItem="{Binding SelectedSessionProfileName, UpdateSourceTrigger=PropertyChanged}" />
                         <Button Margin="0,12,0,0"
                                 Height="34"
-                                Content="Criar sessao do perfil"
-                                Command="{Binding CreateSessionFromProfileCommand}" />
+                                Content="Setup TV"
+                                Click="OnOpenTvProfileSetupClick" />
+                        <ListBox Margin="0,12,0,0"
+                                 Height="180"
+                                 ItemsSource="{Binding TvProfiles}"
+                                 SelectedItem="{Binding SelectedTvProfile}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Margin="0,2,0,0"
+                                                   Text="{Binding Targets.Count, StringFormat=TVs no grupo: {0}}"
+                                                   Foreground="#334155" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Excluir perfil de TV selecionado"
+                                Command="{Binding DeleteSelectedTvProfileCommand}" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Setup Janelas" Margin="0,12,0,0">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Monte um grupo de janelas com nickname e link. No final, atribua um perfil de TV para concluir a configuracao."
+                                   TextWrapping="Wrap" />
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Setup Janelas"
+                                Click="OnOpenWindowProfileSetupClick" />
+                        <ListBox Margin="0,12,0,0"
+                                 Height="180"
+                                 ItemsSource="{Binding WindowProfiles}"
+                                 SelectedItem="{Binding SelectedWindowProfile}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Margin="0,2,0,0"
+                                                   Text="{Binding Windows.Count, StringFormat=Janelas no grupo: {0}}"
+                                                   Foreground="#334155" />
+                                        <TextBlock Margin="0,1,0,0"
+                                                   Text="{Binding AssignedTvProfileName, StringFormat=Perfil de TV: {0}}"
+                                                   Foreground="DimGray" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Excluir perfil de janelas selecionado"
+                                Command="{Binding DeleteSelectedWindowProfileCommand}" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Execucao e Sessoes Ativas" Margin="0,12,0,0">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Selecione um perfil de janelas ja configurado. Ele usara o perfil de TV associado para abrir uma sessao simultanea."
+                                   TextWrapping="Wrap" />
+                        <Button Margin="0,12,0,0"
+                                Height="34"
+                                Content="Criar sessao da configuracao selecionada"
+                                Command="{Binding CreateSessionFromWindowProfileCommand}" />
                         <ListBox Margin="0,12,0,0"
                                  Height="220"
                                  ItemsSource="{Binding ActiveSessions}"
@@ -132,7 +188,7 @@
                                     <StackPanel Margin="0,4">
                                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                                         <TextBlock Margin="0,2,0,0"
-                                                   Text="{Binding ProfileName, StringFormat=Perfil: {0}}"
+                                                   Text="{Binding ProfileName, StringFormat=Configuracao: {0}}"
                                                    Foreground="#334155" />
                                         <TextBlock Margin="0,1,0,0"
                                                    Text="{Binding WindowCount, StringFormat=Janelas: {0}}"
@@ -181,30 +237,6 @@
                                 Height="34"
                                 Content="Remover sessao selecionada"
                                 Command="{Binding RemoveSelectedSessionCommand}" />
-                    </StackPanel>
-                </GroupBox>
-
-                <GroupBox Header="Perfis de TV do Perfil" Margin="0,12,0,0">
-                    <StackPanel Margin="12">
-                        <TextBlock Text="Cada item representa um vinculo logico persistido entre o perfil atual e uma TV fisica conhecida."
-                                   TextWrapping="Wrap" />
-                        <ListBox Margin="0,12,0,0"
-                                 Height="180"
-                                 ItemsSource="{Binding ProfileDisplayBindings}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="0,4">
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                        <TextBlock Margin="0,2,0,0"
-                                                   Text="{Binding DisplayTargetName, StringFormat=TV: {0}}"
-                                                   Foreground="#334155" />
-                                        <TextBlock Margin="0,1,0,0"
-                                                   Text="{Binding NetworkAddress, StringFormat=IP: {0}}"
-                                                   Foreground="DimGray" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
                     </StackPanel>
                 </GroupBox>
 

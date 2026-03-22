@@ -475,6 +475,38 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnOpenTvProfileSetupClick(object sender, RoutedEventArgs e)
+    {
+        var dialogViewModel = new TvProfileSetupViewModel(_viewModel.Targets, _viewModel.SelectedTvProfile);
+        var dialog = new TvProfileSetupDialog(dialogViewModel)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyTvProfileSetupAsync(dialogViewModel);
+    }
+
+    private async void OnOpenWindowProfileSetupClick(object sender, RoutedEventArgs e)
+    {
+        var dialogViewModel = new WindowProfileSetupViewModel(_viewModel.TvProfiles, _viewModel.SelectedWindowProfile);
+        var dialog = new WindowProfileSetupDialog(dialogViewModel)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyWindowProfileSetupAsync(dialogViewModel);
+    }
+
     private void OnDeleteWindowClick(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem menuItem || menuItem.Tag is not WindowSession session)
