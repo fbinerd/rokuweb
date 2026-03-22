@@ -817,6 +817,7 @@ public sealed class MainViewModel : ViewModelBase
                 NetworkAddress = target.NetworkAddress,
                 DeviceUniqueId = target.DeviceUniqueId,
                 MacAddress = target.MacAddress,
+                AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
                 DiscoverySource = target.DiscoverySource,
                 NativeWidth = target.NativeWidth,
                 NativeHeight = target.NativeHeight
@@ -2070,6 +2071,7 @@ public sealed class MainViewModel : ViewModelBase
                 NetworkAddress = x.NetworkAddress,
                 LastKnownNetworkAddress = x.LastKnownNetworkAddress,
                 MacAddress = x.MacAddress,
+                AlternateMacAddresses = x.AlternateMacAddresses.ToList(),
                 DeviceUniqueId = x.DeviceUniqueId,
                 DiscoverySource = x.DiscoverySource,
                 TransportKind = x.TransportKind,
@@ -2182,6 +2184,7 @@ public sealed class MainViewModel : ViewModelBase
                     NetworkAddress = targetProfile.NetworkAddress,
                     LastKnownNetworkAddress = targetProfile.LastKnownNetworkAddress,
                     MacAddress = targetProfile.MacAddress,
+                    AlternateMacAddresses = targetProfile.AlternateMacAddresses.ToList(),
                     DeviceUniqueId = targetProfile.DeviceUniqueId,
                     DiscoverySource = targetProfile.DiscoverySource,
                     TransportKind = targetProfile.TransportKind,
@@ -2199,6 +2202,7 @@ public sealed class MainViewModel : ViewModelBase
             target.NetworkAddress = targetProfile.NetworkAddress;
             target.LastKnownNetworkAddress = targetProfile.LastKnownNetworkAddress;
             target.MacAddress = targetProfile.MacAddress;
+            target.AlternateMacAddresses = targetProfile.AlternateMacAddresses.ToList();
             target.DeviceUniqueId = targetProfile.DeviceUniqueId;
             target.DiscoverySource = targetProfile.DiscoverySource;
             target.TransportKind = targetProfile.TransportKind;
@@ -2221,6 +2225,7 @@ public sealed class MainViewModel : ViewModelBase
             NetworkAddress = x.NetworkAddress,
             LastKnownNetworkAddress = x.LastKnownNetworkAddress,
             MacAddress = x.MacAddress,
+            AlternateMacAddresses = x.AlternateMacAddresses.ToList(),
             DeviceUniqueId = x.DeviceUniqueId,
             DiscoverySource = x.DiscoverySource,
             TransportKind = x.TransportKind,
@@ -2299,6 +2304,7 @@ public sealed class MainViewModel : ViewModelBase
                 NetworkAddress = target.NetworkAddress,
                 DeviceUniqueId = target.DeviceUniqueId,
                 MacAddress = target.MacAddress,
+                AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
                 DiscoverySource = target.DiscoverySource,
                 NativeWidth = target.NativeWidth,
                 NativeHeight = target.NativeHeight
@@ -2344,6 +2350,7 @@ public sealed class MainViewModel : ViewModelBase
                     NetworkAddress = target.NetworkAddress,
                     DeviceUniqueId = target.DeviceUniqueId,
                     MacAddress = target.MacAddress,
+                    AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
                     DiscoverySource = target.DiscoverySource,
                     NativeWidth = target.NativeWidth,
                     NativeHeight = target.NativeHeight
@@ -2397,6 +2404,7 @@ public sealed class MainViewModel : ViewModelBase
                 entry.DisplayName = probedTarget.Name;
                 entry.DeviceUniqueId = probedTarget.DeviceUniqueId;
                 entry.MacAddress = probedTarget.MacAddress;
+                entry.AlternateMacAddresses = probedTarget.AlternateMacAddresses.ToList();
                 entry.DiscoverySource = probedTarget.DiscoverySource;
                 entry.NativeWidth = probedTarget.NativeWidth;
                 entry.NativeHeight = probedTarget.NativeHeight;
@@ -2433,6 +2441,8 @@ public sealed class MainViewModel : ViewModelBase
                 existingTarget.MacAddress = entry.MacAddress;
             }
 
+            existingTarget.AlternateMacAddresses = MergeMacLists(existingTarget.AlternateMacAddresses, entry.AlternateMacAddresses);
+
             if (!string.IsNullOrWhiteSpace(entry.DiscoverySource))
             {
                 existingTarget.DiscoverySource = entry.DiscoverySource;
@@ -2458,6 +2468,7 @@ public sealed class MainViewModel : ViewModelBase
             NetworkAddress = entry.NetworkAddress,
             LastKnownNetworkAddress = entry.NetworkAddress,
             MacAddress = entry.MacAddress,
+            AlternateMacAddresses = entry.AlternateMacAddresses.ToList(),
             DeviceUniqueId = entry.DeviceUniqueId,
             DiscoverySource = string.IsNullOrWhiteSpace(entry.DiscoverySource) ? "Manual" : entry.DiscoverySource,
             TransportKind = DisplayTransportKind.LanStreaming,
@@ -2718,6 +2729,16 @@ public sealed class MainViewModel : ViewModelBase
         return string.Format("{0} #{1}", baseName, nextNumber);
     }
 
+    private static List<string> MergeMacLists(IEnumerable<string>? existing, IEnumerable<string>? incoming)
+    {
+        return (existing ?? Enumerable.Empty<string>())
+            .Concat(incoming ?? Enumerable.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static bool TryCreateUri(string input, out Uri uri)
     {
         var normalized = input?.Trim() ?? string.Empty;
@@ -2916,6 +2937,7 @@ public sealed class TvProfileTargetViewModel : ViewModelBase
     private string _networkAddress = string.Empty;
     private string _deviceUniqueId = string.Empty;
     private string _macAddress = string.Empty;
+    private List<string> _alternateMacAddresses = new List<string>();
     private string _discoverySource = string.Empty;
     private int _nativeWidth = 1920;
     private int _nativeHeight = 1080;
@@ -2948,6 +2970,12 @@ public sealed class TvProfileTargetViewModel : ViewModelBase
     {
         get => _macAddress;
         set => SetProperty(ref _macAddress, value);
+    }
+
+    public List<string> AlternateMacAddresses
+    {
+        get => _alternateMacAddresses;
+        set => SetProperty(ref _alternateMacAddresses, value ?? new List<string>());
     }
 
     public string DiscoverySource

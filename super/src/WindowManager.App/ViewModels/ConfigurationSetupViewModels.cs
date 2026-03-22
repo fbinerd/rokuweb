@@ -12,6 +12,7 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
     private string _manualIp = string.Empty;
     private DisplayTarget? _selectedAvailableTarget;
     private TvProfileTargetEditorViewModel? _selectedIncludedTarget;
+    private DisplayTarget? _selectedAssociationTarget;
 
     public TvProfileSetupViewModel(IEnumerable<DisplayTarget> targets, TvProfileViewModel? existingProfile = null)
     {
@@ -65,6 +66,12 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
         set => SetProperty(ref _selectedIncludedTarget, value);
     }
 
+    public DisplayTarget? SelectedAssociationTarget
+    {
+        get => _selectedAssociationTarget;
+        set => SetProperty(ref _selectedAssociationTarget, value);
+    }
+
     public void AddSelectedTarget()
     {
         if (SelectedAvailableTarget is null)
@@ -87,6 +94,7 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             NetworkAddress = SelectedAvailableTarget.NetworkAddress,
             DeviceUniqueId = SelectedAvailableTarget.DeviceUniqueId,
             MacAddress = SelectedAvailableTarget.MacAddress,
+            AlternateMacAddresses = SelectedAvailableTarget.AlternateMacAddresses.ToList(),
             DiscoverySource = SelectedAvailableTarget.DiscoverySource,
             NativeWidth = SelectedAvailableTarget.NativeWidth,
             NativeHeight = SelectedAvailableTarget.NativeHeight
@@ -114,11 +122,58 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             NetworkAddress = manualIp,
             DeviceUniqueId = string.Empty,
             MacAddress = string.Empty,
+            AlternateMacAddresses = new List<string>(),
             DiscoverySource = "Manual",
             NativeWidth = 1920,
             NativeHeight = 1080
         });
         ManualIp = string.Empty;
+        return true;
+    }
+
+    public bool AssociateSelectedTarget()
+    {
+        if (SelectedIncludedTarget is null || SelectedAssociationTarget is null)
+        {
+            return false;
+        }
+
+        var macsToMerge = new[] { SelectedIncludedTarget.MacAddress }
+            .Concat(SelectedIncludedTarget.AlternateMacAddresses ?? Enumerable.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (macsToMerge.Count == 0)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(SelectedAssociationTarget.MacAddress))
+        {
+            macsToMerge.Add(SelectedAssociationTarget.MacAddress);
+        }
+
+        macsToMerge.AddRange(SelectedAssociationTarget.AlternateMacAddresses ?? Enumerable.Empty<string>());
+        var mergedMacs = macsToMerge
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        SelectedIncludedTarget.DisplayTargetId = SelectedAssociationTarget.Id;
+        SelectedIncludedTarget.DisplayName = SelectedAssociationTarget.Name;
+        SelectedIncludedTarget.NetworkAddress = SelectedAssociationTarget.NetworkAddress;
+        SelectedIncludedTarget.DeviceUniqueId = SelectedAssociationTarget.DeviceUniqueId;
+        SelectedIncludedTarget.MacAddress = string.IsNullOrWhiteSpace(SelectedAssociationTarget.MacAddress)
+            ? mergedMacs.FirstOrDefault() ?? string.Empty
+            : SelectedAssociationTarget.MacAddress;
+        SelectedIncludedTarget.AlternateMacAddresses = mergedMacs
+            .Where(x => !string.Equals(x, SelectedIncludedTarget.MacAddress, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        SelectedIncludedTarget.DiscoverySource = SelectedAssociationTarget.DiscoverySource;
+        SelectedIncludedTarget.NativeWidth = SelectedAssociationTarget.NativeWidth;
+        SelectedIncludedTarget.NativeHeight = SelectedAssociationTarget.NativeHeight;
         return true;
     }
 
@@ -237,6 +292,7 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     private string _networkAddress = string.Empty;
     private string _deviceUniqueId = string.Empty;
     private string _macAddress = string.Empty;
+    private List<string> _alternateMacAddresses = new List<string>();
     private string _discoverySource = string.Empty;
     private int _nativeWidth = 1920;
     private int _nativeHeight = 1080;
@@ -268,8 +324,41 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     public string MacAddress
     {
         get => _macAddress;
-        set => SetProperty(ref _macAddress, value);
+        set
+        {
+            if (SetProperty(ref _macAddress, value))
+            {
+                RaisePropertyChanged(nameof(MacSummary));
+            }
+        }
     }
+
+    public List<string> AlternateMacAddresses
+    {
+        get => _alternateMacAddresses;
+        set
+        {
+            if (SetProperty(ref _alternateMacAddresses, value ?? new List<string>()))
+            {
+                RaisePropertyChanged(nameof(MacSummary));
+            }
+        }
+    }
+
+    public string MacSummary
+    {
+        get
+        {
+            var macs = new[] { MacAddress }
+                .Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return macs.Length == 0 ? "MAC nao identificado" : string.Join(", ", macs);
+        }
+    }
+
+    public string ResolutionSummary => string.Format("{0}x{1}", NativeWidth, NativeHeight);
 
     public string DiscoverySource
     {
@@ -280,13 +369,25 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     public int NativeWidth
     {
         get => _nativeWidth;
-        set => SetProperty(ref _nativeWidth, value);
+        set
+        {
+            if (SetProperty(ref _nativeWidth, value))
+            {
+                RaisePropertyChanged(nameof(ResolutionSummary));
+            }
+        }
     }
 
     public int NativeHeight
     {
         get => _nativeHeight;
-        set => SetProperty(ref _nativeHeight, value);
+        set
+        {
+            if (SetProperty(ref _nativeHeight, value))
+            {
+                RaisePropertyChanged(nameof(ResolutionSummary));
+            }
+        }
     }
 }
 

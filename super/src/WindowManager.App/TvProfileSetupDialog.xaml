@@ -2,10 +2,10 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Setup TV"
-        Width="760"
-        Height="560"
-        MinWidth="700"
-        MinHeight="520"
+        Width="920"
+        Height="680"
+        MinWidth="840"
+        MinHeight="620"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -43,6 +43,7 @@
                                 <StackPanel Margin="0,4">
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                                     <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                                    <TextBlock Text="{Binding MetadataSummary}" Foreground="#334155" TextWrapping="Wrap" />
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -62,6 +63,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
@@ -90,16 +92,43 @@
                              ItemsSource="{Binding IncludedTargets}"
                              SelectedItem="{Binding SelectedIncludedTarget}">
                         <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="0,4">
-                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                                        <TextBlock Text="{Binding MacSummary, StringFormat=MACs: {0}}" Foreground="#334155" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding DiscoverySource, StringFormat=Origem: {0}}" Foreground="DimGray" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding ResolutionSummary, StringFormat=Resolucao: {0}}" Foreground="DimGray" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
-                    <Button Grid.Row="3"
+                    <StackPanel Grid.Row="3"
+                                Grid.ColumnSpan="2"
+                                Margin="0,12,0,0">
+                        <TextBlock Text="Associar a TV selecionada a outra TV conhecida"
+                                   FontWeight="SemiBold" />
+                        <ComboBox Margin="0,8,0,0"
+                                  Height="34"
+                                  ItemsSource="{Binding AvailableTargets}"
+                                  SelectedItem="{Binding SelectedAssociationTarget}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Text="{Binding NetworkAddress}" Foreground="DimGray" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Margin="0,8,0,0"
+                                Height="34"
+                                Content="Associar MAC da TV selecionada"
+                                Click="OnAssociateTargetClick" />
+                    </StackPanel>
+
+                    <Button Grid.Row="4"
                             Grid.ColumnSpan="2"
                             Margin="0,12,0,0"
                             Height="34"

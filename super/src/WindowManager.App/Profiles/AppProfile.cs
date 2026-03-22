@@ -139,27 +139,30 @@ public sealed class DisplayTargetProfile
     public string MacAddress { get; set; } = string.Empty;
 
     [DataMember(Order = 6)]
-    public string DeviceUniqueId { get; set; } = string.Empty;
+    public List<string> AlternateMacAddresses { get; set; } = new List<string>();
 
     [DataMember(Order = 7)]
-    public string DiscoverySource { get; set; } = string.Empty;
+    public string DeviceUniqueId { get; set; } = string.Empty;
 
     [DataMember(Order = 8)]
-    public DisplayTransportKind TransportKind { get; set; }
+    public string DiscoverySource { get; set; } = string.Empty;
 
     [DataMember(Order = 9)]
-    public bool IsOnline { get; set; }
+    public DisplayTransportKind TransportKind { get; set; }
 
     [DataMember(Order = 10)]
-    public bool WasPreviouslyKnown { get; set; }
+    public bool IsOnline { get; set; }
 
     [DataMember(Order = 11)]
-    public bool IsStaticTarget { get; set; }
+    public bool WasPreviouslyKnown { get; set; }
 
     [DataMember(Order = 12)]
-    public int NativeWidth { get; set; } = 1920;
+    public bool IsStaticTarget { get; set; }
 
     [DataMember(Order = 13)]
+    public int NativeWidth { get; set; } = 1920;
+
+    [DataMember(Order = 14)]
     public int NativeHeight { get; set; } = 1080;
 }
 
@@ -217,12 +220,15 @@ public sealed class TvProfileTargetDefinition
     public string MacAddress { get; set; } = string.Empty;
 
     [DataMember(Order = 6)]
-    public string DiscoverySource { get; set; } = string.Empty;
+    public List<string> AlternateMacAddresses { get; set; } = new List<string>();
 
     [DataMember(Order = 7)]
-    public int NativeWidth { get; set; } = 1920;
+    public string DiscoverySource { get; set; } = string.Empty;
 
     [DataMember(Order = 8)]
+    public int NativeWidth { get; set; } = 1920;
+
+    [DataMember(Order = 9)]
     public int NativeHeight { get; set; } = 1080;
 }
 

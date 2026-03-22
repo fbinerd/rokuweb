@@ -29,6 +29,11 @@ public partial class TvProfileSetupDialog : Window
         ViewModel.RemoveSelectedTarget();
     }
 
+    private void OnAssociateTargetClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.AssociateSelectedTarget();
+    }
+
     private void OnSaveClick(object sender, RoutedEventArgs e)
     {
         DialogResult = true;
