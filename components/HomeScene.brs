@@ -25,7 +25,7 @@ sub init()
     m.audioSessionId = ""
     m.audioMode = ""
     m.audioChunkUrl = ""
-    m.audioPlayer = CreateObject("roAudioPlayer")
+    m.audioPlayer = invalid
     m.audioUsesHls = false
     m.videoUsesStream = false
     m.videoStreamUrl = ""
@@ -777,7 +777,7 @@ sub onAudioFallbackTimerFire()
 end sub
 
 sub startLegacyPanelAudio()
-    if m.audioPlayer = invalid or m.audioChunkUrl = ""
+    if m.audioChunkUrl = ""
         return
     end if
 
@@ -796,7 +796,7 @@ sub startLegacyPanelAudio()
 end sub
 
 sub playLegacyPanelAudioChunk()
-    if not m.isFullscreen or m.audioSessionId = "" or m.audioPlayer = invalid or m.audioChunkUrl = ""
+    if not m.isFullscreen or m.audioSessionId = "" or m.audioChunkUrl = ""
         return
     end if
 
@@ -805,7 +805,9 @@ sub playLegacyPanelAudioChunk()
     audioItem.streamformat = "wav"
     audioItem.title = "Audio do painel"
 
-    m.audioPlayer.Stop()
+    if m.audioPlayer <> invalid
+        m.audioPlayer.Stop()
+    end if
     m.audioPlayer = CreateObject("roAudioPlayer")
     m.audioPlayer.SetLoop(false)
     m.audioPlayer.AddContent(audioItem)
