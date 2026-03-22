@@ -181,6 +181,36 @@ public sealed class LocalWebRtcPublisherService
         return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
     }
 
+    public async Task<RokuPowerBatchResult> SendPowerCommandToConnectedDisplaysAsync(bool powerOn, CancellationToken cancellationToken)
+    {
+        var displays = _registeredDisplays.Values.ToArray();
+        var result = new RokuPowerBatchResult();
+
+        foreach (var display in displays)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsPowerCompatibleRokuDisplay(display))
+            {
+                result.SkippedCount++;
+                continue;
+            }
+
+            result.TargetedCount++;
+            var commandResult = await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn).ConfigureAwait(false);
+            if (string.Equals(commandResult, "ok", StringComparison.OrdinalIgnoreCase))
+            {
+                result.SuccessCount++;
+            }
+            else
+            {
+                result.FailureCount++;
+            }
+        }
+
+        return result;
+    }
+
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
@@ -1061,6 +1091,22 @@ public sealed class LocalWebRtcPublisherService
                 fileName,
                 ok));
     }
+
+    private static bool IsPowerCompatibleRokuDisplay(RegisteredDisplaySnapshot display)
+    {
+        if (display is null || string.IsNullOrWhiteSpace(display.NetworkAddress))
+        {
+            return false;
+        }
+
+        if (string.Equals(display.DeviceType, "roku", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(display.DeviceId) &&
+               display.DeviceId.StartsWith("roku-", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 [DataContract]
@@ -1148,5 +1194,13 @@ public sealed class RegisteredDisplaySnapshot
 
     [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
+}
+
+public sealed class RokuPowerBatchResult
+{
+    public int TargetedCount { get; set; }
+    public int SuccessCount { get; set; }
+    public int FailureCount { get; set; }
+    public int SkippedCount { get; set; }
 }
 

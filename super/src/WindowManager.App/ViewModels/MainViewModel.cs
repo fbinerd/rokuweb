@@ -106,6 +106,8 @@ public sealed class MainViewModel : ViewModelBase
         MigrateToRemoteBuildCommand = new AsyncRelayCommand(MigrateToRemoteBuildAsync, CanMigrateToRemoteBuild);
         UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
+        PowerOnConnectedRokusCommand = new AsyncRelayCommand(PowerOnConnectedRokusAsync);
+        PowerOffConnectedRokusCommand = new AsyncRelayCommand(PowerOffConnectedRokusAsync);
 
         UpdateBridgeSnapshot();
     }
@@ -147,6 +149,8 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand MigrateToRemoteBuildCommand { get; }
     public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
+    public AsyncRelayCommand PowerOnConnectedRokusCommand { get; }
+    public AsyncRelayCommand PowerOffConnectedRokusCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -642,6 +646,30 @@ public sealed class MainViewModel : ViewModelBase
         UpdateStatusMessage = updatedCount <= 0
             ? "Nenhuma TV conectada precisava de atualizacao."
             : string.Format("{0} TV(s) receberam sideload de atualizacao.", updatedCount);
+    }
+
+    private async Task PowerOnConnectedRokusAsync()
+    {
+        UpdateStatusMessage = "Enviando comando para ligar TVs Roku compativeis...";
+        var result = await _webRtcPublisherService.SendPowerCommandToConnectedDisplaysAsync(powerOn: true, CancellationToken.None);
+        UpdateStatusMessage = string.Format(
+            "Comando de ligar concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}, ignorada(s): {3}.",
+            result.TargetedCount,
+            result.SuccessCount,
+            result.FailureCount,
+            result.SkippedCount);
+    }
+
+    private async Task PowerOffConnectedRokusAsync()
+    {
+        UpdateStatusMessage = "Enviando comando para desligar TVs Roku compativeis...";
+        var result = await _webRtcPublisherService.SendPowerCommandToConnectedDisplaysAsync(powerOn: false, CancellationToken.None);
+        UpdateStatusMessage = string.Format(
+            "Comando de desligar concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}, ignorada(s): {3}.",
+            result.TargetedCount,
+            result.SuccessCount,
+            result.FailureCount,
+            result.SkippedCount);
     }
 
     private async Task UpdateSelectedTargetAsync()

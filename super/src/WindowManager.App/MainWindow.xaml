@@ -193,6 +193,21 @@
                                 Height="34"
                                 Content="Atualizar TVs conectadas"
                                 Command="{Binding UpdateConnectedTvsCommand}" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Height="34"
+                                    Content="Ligar TVs Roku"
+                                    Command="{Binding PowerOnConnectedRokusCommand}" />
+                            <Button Grid.Column="2"
+                                    Height="34"
+                                    Content="Desligar TVs Roku"
+                                    Command="{Binding PowerOffConnectedRokusCommand}" />
+                        </Grid>
                     </StackPanel>
                 </GroupBox>
 
