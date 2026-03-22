@@ -238,12 +238,7 @@ public sealed class BrowserPanelRollingHlsService
                     var wavBytes = UseSyntheticAudio
                         ? BuildSineWaveSnapshot()
                         : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
-                    if (wavBytes is null || wavBytes.Length < 4096)
-                    {
-                        wavBytes = BuildSilentWaveSnapshot();
-                    }
-
-                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes.Length < 4096)
+                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
                         continue;
@@ -434,39 +429,6 @@ public sealed class BrowserPanelRollingHlsService
                 pcmBytes[writeIndex++] = (byte)((sample >> 8) & 0xFF);
             }
         }
-
-        using (var stream = new MemoryStream(44 + pcmBytes.Length))
-        using (var writer = new BinaryWriter(stream))
-        {
-            const int bitsPerSample = 16;
-            var blockAlign = channels * bitsPerSample / 8;
-            var byteRate = sampleRate * blockAlign;
-
-            writer.Write(new[] { 'R', 'I', 'F', 'F' });
-            writer.Write(36 + pcmBytes.Length);
-            writer.Write(new[] { 'W', 'A', 'V', 'E' });
-            writer.Write(new[] { 'f', 'm', 't', ' ' });
-            writer.Write(16);
-            writer.Write((short)1);
-            writer.Write((short)channels);
-            writer.Write(sampleRate);
-            writer.Write(byteRate);
-            writer.Write((short)blockAlign);
-            writer.Write((short)bitsPerSample);
-            writer.Write(new[] { 'd', 'a', 't', 'a' });
-            writer.Write(pcmBytes.Length);
-            writer.Write(pcmBytes);
-            writer.Flush();
-            return stream.ToArray();
-        }
-    }
-
-    private static byte[] BuildSilentWaveSnapshot()
-    {
-        const int sampleRate = 48000;
-        const int channels = 2;
-        var totalFrames = (int)Math.Round(SegmentDuration.TotalSeconds * sampleRate);
-        var pcmBytes = new byte[totalFrames * channels * 2];
 
         using (var stream = new MemoryStream(44 + pcmBytes.Length))
         using (var writer = new BinaryWriter(stream))
