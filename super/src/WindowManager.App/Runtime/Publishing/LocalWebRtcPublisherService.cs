@@ -26,6 +26,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
+    private readonly ConcurrentDictionary<string, BridgeActiveSessionSnapshot> _sessionSnapshots = new ConcurrentDictionary<string, BridgeActiveSessionSnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
@@ -241,7 +242,7 @@ public sealed class LocalWebRtcPublisherService
         return await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn).ConfigureAwait(false);
     }
 
-    public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, int serverPort, WebRtcBindMode bindMode, string specificIp)
+    public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, IEnumerable<BridgeActiveSessionSnapshot> sessions, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
@@ -266,6 +267,18 @@ public sealed class LocalWebRtcPublisherService
                 _windowSnapshots.TryRemove(existingId, out _);
                 _browserAudioHlsService.Unregister(existingId);
                 _browserPanelRollingHlsService.Unregister(existingId);
+            }
+        }
+
+        _sessionSnapshots.Clear();
+        if (sessions is not null)
+        {
+            foreach (var session in sessions)
+            {
+                if (!string.IsNullOrWhiteSpace(session.Id))
+                {
+                    _sessionSnapshots[session.Id] = session;
+                }
             }
         }
     }
@@ -867,7 +880,7 @@ public sealed class LocalWebRtcPublisherService
             payload.Displays.Add(display);
         }
 
-        foreach (var session in BuildActiveSessions(filteredWindows))
+        foreach (var session in ResolveSessionsForBridgeRequest(filteredWindows))
         {
             payload.ActiveSessions.Add(session);
         }
@@ -910,9 +923,9 @@ public sealed class LocalWebRtcPublisherService
             return allWindows;
         }
 
-        var sessionIds = allWindows
-            .Where(x => string.Equals(x.AssignedDisplayAddress, display.NetworkAddress, StringComparison.OrdinalIgnoreCase))
-            .Select(x => x.ActiveSessionId)
+        var sessionIds = _sessionSnapshots.Values
+            .Where(x => x.DisplayAddresses.Any(address => string.Equals(address, display.NetworkAddress, StringComparison.OrdinalIgnoreCase)))
+            .Select(x => x.Id)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -927,23 +940,16 @@ public sealed class LocalWebRtcPublisherService
             .ToList();
     }
 
-    private static List<BridgeActiveSessionSnapshot> BuildActiveSessions(IEnumerable<BridgeWindowSnapshot> windows)
+    private List<BridgeActiveSessionSnapshot> ResolveSessionsForBridgeRequest(IEnumerable<BridgeWindowSnapshot> windows)
     {
-        return windows
-            .Where(x => !string.IsNullOrWhiteSpace(x.ActiveSessionId))
-            .GroupBy(x => x.ActiveSessionId, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new BridgeActiveSessionSnapshot
-            {
-                Id = group.Key,
-                Name = group.Select(x => x.ActiveSessionName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "Sessao ativa",
-                ProfileName = group.Select(x => x.ProfileName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty,
-                WindowIds = group.Select(x => x.Id).ToList(),
-                DisplayAddresses = group
-                    .Select(x => x.AssignedDisplayAddress)
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList()
-            })
+        var sessionIds = windows
+            .Select(x => x.ActiveSessionId)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return _sessionSnapshots.Values
+            .Where(x => sessionIds.Contains(x.Id))
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
