@@ -28,6 +28,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IDisplayDiscoveryService _displayDiscoveryService;
     private readonly RoutingService _routingService;
     private readonly ProfileStore _profileStore;
+    private readonly ActiveSessionStore _activeSessionStore;
     private readonly LocalWebRtcPublisherService _webRtcPublisherService;
     private readonly KnownDisplayStore _knownDisplayStore;
     private readonly AppUpdateManifestService _appUpdateManifestService;
@@ -60,12 +61,15 @@ public sealed class MainViewModel : ViewModelBase
     private string _additionalDiscoveryCidrs = string.Empty;
     private string _selectedUpdateChannel = UpdateChannelNames.Stable;
     private string _selectedSessionProfileName = "default";
+    private bool _isRestoringActiveSessions;
+    private bool _suppressActiveSessionPersistence;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
         IDisplayDiscoveryService displayDiscoveryService,
         RoutingService routingService,
         ProfileStore profileStore,
+        ActiveSessionStore activeSessionStore,
         LocalWebRtcPublisherService webRtcPublisherService,
         KnownDisplayStore knownDisplayStore,
         AppUpdateManifestService appUpdateManifestService,
@@ -77,6 +81,7 @@ public sealed class MainViewModel : ViewModelBase
         _displayDiscoveryService = displayDiscoveryService;
         _routingService = routingService;
         _profileStore = profileStore;
+        _activeSessionStore = activeSessionStore;
         _webRtcPublisherService = webRtcPublisherService;
         _knownDisplayStore = knownDisplayStore;
         _appUpdateManifestService = appUpdateManifestService;
@@ -603,6 +608,7 @@ public sealed class MainViewModel : ViewModelBase
         ProfileName = startupProfileName;
         await LoadProfileAsync();
         SelectedSessionProfileName = ProfileName;
+        await RestoreActiveSessionsAsync();
     }
 
     private async Task CheckForAppUpdatesAsync()
@@ -801,13 +807,14 @@ public sealed class MainViewModel : ViewModelBase
 
         StatusMessage = string.Format("Sessao '{0}' criada a partir do perfil '{1}'.", sessionName, profile.Name);
         UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
     }
 
-    private Task BindSelectedTargetToSessionAsync()
+    private async Task BindSelectedTargetToSessionAsync()
     {
         if (SelectedTarget is null || SelectedActiveSession is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
@@ -836,14 +843,14 @@ public sealed class MainViewModel : ViewModelBase
 
         StatusMessage = string.Format("TV '{0}' vinculada a sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
         UpdateBridgeSnapshot();
-        return Task.CompletedTask;
+        await PersistActiveSessionsAsync();
     }
 
-    private Task AddSelectedWindowToSessionAsync()
+    private async Task AddSelectedWindowToSessionAsync()
     {
         if (SelectedWindow is null || SelectedActiveSession is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         SelectedWindow.ActiveSessionId = SelectedActiveSession.Id;
@@ -864,14 +871,14 @@ public sealed class MainViewModel : ViewModelBase
         RebuildActiveSessionsFromWindows();
         StatusMessage = string.Format("Janela '{0}' adicionada a sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
         UpdateBridgeSnapshot();
-        return Task.CompletedTask;
+        await PersistActiveSessionsAsync();
     }
 
-    private Task RemoveSelectedWindowFromSessionAsync()
+    private async Task RemoveSelectedWindowFromSessionAsync()
     {
         if (SelectedWindow is null || SelectedActiveSession is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         if (SelectedWindow.ActiveSessionId == SelectedActiveSession.Id)
@@ -885,14 +892,14 @@ public sealed class MainViewModel : ViewModelBase
         RebuildActiveSessionsFromWindows();
         StatusMessage = string.Format("Janela '{0}' removida da sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
         UpdateBridgeSnapshot();
-        return Task.CompletedTask;
+        await PersistActiveSessionsAsync();
     }
 
-    private Task UnbindSelectedTargetFromSessionAsync()
+    private async Task UnbindSelectedTargetFromSessionAsync()
     {
         if (SelectedTarget is null || SelectedActiveSession is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var binding = SelectedActiveSession.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
@@ -903,9 +910,8 @@ public sealed class MainViewModel : ViewModelBase
             SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
             StatusMessage = string.Format("TV '{0}' removida da sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
             UpdateBridgeSnapshot();
+            await PersistActiveSessionsAsync();
         }
-
-        return Task.CompletedTask;
     }
 
     private async Task RemoveSelectedSessionAsync()
@@ -935,6 +941,7 @@ public sealed class MainViewModel : ViewModelBase
         SelectedActiveSession = ActiveSessions.FirstOrDefault();
         StatusMessage = string.Format("Sessao '{0}' removida.", session.Name);
         UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
     }
 
     private async Task UpdateSelectedTargetAsync()
@@ -1292,6 +1299,7 @@ public sealed class MainViewModel : ViewModelBase
         SelectedActiveSession = null;
         SelectedStaticPanel = null;
         CurrentBrowserAddress = "about:blank";
+        await PersistActiveSessionsAsync();
     }
 
     private async Task DeleteSelectedWindowAsync()
@@ -1322,6 +1330,7 @@ public sealed class MainViewModel : ViewModelBase
         StatusMessage = string.Format("Painel '{0}' removido.", deletedTitle);
         await SaveProfileInternalAsync(updateStatus: false);
         UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
     }
 
     private async Task PublishSelectedWindowWebRtcAsync()
@@ -1533,6 +1542,7 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         _isApplyingProfile = true;
+        _suppressActiveSessionPersistence = true;
         try
         {
             var restoredSessionId = Guid.NewGuid();
@@ -1606,6 +1616,7 @@ public sealed class MainViewModel : ViewModelBase
         finally
         {
             _isApplyingProfile = false;
+            _suppressActiveSessionPersistence = false;
         }
 
         RestoreProfileDisplayBindings(profile);
@@ -1614,6 +1625,167 @@ public sealed class MainViewModel : ViewModelBase
         RebuildActiveSessionsFromWindows();
         StatusMessage = string.Format("Perfil '{0}' restaurado com sucesso. As rotas WebRTC podem ser atualizadas manualmente apos a abertura.", ProfileName);
         UpdateBridgeSnapshot();
+    }
+
+    private async Task RestoreActiveSessionsAsync()
+    {
+        var records = await _activeSessionStore.LoadAsync(CancellationToken.None);
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        _isRestoringActiveSessions = true;
+        _suppressActiveSessionPersistence = true;
+        try
+        {
+            await ClearRuntimeWindowsAsync();
+
+            foreach (var record in records)
+            {
+                var session = new ActiveSessionViewModel
+                {
+                    Id = record.Id == Guid.Empty ? Guid.NewGuid() : record.Id,
+                    Name = string.IsNullOrWhiteSpace(record.Name) ? BuildSessionName(record.ProfileName) : record.Name,
+                    ProfileName = record.ProfileName,
+                    StartedAtUtc = record.StartedAtUtc
+                };
+
+                foreach (var bindingRecord in record.BoundDisplays)
+                {
+                    var target = Targets.FirstOrDefault(x =>
+                        x.Id == bindingRecord.DisplayTargetId ||
+                        (!string.IsNullOrWhiteSpace(bindingRecord.DeviceUniqueId) &&
+                         string.Equals(x.DeviceUniqueId, bindingRecord.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrWhiteSpace(bindingRecord.NetworkAddress) &&
+                         string.Equals(x.NetworkAddress, bindingRecord.NetworkAddress, StringComparison.OrdinalIgnoreCase)));
+
+                    session.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = target?.Id ?? bindingRecord.DisplayTargetId,
+                        DisplayName = target?.Name ?? bindingRecord.DisplayName,
+                        NetworkAddress = target?.NetworkAddress ?? bindingRecord.NetworkAddress,
+                        DeviceUniqueId = target?.DeviceUniqueId ?? bindingRecord.DeviceUniqueId,
+                        BindingName = string.IsNullOrWhiteSpace(bindingRecord.BindingName)
+                            ? (target?.Name ?? bindingRecord.DisplayName)
+                            : bindingRecord.BindingName
+                    });
+                }
+
+                ActiveSessions.Add(session);
+
+                foreach (var windowRecord in record.Windows)
+                {
+                    Uri? initialUri = null;
+                    if (!string.IsNullOrWhiteSpace(windowRecord.InitialUrl))
+                    {
+                        Uri.TryCreate(windowRecord.InitialUrl, UriKind.Absolute, out initialUri);
+                    }
+
+                    var browserWindow = await _browserInstanceHost.CreateAsync(initialUri ?? new Uri("about:blank"), CancellationToken.None);
+                    var assignedTarget = Targets.FirstOrDefault(x => x.Id == windowRecord.AssignedTargetId);
+                    browserWindow.Id = windowRecord.Id == Guid.Empty ? Guid.NewGuid() : windowRecord.Id;
+                    browserWindow.Title = string.IsNullOrWhiteSpace(windowRecord.Title) ? browserWindow.Title : windowRecord.Title;
+                    browserWindow.InitialUri = initialUri;
+                    browserWindow.State = windowRecord.State;
+                    browserWindow.AssignedTarget = assignedTarget;
+                    browserWindow.BrowserResolutionMode = windowRecord.BrowserResolutionMode;
+                    browserWindow.BrowserManualWidth = windowRecord.BrowserManualWidth;
+                    browserWindow.BrowserManualHeight = windowRecord.BrowserManualHeight;
+                    browserWindow.TargetResolutionMode = windowRecord.TargetResolutionMode;
+                    browserWindow.TargetManualWidth = windowRecord.TargetManualWidth;
+                    browserWindow.TargetManualHeight = windowRecord.TargetManualHeight;
+                    browserWindow.IsWebRtcPublishingEnabled = windowRecord.IsWebRtcPublishingEnabled;
+                    browserWindow.ProfileName = record.ProfileName;
+                    browserWindow.ActiveSessionId = session.Id;
+                    browserWindow.ActiveSessionName = session.Name;
+                    Windows.Add(browserWindow);
+                }
+            }
+
+            RebuildActiveSessionsFromWindows();
+            SelectedActiveSession = ActiveSessions.FirstOrDefault();
+            SelectedWindow = Windows.FirstOrDefault();
+            CurrentBrowserAddress = SelectedWindow?.InitialUri?.ToString() ?? "about:blank";
+            StatusMessage = string.Format("{0} sessoes ativas foram restauradas.", ActiveSessions.Count);
+            UpdateBridgeSnapshot();
+        }
+        finally
+        {
+            _isRestoringActiveSessions = false;
+            _suppressActiveSessionPersistence = false;
+        }
+    }
+
+    private async Task PersistActiveSessionsAsync()
+    {
+        if (_isApplyingProfile || _isRestoringActiveSessions || _suppressActiveSessionPersistence)
+        {
+            return;
+        }
+
+        var records = ActiveSessions.Select(session => new ActiveSessionRecord
+        {
+            Id = session.Id,
+            Name = session.Name,
+            ProfileName = session.ProfileName,
+            StartedAtUtc = string.IsNullOrWhiteSpace(session.StartedAtUtc) ? DateTime.UtcNow.ToString("o") : session.StartedAtUtc,
+            Windows = Windows
+                .Where(window => window.ActiveSessionId == session.Id)
+                .Select(window => new ActiveSessionWindowRecord
+                {
+                    Id = window.Id,
+                    Title = window.Title,
+                    InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
+                    State = window.State,
+                    AssignedTargetId = window.AssignedTarget?.Id,
+                    BrowserResolutionMode = window.BrowserResolutionMode,
+                    BrowserManualWidth = window.BrowserManualWidth,
+                    BrowserManualHeight = window.BrowserManualHeight,
+                    TargetResolutionMode = window.TargetResolutionMode,
+                    TargetManualWidth = window.TargetManualWidth,
+                    TargetManualHeight = window.TargetManualHeight,
+                    IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled
+                }).ToList(),
+            BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
+            {
+                DisplayTargetId = binding.DisplayTargetId,
+                DisplayName = binding.DisplayName,
+                NetworkAddress = binding.NetworkAddress,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                BindingName = binding.BindingName
+            }).ToList()
+        }).ToList();
+
+        await _activeSessionStore.SaveAsync(records, CancellationToken.None);
+    }
+
+    private async Task ClearRuntimeWindowsAsync()
+    {
+        foreach (var window in Windows.ToList())
+        {
+            try
+            {
+                await _webRtcPublisherService.UnpublishAsync(window, CancellationToken.None);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await _browserInstanceHost.CloseAsync(window.Id, CancellationToken.None);
+            }
+            catch
+            {
+            }
+        }
+
+        Windows.Clear();
+        ActiveSessions.Clear();
+        SelectedWindow = null;
+        SelectedActiveSession = null;
+        CurrentBrowserAddress = "about:blank";
     }
 
     private async Task SaveProfileInternalAsync(bool updateStatus)
@@ -2016,50 +2188,76 @@ public sealed class MainViewModel : ViewModelBase
 
     private void RebuildActiveSessionsFromWindows()
     {
-        var existingBindings = ActiveSessions
+        var existingSessions = ActiveSessions
             .ToDictionary(
                 x => x.Id,
-                x => x.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingViewModel
+                x => new
                 {
-                    DisplayTargetId = binding.DisplayTargetId,
-                    DisplayName = binding.DisplayName,
-                    NetworkAddress = binding.NetworkAddress
-                }).ToList());
+                    x.Name,
+                    x.ProfileName,
+                    x.StartedAtUtc,
+                    BoundDisplays = x.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = binding.DisplayTargetId,
+                        DisplayName = binding.DisplayName,
+                        NetworkAddress = binding.NetworkAddress,
+                        DeviceUniqueId = binding.DeviceUniqueId,
+                        BindingName = binding.BindingName
+                    }).ToList()
+                });
+
+        var windowGroups = Windows
+            .Where(x => x.ActiveSessionId != Guid.Empty)
+            .GroupBy(x => x.ActiveSessionId)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var orderedSessionIds = existingSessions.Keys
+            .Concat(windowGroups.Keys)
+            .Distinct()
+            .ToList();
+
+        var selectedSessionId = SelectedActiveSession?.Id;
 
         ActiveSessions.Clear();
 
-        foreach (var group in Windows.Where(x => x.ActiveSessionId != Guid.Empty).GroupBy(x => x.ActiveSessionId))
+        foreach (var sessionId in orderedSessionIds)
         {
-            var first = group.First();
+            windowGroups.TryGetValue(sessionId, out var groupedWindows);
+            var first = groupedWindows?.FirstOrDefault();
+            existingSessions.TryGetValue(sessionId, out var existingSession);
             var session = new ActiveSessionViewModel
             {
-                Id = group.Key,
-                Name = string.IsNullOrWhiteSpace(first.ActiveSessionName) ? first.ProfileName : first.ActiveSessionName,
-                ProfileName = first.ProfileName,
-                WindowCount = group.Count(),
+                Id = sessionId,
+                Name = existingSession?.Name
+                    ?? (string.IsNullOrWhiteSpace(first?.ActiveSessionName) ? first?.ProfileName ?? "Sessao" : first?.ActiveSessionName ?? "Sessao"),
+                ProfileName = existingSession?.ProfileName ?? first?.ProfileName ?? string.Empty,
+                StartedAtUtc = existingSession?.StartedAtUtc ?? DateTime.UtcNow.ToString("o"),
+                WindowCount = groupedWindows?.Count ?? 0,
                 TvCount = 0
             };
 
-            foreach (var window in group)
+            foreach (var window in groupedWindows ?? Enumerable.Empty<WindowSession>())
             {
                 session.WindowIds.Add(window.Id);
             }
 
-            if (existingBindings.TryGetValue(session.Id, out var bindings))
+            foreach (var binding in existingSession?.BoundDisplays ?? Enumerable.Empty<ActiveSessionDisplayBindingViewModel>())
             {
-                foreach (var binding in bindings)
-                {
-                    session.BoundDisplays.Add(binding);
-                }
-
-                session.TvCount = session.BoundDisplays.Count;
-                session.BindingCount = session.BoundDisplays.Count;
+                session.BoundDisplays.Add(binding);
             }
+
+            session.TvCount = session.BoundDisplays.Count;
+            session.BindingCount = session.BoundDisplays.Count;
 
             ActiveSessions.Add(session);
         }
 
-        if (SelectedActiveSession is null || !ActiveSessions.Any(x => x.Id == SelectedActiveSession.Id))
+        if (selectedSessionId.HasValue)
+        {
+            SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == selectedSessionId.Value);
+        }
+
+        if (SelectedActiveSession is null)
         {
             SelectedActiveSession = ActiveSessions.FirstOrDefault();
         }
@@ -2106,6 +2304,7 @@ public sealed class ActiveSessionViewModel : ViewModelBase
     private Guid _id;
     private string _name = string.Empty;
     private string _profileName = string.Empty;
+    private string _startedAtUtc = string.Empty;
     private int _windowCount;
     private int _tvCount;
     private int _bindingCount;
@@ -2126,6 +2325,12 @@ public sealed class ActiveSessionViewModel : ViewModelBase
     {
         get => _profileName;
         set => SetProperty(ref _profileName, value);
+    }
+
+    public string StartedAtUtc
+    {
+        get => _startedAtUtc;
+        set => SetProperty(ref _startedAtUtc, value);
     }
 
     public int WindowCount
