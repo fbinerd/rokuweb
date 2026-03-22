@@ -212,6 +212,18 @@ public sealed class TvProfileTargetDefinition
 
     [DataMember(Order = 4)]
     public string DeviceUniqueId { get; set; } = string.Empty;
+
+    [DataMember(Order = 5)]
+    public string MacAddress { get; set; } = string.Empty;
+
+    [DataMember(Order = 6)]
+    public string DiscoverySource { get; set; } = string.Empty;
+
+    [DataMember(Order = 7)]
+    public int NativeWidth { get; set; } = 1920;
+
+    [DataMember(Order = 8)]
+    public int NativeHeight { get; set; } = 1080;
 }
 
 [DataContract]

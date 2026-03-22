@@ -27,7 +27,11 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
                     DisplayTargetId = target.DisplayTargetId,
                     DisplayName = target.DisplayName,
                     NetworkAddress = target.NetworkAddress,
-                    DeviceUniqueId = target.DeviceUniqueId
+                    DeviceUniqueId = target.DeviceUniqueId,
+                    MacAddress = target.MacAddress,
+                    DiscoverySource = target.DiscoverySource,
+                    NativeWidth = target.NativeWidth,
+                    NativeHeight = target.NativeHeight
                 });
             }
         }
@@ -81,7 +85,11 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             DisplayTargetId = SelectedAvailableTarget.Id,
             DisplayName = SelectedAvailableTarget.Name,
             NetworkAddress = SelectedAvailableTarget.NetworkAddress,
-            DeviceUniqueId = SelectedAvailableTarget.DeviceUniqueId
+            DeviceUniqueId = SelectedAvailableTarget.DeviceUniqueId,
+            MacAddress = SelectedAvailableTarget.MacAddress,
+            DiscoverySource = SelectedAvailableTarget.DiscoverySource,
+            NativeWidth = SelectedAvailableTarget.NativeWidth,
+            NativeHeight = SelectedAvailableTarget.NativeHeight
         });
     }
 
@@ -104,7 +112,11 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             DisplayTargetId = Guid.Empty,
             DisplayName = string.Format("TV {0}", manualIp),
             NetworkAddress = manualIp,
-            DeviceUniqueId = string.Empty
+            DeviceUniqueId = string.Empty,
+            MacAddress = string.Empty,
+            DiscoverySource = "Manual",
+            NativeWidth = 1920,
+            NativeHeight = 1080
         });
         ManualIp = string.Empty;
         return true;
@@ -224,6 +236,10 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     private string _displayName = string.Empty;
     private string _networkAddress = string.Empty;
     private string _deviceUniqueId = string.Empty;
+    private string _macAddress = string.Empty;
+    private string _discoverySource = string.Empty;
+    private int _nativeWidth = 1920;
+    private int _nativeHeight = 1080;
 
     public Guid DisplayTargetId
     {
@@ -247,6 +263,30 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     {
         get => _deviceUniqueId;
         set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string MacAddress
+    {
+        get => _macAddress;
+        set => SetProperty(ref _macAddress, value);
+    }
+
+    public string DiscoverySource
+    {
+        get => _discoverySource;
+        set => SetProperty(ref _discoverySource, value);
+    }
+
+    public int NativeWidth
+    {
+        get => _nativeWidth;
+        set => SetProperty(ref _nativeWidth, value);
+    }
+
+    public int NativeHeight
+    {
+        get => _nativeHeight;
+        set => SetProperty(ref _nativeHeight, value);
     }
 }
 

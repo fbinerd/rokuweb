@@ -29,6 +29,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly RoutingService _routingService;
     private readonly ProfileStore _profileStore;
     private readonly ActiveSessionStore _activeSessionStore;
+    private readonly ManualDisplayProbeService _manualDisplayProbeService;
     private readonly LocalWebRtcPublisherService _webRtcPublisherService;
     private readonly KnownDisplayStore _knownDisplayStore;
     private readonly AppUpdateManifestService _appUpdateManifestService;
@@ -72,6 +73,7 @@ public sealed class MainViewModel : ViewModelBase
         RoutingService routingService,
         ProfileStore profileStore,
         ActiveSessionStore activeSessionStore,
+        ManualDisplayProbeService manualDisplayProbeService,
         LocalWebRtcPublisherService webRtcPublisherService,
         KnownDisplayStore knownDisplayStore,
         AppUpdateManifestService appUpdateManifestService,
@@ -84,6 +86,7 @@ public sealed class MainViewModel : ViewModelBase
         _routingService = routingService;
         _profileStore = profileStore;
         _activeSessionStore = activeSessionStore;
+        _manualDisplayProbeService = manualDisplayProbeService;
         _webRtcPublisherService = webRtcPublisherService;
         _knownDisplayStore = knownDisplayStore;
         _appUpdateManifestService = appUpdateManifestService;
@@ -806,13 +809,17 @@ public sealed class MainViewModel : ViewModelBase
 
         foreach (var entry in setup.IncludedTargets)
         {
-            var target = EnsureTargetForTvProfileEntry(entry);
+            var target = await EnsureTargetForTvProfileEntryAsync(entry);
             tvProfile.Targets.Add(new TvProfileTargetViewModel
             {
                 DisplayTargetId = target.Id,
                 DisplayName = string.IsNullOrWhiteSpace(entry.DisplayName) ? target.Name : entry.DisplayName,
                 NetworkAddress = target.NetworkAddress,
-                DeviceUniqueId = target.DeviceUniqueId
+                DeviceUniqueId = target.DeviceUniqueId,
+                MacAddress = target.MacAddress,
+                DiscoverySource = target.DiscoverySource,
+                NativeWidth = target.NativeWidth,
+                NativeHeight = target.NativeHeight
             });
         }
 
@@ -2290,7 +2297,11 @@ public sealed class MainViewModel : ViewModelBase
                 DisplayTargetId = target.DisplayTargetId,
                 DisplayName = target.DisplayName,
                 NetworkAddress = target.NetworkAddress,
-                DeviceUniqueId = target.DeviceUniqueId
+                DeviceUniqueId = target.DeviceUniqueId,
+                MacAddress = target.MacAddress,
+                DiscoverySource = target.DiscoverySource,
+                NativeWidth = target.NativeWidth,
+                NativeHeight = target.NativeHeight
             }).ToList()
         }).ToList();
     }
@@ -2331,7 +2342,11 @@ public sealed class MainViewModel : ViewModelBase
                     DisplayTargetId = target.DisplayTargetId,
                     DisplayName = target.DisplayName,
                     NetworkAddress = target.NetworkAddress,
-                    DeviceUniqueId = target.DeviceUniqueId
+                    DeviceUniqueId = target.DeviceUniqueId,
+                    MacAddress = target.MacAddress,
+                    DiscoverySource = target.DiscoverySource,
+                    NativeWidth = target.NativeWidth,
+                    NativeHeight = target.NativeHeight
                 });
             }
 
@@ -2371,8 +2386,23 @@ public sealed class MainViewModel : ViewModelBase
         SelectedWindowProfile = WindowProfiles.FirstOrDefault();
     }
 
-    private DisplayTarget EnsureTargetForTvProfileEntry(TvProfileTargetEditorViewModel entry)
+    private async Task<DisplayTarget> EnsureTargetForTvProfileEntryAsync(TvProfileTargetEditorViewModel entry)
     {
+        if (!string.IsNullOrWhiteSpace(entry.NetworkAddress))
+        {
+            var probedTarget = await _manualDisplayProbeService.ProbeAsync(entry.NetworkAddress, CancellationToken.None);
+            if (probedTarget is not null)
+            {
+                entry.DisplayTargetId = probedTarget.Id;
+                entry.DisplayName = probedTarget.Name;
+                entry.DeviceUniqueId = probedTarget.DeviceUniqueId;
+                entry.MacAddress = probedTarget.MacAddress;
+                entry.DiscoverySource = probedTarget.DiscoverySource;
+                entry.NativeWidth = probedTarget.NativeWidth;
+                entry.NativeHeight = probedTarget.NativeHeight;
+            }
+        }
+
         var existingTarget = Targets.FirstOrDefault(x =>
             (entry.DisplayTargetId != Guid.Empty && x.Id == entry.DisplayTargetId) ||
             (!string.IsNullOrWhiteSpace(entry.DeviceUniqueId) &&
@@ -2382,14 +2412,40 @@ public sealed class MainViewModel : ViewModelBase
 
         if (existingTarget is not null)
         {
-            if (string.IsNullOrWhiteSpace(existingTarget.Name) && !string.IsNullOrWhiteSpace(entry.DisplayName))
+            if (!string.IsNullOrWhiteSpace(entry.DisplayName))
             {
                 existingTarget.Name = entry.DisplayName;
             }
 
-            if (string.IsNullOrWhiteSpace(existingTarget.DeviceUniqueId))
+            if (!string.IsNullOrWhiteSpace(entry.NetworkAddress))
+            {
+                existingTarget.NetworkAddress = entry.NetworkAddress;
+                existingTarget.LastKnownNetworkAddress = entry.NetworkAddress;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.DeviceUniqueId))
             {
                 existingTarget.DeviceUniqueId = entry.DeviceUniqueId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.MacAddress))
+            {
+                existingTarget.MacAddress = entry.MacAddress;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.DiscoverySource))
+            {
+                existingTarget.DiscoverySource = entry.DiscoverySource;
+            }
+
+            if (entry.NativeWidth > 0)
+            {
+                existingTarget.NativeWidth = entry.NativeWidth;
+            }
+
+            if (entry.NativeHeight > 0)
+            {
+                existingTarget.NativeHeight = entry.NativeHeight;
             }
 
             return existingTarget;
@@ -2401,12 +2457,15 @@ public sealed class MainViewModel : ViewModelBase
             Name = string.IsNullOrWhiteSpace(entry.DisplayName) ? string.Format("TV {0}", entry.NetworkAddress) : entry.DisplayName,
             NetworkAddress = entry.NetworkAddress,
             LastKnownNetworkAddress = entry.NetworkAddress,
+            MacAddress = entry.MacAddress,
             DeviceUniqueId = entry.DeviceUniqueId,
-            DiscoverySource = "Manual",
+            DiscoverySource = string.IsNullOrWhiteSpace(entry.DiscoverySource) ? "Manual" : entry.DiscoverySource,
             TransportKind = DisplayTransportKind.LanStreaming,
             IsOnline = false,
             WasPreviouslyKnown = true,
-            IsStaticTarget = true
+            IsStaticTarget = true,
+            NativeWidth = entry.NativeWidth <= 0 ? 1920 : entry.NativeWidth,
+            NativeHeight = entry.NativeHeight <= 0 ? 1080 : entry.NativeHeight
         };
 
         Targets.Add(target);
@@ -2856,6 +2915,10 @@ public sealed class TvProfileTargetViewModel : ViewModelBase
     private string _displayName = string.Empty;
     private string _networkAddress = string.Empty;
     private string _deviceUniqueId = string.Empty;
+    private string _macAddress = string.Empty;
+    private string _discoverySource = string.Empty;
+    private int _nativeWidth = 1920;
+    private int _nativeHeight = 1080;
 
     public Guid DisplayTargetId
     {
@@ -2879,6 +2942,30 @@ public sealed class TvProfileTargetViewModel : ViewModelBase
     {
         get => _deviceUniqueId;
         set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string MacAddress
+    {
+        get => _macAddress;
+        set => SetProperty(ref _macAddress, value);
+    }
+
+    public string DiscoverySource
+    {
+        get => _discoverySource;
+        set => SetProperty(ref _discoverySource, value);
+    }
+
+    public int NativeWidth
+    {
+        get => _nativeWidth;
+        set => SetProperty(ref _nativeWidth, value);
+    }
+
+    public int NativeHeight
+    {
+        get => _nativeHeight;
+        set => SetProperty(ref _nativeHeight, value);
     }
 }
 
