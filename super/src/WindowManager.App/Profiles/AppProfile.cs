@@ -35,6 +35,9 @@ public sealed class AppProfile
 
     [DataMember(Order = 9)]
     public List<DisplayTargetProfile> DisplayTargets { get; set; } = new List<DisplayTargetProfile>();
+
+    [DataMember(Order = 10)]
+    public List<DisplayBindingProfile> DisplayBindings { get; set; } = new List<DisplayBindingProfile>();
 }
 
 [DataContract]
@@ -152,4 +155,26 @@ public sealed class DisplayTargetProfile
 
     [DataMember(Order = 13)]
     public int NativeHeight { get; set; } = 1080;
+}
+
+[DataContract]
+public sealed class DisplayBindingProfile
+{
+    [DataMember(Order = 1)]
+    public Guid Id { get; set; }
+
+    [DataMember(Order = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public Guid DisplayTargetId { get; set; }
+
+    [DataMember(Order = 4)]
+    public string DisplayTargetName { get; set; } = string.Empty;
+
+    [DataMember(Order = 5)]
+    public string DeviceUniqueId { get; set; } = string.Empty;
+
+    [DataMember(Order = 6)]
+    public string NetworkAddress { get; set; } = string.Empty;
 }

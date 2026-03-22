@@ -184,6 +184,30 @@
                     </StackPanel>
                 </GroupBox>
 
+                <GroupBox Header="Perfis de TV do Perfil" Margin="0,12,0,0">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Cada item representa um vinculo logico persistido entre o perfil atual e uma TV fisica conhecida."
+                                   TextWrapping="Wrap" />
+                        <ListBox Margin="0,12,0,0"
+                                 Height="180"
+                                 ItemsSource="{Binding ProfileDisplayBindings}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Margin="0,2,0,0"
+                                                   Text="{Binding DisplayTargetName, StringFormat=TV: {0}}"
+                                                   Foreground="#334155" />
+                                        <TextBlock Margin="0,1,0,0"
+                                                   Text="{Binding NetworkAddress, StringFormat=IP: {0}}"
+                                                   Foreground="DimGray" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </StackPanel>
+                </GroupBox>
+
                 <GroupBox Header="Navegacao" Margin="0,12,0,0">
                     <Grid Margin="12">
                         <Grid.RowDefinitions>

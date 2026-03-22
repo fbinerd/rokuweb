@@ -126,6 +126,8 @@ public sealed class MainViewModel : ViewModelBase
 
     public ObservableCollection<string> AvailableProfiles { get; } = new ObservableCollection<string>();
 
+    public ObservableCollection<ProfileDisplayBindingViewModel> ProfileDisplayBindings { get; } = new ObservableCollection<ProfileDisplayBindingViewModel>();
+
     public ObservableCollection<ActiveSessionViewModel> ActiveSessions { get; } = new ObservableCollection<ActiveSessionViewModel>();
 
     public ObservableCollection<StaticDisplayPanelViewModel> StaticPanels { get; } = new ObservableCollection<StaticDisplayPanelViewModel>();
@@ -473,11 +475,12 @@ public sealed class MainViewModel : ViewModelBase
         SelectedActiveSession is null
             ? "Nenhuma sessao ativa selecionada"
             : string.Format(
-                "Sessao '{0}' | Perfil: {1} | Janelas: {2} | TVs: {3}",
+                "Sessao '{0}' | Perfil: {1} | Janelas: {2} | TVs: {3} | Bindings: {4}",
                 SelectedActiveSession.Name,
                 SelectedActiveSession.ProfileName,
                 SelectedActiveSession.WindowCount,
-                SelectedActiveSession.BoundDisplays.Count);
+                SelectedActiveSession.BoundDisplays.Count,
+                SelectedActiveSession.BindingCount);
 
     public string? GetWindowLinkRtcUrl(WindowSession? window)
     {
@@ -775,6 +778,27 @@ public sealed class MainViewModel : ViewModelBase
 
         RebuildActiveSessionsFromWindows();
         SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == sessionId);
+        if (SelectedActiveSession is not null)
+        {
+            foreach (var binding in profile.DisplayBindings)
+            {
+                if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == binding.DisplayTargetId))
+                {
+                    SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = binding.DisplayTargetId,
+                        DisplayName = string.IsNullOrWhiteSpace(binding.Name) ? binding.DisplayTargetName : binding.Name,
+                        NetworkAddress = binding.NetworkAddress,
+                        DeviceUniqueId = binding.DeviceUniqueId,
+                        BindingName = string.IsNullOrWhiteSpace(binding.Name) ? binding.DisplayTargetName : binding.Name
+                    });
+                }
+            }
+
+            SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
+        }
+
         StatusMessage = string.Format("Sessao '{0}' criada a partir do perfil '{1}'.", sessionName, profile.Name);
         UpdateBridgeSnapshot();
     }
@@ -802,9 +826,12 @@ public sealed class MainViewModel : ViewModelBase
             {
                 DisplayTargetId = SelectedTarget.Id,
                 DisplayName = SelectedTarget.Name,
-                NetworkAddress = SelectedTarget.NetworkAddress
+                NetworkAddress = SelectedTarget.NetworkAddress,
+                DeviceUniqueId = SelectedTarget.DeviceUniqueId,
+                BindingName = SelectedTarget.Name
             });
             SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
         }
 
         StatusMessage = string.Format("TV '{0}' vinculada a sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
@@ -873,6 +900,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             SelectedActiveSession.BoundDisplays.Remove(binding);
             SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
             StatusMessage = string.Format("TV '{0}' removida da sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
             UpdateBridgeSnapshot();
         }
@@ -1580,6 +1608,7 @@ public sealed class MainViewModel : ViewModelBase
             _isApplyingProfile = false;
         }
 
+        RestoreProfileDisplayBindings(profile);
         await RefreshProfileNamesAsync();
         await SyncDefaultProfileSelectionAsync();
         RebuildActiveSessionsFromWindows();
@@ -1638,6 +1667,7 @@ public sealed class MainViewModel : ViewModelBase
                 ActiveSessionId = x.ActiveSessionId,
                 ActiveSessionName = x.ActiveSessionName
             }).ToList(),
+            DisplayBindings = BuildProfileDisplayBindings(),
             StaticPanels = StaticPanels.Select(x => new StaticPanelProfile
             {
                 Id = x.Id,
@@ -1775,6 +1805,106 @@ public sealed class MainViewModel : ViewModelBase
             var target = Targets.FirstOrDefault(x => x.Id == panel.DisplayTargetId);
             panel.DisplayName = target?.Name ?? "TV removida";
         }
+    }
+
+    private List<DisplayBindingProfile> BuildProfileDisplayBindings()
+    {
+        var bindingMap = new Dictionary<Guid, DisplayBindingProfile>();
+
+        foreach (var window in Windows.Where(x =>
+                     string.Equals(x.ProfileName, ProfileName?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                     x.AssignedTarget is not null))
+        {
+            var target = window.AssignedTarget!;
+            if (!bindingMap.ContainsKey(target.Id))
+            {
+                bindingMap[target.Id] = new DisplayBindingProfile
+                {
+                    Id = Guid.NewGuid(),
+                    Name = target.Name,
+                    DisplayTargetId = target.Id,
+                    DisplayTargetName = target.Name,
+                    DeviceUniqueId = target.DeviceUniqueId,
+                    NetworkAddress = target.NetworkAddress
+                };
+            }
+        }
+
+        foreach (var panel in StaticPanels)
+        {
+            var target = Targets.FirstOrDefault(x => x.Id == panel.DisplayTargetId);
+            if (target is null || bindingMap.ContainsKey(target.Id))
+            {
+                continue;
+            }
+
+            bindingMap[target.Id] = new DisplayBindingProfile
+            {
+                Id = Guid.NewGuid(),
+                Name = string.IsNullOrWhiteSpace(panel.Name) ? target.Name : panel.Name,
+                DisplayTargetId = target.Id,
+                DisplayTargetName = target.Name,
+                DeviceUniqueId = target.DeviceUniqueId,
+                NetworkAddress = target.NetworkAddress
+            };
+        }
+
+        return bindingMap.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private void RestoreProfileDisplayBindings(AppProfile profile)
+    {
+        ProfileDisplayBindings.Clear();
+
+        var bindings = profile.DisplayBindings;
+        if (bindings is null || bindings.Count == 0)
+        {
+            bindings = BuildProfileDisplayBindingsFromProfile(profile);
+        }
+
+        foreach (var binding in bindings)
+        {
+            ProfileDisplayBindings.Add(new ProfileDisplayBindingViewModel
+            {
+                Id = binding.Id == Guid.Empty ? Guid.NewGuid() : binding.Id,
+                Name = binding.Name,
+                DisplayTargetId = binding.DisplayTargetId,
+                DisplayTargetName = binding.DisplayTargetName,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                NetworkAddress = binding.NetworkAddress
+            });
+        }
+    }
+
+    private static List<DisplayBindingProfile> BuildProfileDisplayBindingsFromProfile(AppProfile profile)
+    {
+        var bindings = new Dictionary<Guid, DisplayBindingProfile>();
+        foreach (var persistedWindow in profile.Windows)
+        {
+            if (!persistedWindow.AssignedTargetId.HasValue)
+            {
+                continue;
+            }
+
+            var assignedTargetId = persistedWindow.AssignedTargetId.Value;
+            var target = profile.DisplayTargets.FirstOrDefault(x => x.Id == assignedTargetId);
+            if (target is null || bindings.ContainsKey(target.Id))
+            {
+                continue;
+            }
+
+            bindings[target.Id] = new DisplayBindingProfile
+            {
+                Id = Guid.NewGuid(),
+                Name = target.Name,
+                DisplayTargetId = target.Id,
+                DisplayTargetName = target.Name,
+                DeviceUniqueId = target.DeviceUniqueId,
+                NetworkAddress = target.NetworkAddress
+            };
+        }
+
+        return bindings.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private void OnWindowsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1923,6 +2053,7 @@ public sealed class MainViewModel : ViewModelBase
                 }
 
                 session.TvCount = session.BoundDisplays.Count;
+                session.BindingCount = session.BoundDisplays.Count;
             }
 
             ActiveSessions.Add(session);
@@ -1977,6 +2108,7 @@ public sealed class ActiveSessionViewModel : ViewModelBase
     private string _profileName = string.Empty;
     private int _windowCount;
     private int _tvCount;
+    private int _bindingCount;
 
     public Guid Id
     {
@@ -2008,6 +2140,12 @@ public sealed class ActiveSessionViewModel : ViewModelBase
         set => SetProperty(ref _tvCount, value);
     }
 
+    public int BindingCount
+    {
+        get => _bindingCount;
+        set => SetProperty(ref _bindingCount, value);
+    }
+
     public ObservableCollection<Guid> WindowIds { get; } = new ObservableCollection<Guid>();
 
     public ObservableCollection<ActiveSessionDisplayBindingViewModel> BoundDisplays { get; } = new ObservableCollection<ActiveSessionDisplayBindingViewModel>();
@@ -2018,6 +2156,8 @@ public sealed class ActiveSessionDisplayBindingViewModel : ViewModelBase
     private Guid _displayTargetId;
     private string _displayName = string.Empty;
     private string _networkAddress = string.Empty;
+    private string _deviceUniqueId = string.Empty;
+    private string _bindingName = string.Empty;
 
     public Guid DisplayTargetId
     {
@@ -2029,6 +2169,64 @@ public sealed class ActiveSessionDisplayBindingViewModel : ViewModelBase
     {
         get => _displayName;
         set => SetProperty(ref _displayName, value);
+    }
+
+    public string NetworkAddress
+    {
+        get => _networkAddress;
+        set => SetProperty(ref _networkAddress, value);
+    }
+
+    public string DeviceUniqueId
+    {
+        get => _deviceUniqueId;
+        set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string BindingName
+    {
+        get => _bindingName;
+        set => SetProperty(ref _bindingName, value);
+    }
+}
+
+public sealed class ProfileDisplayBindingViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _name = string.Empty;
+    private Guid _displayTargetId;
+    private string _displayTargetName = string.Empty;
+    private string _deviceUniqueId = string.Empty;
+    private string _networkAddress = string.Empty;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    public Guid DisplayTargetId
+    {
+        get => _displayTargetId;
+        set => SetProperty(ref _displayTargetId, value);
+    }
+
+    public string DisplayTargetName
+    {
+        get => _displayTargetName;
+        set => SetProperty(ref _displayTargetName, value);
+    }
+
+    public string DeviceUniqueId
+    {
+        get => _deviceUniqueId;
+        set => SetProperty(ref _deviceUniqueId, value);
     }
 
     public string NetworkAddress
