@@ -495,12 +495,10 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
-                    "TV desatualizada detectada: id={0}, atual={1}, esperado={2}",
+                    "TV desatualizada detectada: id={0}, atual={1}, esperado={2}. Atualizacao automatica desabilitada; use o comando manual.",
                     snapshot.DeviceId,
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
-
-            _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
         }
     }
 
@@ -595,12 +593,10 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
-                    "TV desatualizada detectada via input-log: id={0}, atual={1}, esperado={2}",
+                    "TV desatualizada detectada via input-log: id={0}, atual={1}, esperado={2}. Atualizacao automatica desabilitada; use o comando manual.",
                     snapshot.DeviceId,
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
-
-            _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
         }
     }
 
