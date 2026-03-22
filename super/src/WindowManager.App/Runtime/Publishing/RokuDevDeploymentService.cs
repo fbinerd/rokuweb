@@ -11,6 +11,7 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.IO.Compression;
 using Newtonsoft.Json;
 using WindowManager.App.Runtime;
 
@@ -184,7 +185,10 @@ public sealed class RokuDevDeploymentService
         if (string.Equals(UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel), UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase))
         {
             var localPackage = ResolveLocalPackagePath();
-            if (!string.IsNullOrWhiteSpace(localPackage) && File.Exists(localPackage))
+            var localPackageReleaseId = TryReadPackageReleaseId(localPackage);
+            if (!string.IsNullOrWhiteSpace(localPackage) &&
+                File.Exists(localPackage) &&
+                string.Equals(localPackageReleaseId, expectedVersion, StringComparison.OrdinalIgnoreCase))
             {
                 AppLog.Write(
                     "RokuDeploy",
@@ -199,6 +203,13 @@ public sealed class RokuDevDeploymentService
                     Source = "local"
                 };
             }
+
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Build local detectado, mas pacote local nao corresponde ao alvo remoto. esperado={0}, local={1}",
+                    expectedVersion,
+                    localPackageReleaseId));
         }
 
         try
@@ -307,6 +318,52 @@ public sealed class RokuDevDeploymentService
         }
 
         return Path.Combine(root, "hello-roku.zip");
+    }
+
+    private static string TryReadPackageReleaseId(string packagePath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(packagePath) || !File.Exists(packagePath))
+            {
+                return string.Empty;
+            }
+
+            using (var archive = ZipFile.OpenRead(packagePath))
+            {
+                var entry = archive.GetEntry("source/BuildInfo.brs");
+                if (entry is null)
+                {
+                    return string.Empty;
+                }
+
+                using (var stream = entry.Open())
+                using (var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, true))
+                {
+                    var content = reader.ReadToEnd();
+                    var marker = "return \"";
+                    var startIndex = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                    if (startIndex < 0)
+                    {
+                        return string.Empty;
+                    }
+
+                    startIndex += marker.Length;
+                    var endIndex = content.IndexOf('"', startIndex);
+                    if (endIndex <= startIndex)
+                    {
+                        return string.Empty;
+                    }
+
+                    return content.Substring(startIndex, endIndex - startIndex).Trim();
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
     }
 
     private static string SummarizeResponseBody(string responseBody)
