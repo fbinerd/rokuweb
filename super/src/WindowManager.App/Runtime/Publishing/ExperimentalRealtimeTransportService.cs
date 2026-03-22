@@ -72,6 +72,16 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         reserved.SendAudioPacket(pcmBytes);
     }
 
+    public void ConfigureRemoteAudioTarget(Guid windowId, string host, int port)
+    {
+        if (string.IsNullOrWhiteSpace(host) || port <= 0 || !_transports.TryGetValue(windowId, out var reserved))
+        {
+            return;
+        }
+
+        reserved.ConfigureRemoteAudioTarget(host, port);
+    }
+
     private static ReservedRealtimeTransport CreateReservedTransport(Guid windowId, string publicHost)
     {
         var audioSocket = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
@@ -82,7 +92,7 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         {
             WindowId = windowId.ToString("N"),
             Host = publicHost,
-            Protocol = "udp",
+            Protocol = "udp-rtp",
             AudioPort = audioPort,
             VideoPort = videoPort,
             Mode = "continuous-udp-rtp-prototype",
@@ -109,6 +119,8 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         private readonly UdpClient _audioSocket;
         private readonly UdpClient _videoSocket;
         private readonly UdpClient _audioSender;
+        private string _audioTargetHost;
+        private int _audioTargetPort;
         private readonly Task _audioLoop;
         private readonly Task _videoLoop;
         private bool _audioStreamAnnounced;
@@ -122,6 +134,8 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             _audioSocket = audioSocket;
             _videoSocket = videoSocket;
             _audioSender = new UdpClient(AddressFamily.InterNetwork);
+            _audioTargetHost = IPAddress.Loopback.ToString();
+            _audioTargetPort = candidate.AudioPort;
             _audioLoop = Task.Run(() => ReceiveLoopAsync(_audioSocket, true));
             _videoLoop = Task.Run(() => ReceiveLoopAsync(_videoSocket, false));
         }
@@ -160,7 +174,7 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             try
             {
                 var packet = BuildAudioRtpPacket(pcmBytes);
-                _audioSender.Send(packet, packet.Length, IPAddress.Loopback.ToString(), Candidate.AudioPort);
+                _audioSender.Send(packet, packet.Length, _audioTargetHost, _audioTargetPort);
                 Candidate.AudioPacketsSent += 1;
                 Candidate.AudioBytesSent += packet.Length;
                 if (Candidate.AudioPacketsSent == 1 || Candidate.AudioPacketsSent % 200 == 0)
@@ -187,7 +201,7 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
                     string.Format(
                         "Espelhamento de audio continuo experimental ativo: janela={0}, audioPort={1}",
                         Candidate.WindowId,
-                        Candidate.AudioPort));
+                        _audioTargetPort));
             }
             catch (ObjectDisposedException)
             {
@@ -195,6 +209,22 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             catch (SocketException)
             {
             }
+        }
+
+        public void ConfigureRemoteAudioTarget(string host, int port)
+        {
+            _audioTargetHost = host;
+            _audioTargetPort = port;
+            Candidate.Host = host;
+            Candidate.AudioPort = port;
+            Candidate.Protocol = "udp-rtp";
+            AppLog.Write(
+                "ExpWebRtc",
+                string.Format(
+                    "Destino RTP/UDP experimental configurado: janela={0}, host={1}, audioPort={2}",
+                    Candidate.WindowId,
+                    host,
+                    port));
         }
 
         private async Task ReceiveLoopAsync(UdpClient socket, bool audio)

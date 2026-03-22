@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ExperimentalUdpReceiverTask" extends="Task">
+  <interface>
+    <field id="receiverPort" type="integer" value="0" />
+    <field id="packetCount" type="integer" value="0" />
+    <field id="byteCount" type="integer" value="0" />
+    <field id="lastSourceHost" type="string" value="" />
+    <field id="errorMessage" type="string" value="" />
+    <field id="completedToken" type="string" value="" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ExperimentalUdpReceiverTask.brs" />
+</component>

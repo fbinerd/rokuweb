@@ -238,6 +238,12 @@ public sealed class ExperimentalWebRtcOfferPayload
 
     [DataMember(Name = "source", Order = 3)]
     public string Source { get; set; } = string.Empty;
+
+    [DataMember(Name = "receiverAudioPort", Order = 4)]
+    public int ReceiverAudioPort { get; set; }
+
+    [DataMember(Name = "receiverProtocol", Order = 5)]
+    public string ReceiverProtocol { get; set; } = string.Empty;
 }
 
 [DataContract]

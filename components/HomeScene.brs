@@ -44,6 +44,7 @@ sub init()
     m.experimentalAvOfferTask = m.top.findNode("experimentalAvOfferTask")
     m.experimentalAvStateTask = m.top.findNode("experimentalAvStateTask")
     m.experimentalAvMediaTask = m.top.findNode("experimentalAvMediaTask")
+    m.experimentalUdpReceiverTask = m.top.findNode("experimentalUdpReceiverTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
@@ -62,6 +63,7 @@ sub init()
     m.experimentalAvMediaProbeInFlight = false
     m.experimentalAvCurrentMediaVersion = 0
     m.experimentalAvLastPlayedMediaVersion = 0
+    m.experimentalUdpReceiverPort = 0
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -119,6 +121,10 @@ sub init()
     m.experimentalAvOfferTask.observeField("completedToken", "onExperimentalAvOfferTaskCompleted")
     m.experimentalAvStateTask.observeField("completedToken", "onExperimentalAvStateTaskCompleted")
     m.experimentalAvMediaTask.observeField("completedToken", "onExperimentalAvMediaTaskCompleted")
+    if m.experimentalUdpReceiverTask <> invalid
+        m.experimentalUdpReceiverTask.observeField("completedToken", "onExperimentalUdpReceiverTaskUpdated")
+        m.experimentalUdpReceiverTask.control = "RUN"
+    end if
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -814,8 +820,39 @@ sub onExperimentalAvSessionTaskCompleted()
     m.subtitleLabel.visible = true
     m.statusLabel.text = "Sessao experimental encontrada"
     m.subtitleLabel.text = "Enviando offer para " + trimTitle(offerUrl)
-    offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
+    receiverAudioPort = 0
+    if m.experimentalUdpReceiverTask <> invalid and m.experimentalUdpReceiverTask.receiverPort <> invalid
+        receiverAudioPort = m.experimentalUdpReceiverTask.receiverPort
+        m.experimentalUdpReceiverPort = receiverAudioPort
+    end if
+    if receiverAudioPort > 0
+        ? "[ExpAV] receiver audio port => "; receiverAudioPort
+        offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph"",""receiverAudioPort"":" + receiverAudioPort.ToStr() + ",""receiverProtocol"":""udp-rtp""}"
+    else
+        offerBody = "{""type"":""offer"",""sdp"":""roku-placeholder-offer"",""source"":""roku-scenegraph""}"
+    end if
     runExperimentalAvRequest(m.experimentalAvOfferTask, offerUrl, "POST", offerBody)
+end sub
+
+sub onExperimentalUdpReceiverTaskUpdated()
+    if m.experimentalUdpReceiverTask = invalid
+        return
+    end if
+
+    receiverPort = 0
+    if m.experimentalUdpReceiverTask.receiverPort <> invalid
+        receiverPort = m.experimentalUdpReceiverTask.receiverPort
+    end if
+
+    if receiverPort > 0 and receiverPort <> m.experimentalUdpReceiverPort
+        m.experimentalUdpReceiverPort = receiverPort
+        ? "[ExpAV] udp receiver => port="; receiverPort
+    end if
+
+    errorMessage = getString(m.experimentalUdpReceiverTask.errorMessage, "")
+    if errorMessage <> ""
+        ? "[ExpAV] udp receiver error => "; errorMessage
+    end if
 end sub
 
 sub onExperimentalAvOfferTaskCompleted()

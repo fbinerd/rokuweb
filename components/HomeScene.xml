@@ -16,6 +16,7 @@
     <ExperimentalAvTask id="experimentalAvOfferTask" />
     <ExperimentalAvTask id="experimentalAvStateTask" />
     <ExperimentalAvTask id="experimentalAvMediaTask" />
+    <ExperimentalUdpReceiverTask id="experimentalUdpReceiverTask" />
     <Timer id="panelRefreshTimer" repeat="true" duration="5.0" />
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />

@@ -404,7 +404,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (normalizedPath.StartsWith("/api/experimental-av/", StringComparison.OrdinalIgnoreCase))
         {
-            return await BuildExperimentalWebRtcResponseAsync(method, requestTarget, normalizedPath, requestBody, headers, cancellationToken);
+            return await BuildExperimentalWebRtcResponseAsync(method, requestTarget, normalizedPath, requestBody, remoteAddress, headers, cancellationToken);
         }
 
         if (string.Equals(normalizedPath, "/api/control", StringComparison.OrdinalIgnoreCase))
@@ -918,7 +918,7 @@ public sealed class LocalWebRtcPublisherService
 
     private string BuildExperimentalTransportStatus(Guid windowId, RealtimeTransportCandidate? realtimeCandidate = null)
     {
-        if (realtimeCandidate is not null && realtimeCandidate.AudioPacketsReceived > 0)
+        if (realtimeCandidate is not null && (realtimeCandidate.AudioPacketsReceived > 0 || realtimeCandidate.AudioPacketsSent > 0))
         {
             return "continuous-udp-rtp-active";
         }
@@ -961,7 +961,7 @@ public sealed class LocalWebRtcPublisherService
         };
     }
 
-    private async Task<byte[]> BuildExperimentalWebRtcResponseAsync(string method, string requestTarget, string normalizedPath, string requestBody, Dictionary<string, string> headers, CancellationToken cancellationToken)
+    private async Task<byte[]> BuildExperimentalWebRtcResponseAsync(string method, string requestTarget, string normalizedPath, string requestBody, string remoteAddress, Dictionary<string, string> headers, CancellationToken cancellationToken)
     {
         if (!_experimentalWebRtcAvService.IsEnabled)
         {
@@ -1095,6 +1095,42 @@ public sealed class LocalWebRtcPublisherService
             _experimentalRealtimeTransportService.Invalidate(windowId);
             var mediaUrl = BuildExperimentalMediaUrl(windowId);
             var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, mediaUrl, payload);
+            var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty);
+            var configuredRealtimeCandidate = _experimentalRealtimeTransportService.GetOrCreate(windowId, publicHost);
+            if (configuredRealtimeCandidate is not null
+                && payload.ReceiverAudioPort > 0
+                && string.Equals(payload.ReceiverProtocol, "udp-rtp", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(remoteAddress))
+            {
+                _experimentalRealtimeTransportService.ConfigureRemoteAudioTarget(windowId, remoteAddress, payload.ReceiverAudioPort);
+                configuredRealtimeCandidate = _experimentalRealtimeTransportService.GetOrCreate(windowId, publicHost);
+            }
+
+            if (configuredRealtimeCandidate is not null)
+            {
+                updated.RealtimeMode = configuredRealtimeCandidate.Mode;
+                updated.RealtimeProtocol = configuredRealtimeCandidate.Protocol;
+                updated.RealtimeHost = configuredRealtimeCandidate.Host;
+                updated.RealtimeAudioPort = configuredRealtimeCandidate.AudioPort;
+                updated.RealtimeVideoPort = configuredRealtimeCandidate.VideoPort;
+                updated.RealtimeTransportReady = configuredRealtimeCandidate.Ready;
+                updated.RealtimeAudioPacketsReceived = configuredRealtimeCandidate.AudioPacketsReceived;
+                updated.RealtimeAudioBytesReceived = configuredRealtimeCandidate.AudioBytesReceived;
+                updated.RealtimeVideoPacketsReceived = configuredRealtimeCandidate.VideoPacketsReceived;
+                updated.RealtimeVideoBytesReceived = configuredRealtimeCandidate.VideoBytesReceived;
+                updated.RealtimeLastPacketUtc = configuredRealtimeCandidate.LastPacketUtc ?? string.Empty;
+                updated.RealtimeAudioPacketsSent = configuredRealtimeCandidate.AudioPacketsSent;
+                updated.RealtimeAudioBytesSent = configuredRealtimeCandidate.AudioBytesSent;
+                var sampleRate = configuredRealtimeCandidate.AudioSampleRate > 0 ? configuredRealtimeCandidate.AudioSampleRate : 44100;
+                var channels = configuredRealtimeCandidate.AudioChannels > 0 ? configuredRealtimeCandidate.AudioChannels : 2;
+                updated.AnswerSdp = ExperimentalWebRtcAvService.BuildAudioRtpAnswerSdp(
+                    windowId,
+                    configuredRealtimeCandidate.Host,
+                    configuredRealtimeCandidate.AudioPort,
+                    sampleRate,
+                    channels,
+                    configuredRealtimeCandidate.AudioPayloadType);
+            }
             AppLog.Write(
                 "ExpWebRtc",
                 string.Format(
