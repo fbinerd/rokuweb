@@ -114,6 +114,8 @@ public sealed class MainViewModel : ViewModelBase
         BindSelectedTargetToSessionCommand = new AsyncRelayCommand(BindSelectedTargetToSessionAsync, CanBindSelectedTargetToSession);
         UnbindSelectedTargetFromSessionCommand = new AsyncRelayCommand(UnbindSelectedTargetFromSessionAsync, CanBindSelectedTargetToSession);
         RemoveSelectedSessionCommand = new AsyncRelayCommand(RemoveSelectedSessionAsync, CanRemoveSelectedSession);
+        AddSelectedWindowToSessionCommand = new AsyncRelayCommand(AddSelectedWindowToSessionAsync, CanAddSelectedWindowToSession);
+        RemoveSelectedWindowFromSessionCommand = new AsyncRelayCommand(RemoveSelectedWindowFromSessionAsync, CanRemoveSelectedWindowFromSession);
 
         UpdateBridgeSnapshot();
     }
@@ -163,6 +165,8 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand BindSelectedTargetToSessionCommand { get; }
     public AsyncRelayCommand UnbindSelectedTargetFromSessionCommand { get; }
     public AsyncRelayCommand RemoveSelectedSessionCommand { get; }
+    public AsyncRelayCommand AddSelectedWindowToSessionCommand { get; }
+    public AsyncRelayCommand RemoveSelectedWindowFromSessionCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -180,6 +184,8 @@ public sealed class MainViewModel : ViewModelBase
                 SaveProfileCommand.RaiseCanExecuteChanged();
                 DeleteSelectedWindowCommand.RaiseCanExecuteChanged();
                 PublishWebRtcCommand.RaiseCanExecuteChanged();
+                AddSelectedWindowToSessionCommand.RaiseCanExecuteChanged();
+                RemoveSelectedWindowFromSessionCommand.RaiseCanExecuteChanged();
                 QueueAutoSave();
             }
         }
@@ -226,6 +232,8 @@ public sealed class MainViewModel : ViewModelBase
                 BindSelectedTargetToSessionCommand.RaiseCanExecuteChanged();
                 UnbindSelectedTargetFromSessionCommand.RaiseCanExecuteChanged();
                 RemoveSelectedSessionCommand.RaiseCanExecuteChanged();
+                AddSelectedWindowToSessionCommand.RaiseCanExecuteChanged();
+                RemoveSelectedWindowFromSessionCommand.RaiseCanExecuteChanged();
                 RaisePropertyChanged(nameof(SelectedActiveSessionSummary));
             }
         }
@@ -637,6 +645,8 @@ public sealed class MainViewModel : ViewModelBase
     private bool CanCreateSessionFromProfile() => !string.IsNullOrWhiteSpace(SelectedSessionProfileName);
     private bool CanBindSelectedTargetToSession() => SelectedTarget is not null && SelectedActiveSession is not null;
     private bool CanRemoveSelectedSession() => SelectedActiveSession is not null;
+    private bool CanAddSelectedWindowToSession() => SelectedWindow is not null && SelectedActiveSession is not null;
+    private bool CanRemoveSelectedWindowFromSession() => SelectedWindow is not null && SelectedActiveSession is not null;
 
     private async Task SearchUpdatesAsync()
     {
@@ -735,12 +745,6 @@ public sealed class MainViewModel : ViewModelBase
 
         var sessionId = Guid.NewGuid();
         var sessionName = BuildSessionName(profile.Name);
-        var session = new ActiveSessionViewModel
-        {
-            Id = sessionId,
-            Name = sessionName,
-            ProfileName = profile.Name
-        };
 
         foreach (var persistedWindow in profile.Windows)
         {
@@ -767,12 +771,10 @@ public sealed class MainViewModel : ViewModelBase
             browserWindow.AssignedTarget = null;
 
             Windows.Add(browserWindow);
-            session.WindowIds.Add(browserWindow.Id);
         }
 
-        session.WindowCount = session.WindowIds.Count;
-        ActiveSessions.Add(session);
-        SelectedActiveSession = session;
+        RebuildActiveSessionsFromWindows();
+        SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == sessionId);
         StatusMessage = string.Format("Sessao '{0}' criada a partir do perfil '{1}'.", sessionName, profile.Name);
         UpdateBridgeSnapshot();
     }
@@ -782,6 +784,16 @@ public sealed class MainViewModel : ViewModelBase
         if (SelectedTarget is null || SelectedActiveSession is null)
         {
             return Task.CompletedTask;
+        }
+
+        foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+        {
+            var existing = session.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
+            if (existing is not null)
+            {
+                session.BoundDisplays.Remove(existing);
+                session.TvCount = session.BoundDisplays.Count;
+            }
         }
 
         if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == SelectedTarget.Id))
@@ -796,6 +808,55 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         StatusMessage = string.Format("TV '{0}' vinculada a sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
+        UpdateBridgeSnapshot();
+        return Task.CompletedTask;
+    }
+
+    private Task AddSelectedWindowToSessionAsync()
+    {
+        if (SelectedWindow is null || SelectedActiveSession is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        SelectedWindow.ActiveSessionId = SelectedActiveSession.Id;
+        SelectedWindow.ActiveSessionName = SelectedActiveSession.Name;
+        SelectedWindow.ProfileName = SelectedActiveSession.ProfileName;
+        if (!SelectedActiveSession.WindowIds.Contains(SelectedWindow.Id))
+        {
+            foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+            {
+                session.WindowIds.Remove(SelectedWindow.Id);
+                session.WindowCount = session.WindowIds.Count;
+            }
+
+            SelectedActiveSession.WindowIds.Add(SelectedWindow.Id);
+            SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+        }
+
+        RebuildActiveSessionsFromWindows();
+        StatusMessage = string.Format("Janela '{0}' adicionada a sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
+        UpdateBridgeSnapshot();
+        return Task.CompletedTask;
+    }
+
+    private Task RemoveSelectedWindowFromSessionAsync()
+    {
+        if (SelectedWindow is null || SelectedActiveSession is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (SelectedWindow.ActiveSessionId == SelectedActiveSession.Id)
+        {
+            SelectedWindow.ActiveSessionId = Guid.Empty;
+            SelectedWindow.ActiveSessionName = string.Empty;
+        }
+
+        SelectedActiveSession.WindowIds.Remove(SelectedWindow.Id);
+        SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+        RebuildActiveSessionsFromWindows();
+        StatusMessage = string.Format("Janela '{0}' removida da sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
         UpdateBridgeSnapshot();
         return Task.CompletedTask;
     }
@@ -1118,6 +1179,45 @@ public sealed class MainViewModel : ViewModelBase
             }
         }
 
+        if (SelectedActiveSession is not null)
+        {
+            SelectedWindow.ActiveSessionId = SelectedActiveSession.Id;
+            SelectedWindow.ActiveSessionName = SelectedActiveSession.Name;
+            SelectedWindow.ProfileName = SelectedActiveSession.ProfileName;
+            if (!SelectedActiveSession.WindowIds.Contains(SelectedWindow.Id))
+            {
+                foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+                {
+                    session.WindowIds.Remove(SelectedWindow.Id);
+                    session.WindowCount = session.WindowIds.Count;
+                }
+
+                SelectedActiveSession.WindowIds.Add(SelectedWindow.Id);
+                SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+            }
+
+            foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+            {
+                var existing = session.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
+                if (existing is not null)
+                {
+                    session.BoundDisplays.Remove(existing);
+                    session.TvCount = session.BoundDisplays.Count;
+                }
+            }
+
+            if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == SelectedTarget.Id))
+            {
+                SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                {
+                    DisplayTargetId = SelectedTarget.Id,
+                    DisplayName = SelectedTarget.Name,
+                    NetworkAddress = SelectedTarget.NetworkAddress
+                });
+                SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            }
+        }
+
         await _routingService.AssignWindowToTargetAsync(SelectedWindow, SelectedTarget, CancellationToken.None);
         StatusMessage = SelectedTarget.TransportKind == DisplayTransportKind.Miracast
             ? string.Format("Janela '{0}' pronta para conexao com '{1}'. Conclua a transmissao no painel Cast do Windows.", SelectedWindow.Title, SelectedTarget.Name)
@@ -1156,10 +1256,12 @@ public sealed class MainViewModel : ViewModelBase
 
         Windows.Clear();
         Targets.Clear();
+        ActiveSessions.Clear();
         StaticPanels.Clear();
         AvailableProfiles.Clear();
         SelectedWindow = null;
         SelectedTarget = null;
+        SelectedActiveSession = null;
         SelectedStaticPanel = null;
         CurrentBrowserAddress = "about:blank";
     }
@@ -1178,6 +1280,15 @@ public sealed class MainViewModel : ViewModelBase
         await _browserInstanceHost.CloseAsync(windowToDelete.Id, CancellationToken.None);
 
         Windows.Remove(windowToDelete);
+        foreach (var session in ActiveSessions)
+        {
+            if (session.WindowIds.Remove(windowToDelete.Id))
+            {
+                session.WindowCount = session.WindowIds.Count;
+            }
+        }
+
+        RebuildActiveSessionsFromWindows();
         SelectedWindow = Windows.FirstOrDefault();
         CurrentBrowserAddress = SelectedWindow?.InitialUri?.ToString() ?? "about:blank";
         StatusMessage = string.Format("Painel '{0}' removido.", deletedTitle);

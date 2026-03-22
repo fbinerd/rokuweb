@@ -162,6 +162,21 @@
                                     Content="Desvincular TV selecionada"
                                     Command="{Binding UnbindSelectedTargetFromSessionCommand}" />
                         </Grid>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Height="34"
+                                    Content="Adicionar janela selecionada"
+                                    Command="{Binding AddSelectedWindowToSessionCommand}" />
+                            <Button Grid.Column="2"
+                                    Height="34"
+                                    Content="Remover janela selecionada"
+                                    Command="{Binding RemoveSelectedWindowFromSessionCommand}" />
+                        </Grid>
                         <Button Margin="0,12,0,0"
                                 Height="34"
                                 Content="Remover sessao selecionada"
