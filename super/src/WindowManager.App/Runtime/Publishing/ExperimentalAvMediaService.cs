@@ -8,8 +8,9 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class ExperimentalAvMediaService : IDisposable
 {
-    private const double MinimumBufferedAudioSeconds = 8.0;
-    private const double ClipAudioSeconds = 12.0;
+    private const double MinimumBufferedAudioSeconds = 3.0;
+    private const double ClipAudioSeconds = 20.0;
+    private static readonly TimeSpan ClipRefreshInterval = TimeSpan.FromSeconds(6);
     private readonly bool _enabled;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
@@ -48,7 +49,7 @@ public sealed class ExperimentalAvMediaService : IDisposable
             return;
         }
 
-        if (TryGetMp4Path(windowId, out _))
+        if (TryGetMp4Path(windowId, out _) && !ShouldRefreshMp4(windowId))
         {
             return;
         }
@@ -277,6 +278,29 @@ public sealed class ExperimentalAvMediaService : IDisposable
 
     public void Dispose()
     {
+    }
+
+    private bool ShouldRefreshMp4(Guid windowId)
+    {
+        if (!TryGetMp4Path(windowId, out var path))
+        {
+            return true;
+        }
+
+        if (!_browserAudioCaptureService.HasRecentAudio(windowId))
+        {
+            return false;
+        }
+
+        try
+        {
+            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(path);
+            return age >= ClipRefreshInterval;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static void DeleteIfExists(string path)

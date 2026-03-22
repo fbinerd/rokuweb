@@ -998,7 +998,13 @@ sub onFullscreenVideoStateChanged()
         m.statusLabel.visible = true
         m.subtitleLabel.visible = true
         m.statusLabel.text = "Clip experimental concluido"
-        m.subtitleLabel.text = "Aguardando nova sessao."
+        m.subtitleLabel.text = "Buscando proximo trecho..."
+        scheduleExperimentalAvStatePoll()
+        scheduleExperimentalAvMediaProbe()
+        if m.experimentalAvDelayedPlayTimer <> invalid
+            m.experimentalAvDelayedPlayTimer.control = "stop"
+            m.experimentalAvDelayedPlayTimer.control = "start"
+        end if
         return
     end if
 
