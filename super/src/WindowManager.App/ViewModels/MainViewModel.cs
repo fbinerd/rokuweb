@@ -773,6 +773,20 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         var window = await _browserInstanceHost.CreateAsync(url, CancellationToken.None);
+        if (window.ActiveSessionId == Guid.Empty)
+        {
+            window.ActiveSessionId = Guid.NewGuid();
+        }
+
+        if (string.IsNullOrWhiteSpace(window.ActiveSessionName))
+        {
+            window.ActiveSessionName = string.IsNullOrWhiteSpace(ProfileName) ? "Sessao ativa" : ProfileName.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(window.ProfileName))
+        {
+            window.ProfileName = string.IsNullOrWhiteSpace(ProfileName) ? "default" : ProfileName.Trim();
+        }
 
         Windows.Add(window);
         SelectedWindow = window;
@@ -1194,6 +1208,8 @@ public sealed class MainViewModel : ViewModelBase
         _isApplyingProfile = true;
         try
         {
+            var restoredSessionId = Guid.NewGuid();
+            var restoredSessionName = profile.Name;
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
             WebRtcSpecificIp = profile.WebRtcSpecificIp ?? string.Empty;
@@ -1229,7 +1245,10 @@ public sealed class MainViewModel : ViewModelBase
                     TargetResolutionMode = persistedWindow.TargetResolutionMode,
                     TargetManualWidth = persistedWindow.TargetManualWidth,
                     TargetManualHeight = persistedWindow.TargetManualHeight,
-                    IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled
+                    IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
+                    ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
+                    ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
+                    ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
                 };
 
                 Windows.Add(window);
@@ -1312,7 +1331,10 @@ public sealed class MainViewModel : ViewModelBase
                 TargetResolutionMode = x.TargetResolutionMode,
                 TargetManualWidth = x.TargetManualWidth,
                 TargetManualHeight = x.TargetManualHeight,
-                IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled
+                IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
+                ProfileName = x.ProfileName,
+                ActiveSessionId = x.ActiveSessionId,
+                ActiveSessionName = x.ActiveSessionName
             }).ToList(),
             StaticPanels = StaticPanels.Select(x => new StaticPanelProfile
             {

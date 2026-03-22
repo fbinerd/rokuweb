@@ -75,6 +75,15 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 12)]
     public bool IsWebRtcPublishingEnabled { get; set; }
+
+    [DataMember(Order = 13)]
+    public string ProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 14)]
+    public Guid ActiveSessionId { get; set; }
+
+    [DataMember(Order = 15)]
+    public string ActiveSessionName { get; set; } = string.Empty;
 }
 
 [DataContract]

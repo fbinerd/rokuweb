@@ -14,8 +14,11 @@ sub execute()
         return
     end if
 
+    deviceId = registerDisplay(bridgeHost)
     url = "http://" + bridgeHost + "/api/windows"
-    registerDisplay(bridgeHost)
+    if deviceId <> invalid and deviceId <> ""
+        url = url + "?deviceId=" + urlEncode(deviceId)
+    end if
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)
 
@@ -37,7 +40,7 @@ sub execute()
     m.top.completedToken = m.requestCount.ToStr()
 end sub
 
-sub registerDisplay(bridgeHost as string)
+function registerDisplay(bridgeHost as string) as string
     deviceInfo = CreateObject("roDeviceInfo")
     appInfo = CreateObject("roAppInfo")
     deviceModel = deviceInfo.GetModel()
@@ -59,7 +62,8 @@ sub registerDisplay(bridgeHost as string)
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(registerUrl)
     ignored = transfer.GetToString()
-end sub
+    return deviceId
+end function
 
 function urlEncode(value as string) as string
     result = ""

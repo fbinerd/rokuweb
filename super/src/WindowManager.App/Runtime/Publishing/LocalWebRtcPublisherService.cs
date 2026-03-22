@@ -419,7 +419,7 @@ public sealed class LocalWebRtcPublisherService
 
         if (string.Equals(normalizedPath, "/api/windows", StringComparison.OrdinalIgnoreCase))
         {
-            return BuildHttpResponse(200, BuildWindowsJson(), "application/json; charset=utf-8");
+            return BuildHttpResponse(200, BuildWindowsJson(requestTarget, remoteAddress), "application/json; charset=utf-8");
         }
 
         if (string.Equals(normalizedPath, "/api/register-display", StringComparison.OrdinalIgnoreCase))
@@ -853,10 +853,11 @@ public sealed class LocalWebRtcPublisherService
             WebUtility.HtmlEncode(route.SourceUrl));
     }
 
-    private string BuildWindowsJson()
+    private string BuildWindowsJson(string requestTarget, string remoteAddress)
     {
         var payload = new WindowsBridgePayload();
-        foreach (var snapshot in _windowSnapshots.Values)
+        var filteredWindows = ResolveWindowsForBridgeRequest(requestTarget, remoteAddress);
+        foreach (var snapshot in filteredWindows)
         {
             payload.Windows.Add(snapshot);
         }
@@ -864,6 +865,11 @@ public sealed class LocalWebRtcPublisherService
         foreach (var display in _registeredDisplays.Values)
         {
             payload.Displays.Add(display);
+        }
+
+        foreach (var session in BuildActiveSessions(filteredWindows))
+        {
+            payload.ActiveSessions.Add(session);
         }
 
         payload.Windows.Sort((left, right) => string.Compare(left.Title, right.Title, StringComparison.OrdinalIgnoreCase));
@@ -875,6 +881,71 @@ public sealed class LocalWebRtcPublisherService
             serializer.WriteObject(stream, payload);
             return Encoding.UTF8.GetString(stream.ToArray());
         }
+    }
+
+    private List<BridgeWindowSnapshot> ResolveWindowsForBridgeRequest(string requestTarget, string remoteAddress)
+    {
+        var allWindows = _windowSnapshots.Values.ToList();
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
+        {
+            return allWindows;
+        }
+
+        var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+        var deviceId = GetValue(values, "deviceId");
+        RegisteredDisplaySnapshot? display = null;
+        if (!string.IsNullOrWhiteSpace(deviceId) && _registeredDisplays.TryGetValue(deviceId, out var registered))
+        {
+            display = registered;
+        }
+        else if (!string.IsNullOrWhiteSpace(remoteAddress))
+        {
+            display = _registeredDisplays.Values.FirstOrDefault(x =>
+                string.Equals(x.NetworkAddress, remoteAddress, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (display is null || string.IsNullOrWhiteSpace(display.NetworkAddress))
+        {
+            return allWindows;
+        }
+
+        var sessionIds = allWindows
+            .Where(x => string.Equals(x.AssignedDisplayAddress, display.NetworkAddress, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.ActiveSessionId)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (sessionIds.Count == 0)
+        {
+            return allWindows;
+        }
+
+        return allWindows
+            .Where(x => sessionIds.Contains(x.ActiveSessionId))
+            .ToList();
+    }
+
+    private static List<BridgeActiveSessionSnapshot> BuildActiveSessions(IEnumerable<BridgeWindowSnapshot> windows)
+    {
+        return windows
+            .Where(x => !string.IsNullOrWhiteSpace(x.ActiveSessionId))
+            .GroupBy(x => x.ActiveSessionId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new BridgeActiveSessionSnapshot
+            {
+                Id = group.Key,
+                Name = group.Select(x => x.ActiveSessionName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "Sessao ativa",
+                ProfileName = group.Select(x => x.ProfileName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty,
+                WindowIds = group.Select(x => x.Id).ToList(),
+                DisplayAddresses = group
+                    .Select(x => x.AssignedDisplayAddress)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+            })
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static Dictionary<string, string> ParseQueryString(string query)
@@ -951,7 +1022,13 @@ public sealed class LocalWebRtcPublisherService
             AudioStreamUrl = _browserAudioHlsService.IsAvailable
                 ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
                 : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id)
+            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id),
+            ProfileName = window.ProfileName ?? string.Empty,
+            ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
+            ActiveSessionName = window.ActiveSessionName ?? string.Empty,
+            AssignedDisplayId = window.AssignedTarget?.Id.ToString("N") ?? string.Empty,
+            AssignedDisplayName = window.AssignedTarget?.Name ?? string.Empty,
+            AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty
         };
     }
 
@@ -1146,6 +1223,9 @@ public sealed class WindowsBridgePayload
 
     [DataMember(Name = "displays", Order = 3)]
     public List<RegisteredDisplaySnapshot> Displays { get; set; } = new List<RegisteredDisplaySnapshot>();
+
+    [DataMember(Name = "activeSessions", Order = 4)]
+    public List<BridgeActiveSessionSnapshot> ActiveSessions { get; set; } = new List<BridgeActiveSessionSnapshot>();
 }
 
 [DataContract]
@@ -1183,6 +1263,43 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "audioAvailable", Order = 11)]
     public bool AudioAvailable { get; set; }
+
+    [DataMember(Name = "profileName", Order = 12)]
+    public string ProfileName { get; set; } = string.Empty;
+
+    [DataMember(Name = "activeSessionId", Order = 13)]
+    public string ActiveSessionId { get; set; } = string.Empty;
+
+    [DataMember(Name = "activeSessionName", Order = 14)]
+    public string ActiveSessionName { get; set; } = string.Empty;
+
+    [DataMember(Name = "assignedDisplayId", Order = 15)]
+    public string AssignedDisplayId { get; set; } = string.Empty;
+
+    [DataMember(Name = "assignedDisplayName", Order = 16)]
+    public string AssignedDisplayName { get; set; } = string.Empty;
+
+    [DataMember(Name = "assignedDisplayAddress", Order = 17)]
+    public string AssignedDisplayAddress { get; set; } = string.Empty;
+}
+
+[DataContract]
+public sealed class BridgeActiveSessionSnapshot
+{
+    [DataMember(Name = "id", Order = 1)]
+    public string Id { get; set; } = string.Empty;
+
+    [DataMember(Name = "name", Order = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Name = "profileName", Order = 3)]
+    public string ProfileName { get; set; } = string.Empty;
+
+    [DataMember(Name = "windowIds", Order = 4)]
+    public List<string> WindowIds { get; set; } = new List<string>();
+
+    [DataMember(Name = "displayAddresses", Order = 5)]
+    public List<string> DisplayAddresses { get; set; } = new List<string>();
 }
 
 [DataContract]

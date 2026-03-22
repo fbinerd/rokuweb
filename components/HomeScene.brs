@@ -282,6 +282,11 @@ sub applyBridgeResponse()
         return
     end if
 
+    activeSessionName = ""
+    if json.activeSessions <> invalid and json.activeSessions.Count() > 0
+        activeSessionName = getString(json.activeSessions[0].name, "")
+    end if
+
     previousSelectedId = ""
     if m.windowEntries.Count() > 0 and m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
         previousSelectedId = getString(m.windowEntries[m.selectedIndex].id, "")
@@ -322,7 +327,11 @@ sub applyBridgeResponse()
 
     m.pageStart = 0
 
-    m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
+    if activeSessionName <> ""
+        m.statusLabel.text = "Sessao ativa: " + activeSessionName
+    else
+        m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
+    end if
     m.isAutoConnecting = false
     startPanelRefresh()
     refreshGrid()
