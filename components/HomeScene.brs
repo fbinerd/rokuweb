@@ -492,9 +492,7 @@ sub showFullscreen()
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
-    if not m.videoUsesStream
-        startPanelAudio(entry)
-    end if
+    startPanelAudio(entry)
     startFullscreenStream()
     m.top.setFocus(true)
 end sub

@@ -11,7 +11,10 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserAudioHlsService
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(1.5);
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMilliseconds(650);
+    private static readonly TimeSpan SnapshotDuration = TimeSpan.FromSeconds(2.5);
+    private const int SegmentSeconds = 1;
+    private const int PlaylistSize = 2;
     private readonly BrowserAudioCaptureService _audioCaptureService;
     private readonly string _rootDirectory;
     private readonly string _ffmpegPath;
@@ -195,10 +198,10 @@ public sealed class BrowserAudioHlsService
                         continue;
                     }
 
-                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, TimeSpan.FromSeconds(6));
+                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, SnapshotDuration);
                     if (wavBytes is null || wavBytes.Length < 4096)
                     {
-                        await Task.Delay(TimeSpan.FromMilliseconds(700), cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
@@ -215,10 +218,12 @@ public sealed class BrowserAudioHlsService
                     var arguments =
                         string.Format(
                             CultureInfo.InvariantCulture,
-                            "-hide_banner -loglevel error -y -i \"{0}\" -vn -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time 2 -hls_list_size 3 -hls_flags delete_segments+omit_endlist+independent_segments -hls_segment_filename \"{1}\" \"{2}\"",
+                            "-hide_banner -loglevel error -y -i \"{0}\" -vn -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time {3} -hls_list_size {4} -hls_flags delete_segments+omit_endlist+independent_segments+split_by_time -hls_segment_filename \"{1}\" \"{2}\"",
                             inputPath,
                             segmentPattern,
-                            playlistPath);
+                            playlistPath,
+                            SegmentSeconds,
+                            PlaylistSize);
 
                     var process = Process.Start(new ProcessStartInfo
                     {

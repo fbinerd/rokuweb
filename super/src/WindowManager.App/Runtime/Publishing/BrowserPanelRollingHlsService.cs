@@ -235,10 +235,7 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
-                    var wavBytes = UseSyntheticAudio
-                        ? BuildSineWaveSnapshot()
-                        : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
-                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
+                    if (jpegBytes is null || jpegBytes.Length < 1024)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
                         continue;
@@ -246,18 +243,15 @@ public sealed class BrowserPanelRollingHlsService
 
                     var nextSequence = Interlocked.Increment(ref _sequence);
                     var imagePath = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}.jpg");
-                    var audioPath = Path.Combine(OutputDirectory, $"audio-{nextSequence:D6}.wav");
                     var segmentFileName = $"segment-{nextSequence:D6}.ts";
                     var segmentPath = Path.Combine(OutputDirectory, segmentFileName);
 
                     File.WriteAllBytes(imagePath, jpegBytes);
-                    File.WriteAllBytes(audioPath, wavBytes);
 
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -map 0:v:0 -t {1:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -an -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{2}\"",
                         imagePath,
-                        audioPath,
                         SegmentDuration.TotalSeconds,
                         segmentPath);
 
@@ -295,7 +289,6 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     TryDelete(imagePath);
-                    TryDelete(audioPath);
                 }
                 catch (OperationCanceledException)
                 {
