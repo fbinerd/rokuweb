@@ -668,6 +668,7 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Segmento HLS indisponivel.", "text/plain; charset=utf-8");
         }
 
+        AppLog.Write("PanelRollingHls", $"Segmento solicitado: janela={windowId:N}, arquivo={filePart}");
         var segmentBytes = await Task.Run(() => File.ReadAllBytes(segmentPath), cancellationToken).ConfigureAwait(false);
         return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
     }

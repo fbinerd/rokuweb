@@ -447,6 +447,7 @@ sub showFullscreen()
         content.url = appendCacheBust(m.videoStreamUrl)
         content.streamFormat = "hls"
         content.title = getString(entry.title, "Painel")
+        ? "[HLS] play => "; content.url
         m.fullscreenVideo.content = content
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
@@ -686,6 +687,8 @@ sub onFullscreenVideoStateChanged()
     if state = ""
         return
     end if
+
+    ? "[HLS] video state => "; state
 
     if state = "playing"
         m.statusLabel.text = "Stream continuo do painel em reproducao"
