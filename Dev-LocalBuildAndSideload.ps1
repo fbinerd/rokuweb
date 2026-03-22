@@ -4,6 +4,7 @@ param(
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
     [switch]$LaunchRokuApp,
+    [switch]$ResetLocalData,
     [switch]$SkipSideload,
     [switch]$UseSyntheticPanelAudio
 )
@@ -18,6 +19,7 @@ $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
+$superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
 
 function Invoke-Step {
     param(
@@ -176,6 +178,37 @@ function Test-TcpEndpoint {
     }
     finally {
         $tcp.Dispose()
+    }
+}
+
+function Reset-SuperLocalData {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DataRoot
+    )
+
+    if (-not (Test-Path $DataRoot)) {
+        Write-Host "Base local inexistente; nada para resetar."
+        return
+    }
+
+    Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+
+    Get-ChildItem -Path $DataRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.PSIsContainer -and $_.Name -ieq "cef") {
+            return
+        }
+
+        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host ("Base local resetada em: {0}" -f $DataRoot)
+}
+
+if ($ResetLocalData) {
+    Invoke-Step -Label "Resetar base local do SuperPainel" -Action {
+        Reset-SuperLocalData -DataRoot $superDataRoot
     }
 }
 
