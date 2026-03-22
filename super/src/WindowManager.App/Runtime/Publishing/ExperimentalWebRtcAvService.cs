@@ -96,12 +96,15 @@ public sealed class ExperimentalWebRtcAvService
         state.MediaReady = false;
         state.MediaUrl = mediaUrl;
         state.TransportStatus = "awaiting-media-transport";
+        state.RealtimeMode = "continuous-udp-prototype";
+        state.RealtimeProtocol = "udp";
         state.LastTouchedUtc = DateTime.UtcNow.ToString("O");
         state.Notes = new List<string>
         {
             "Offer recebida e persistida no super.",
             "Resposta SDP placeholder gerada para a sessao experimental.",
-            "Ainda nao existe peer connection WebRTC real; esta branch prepara a trilha de sinalizacao."
+            "Ainda nao existe peer connection WebRTC real; esta branch prepara a trilha de sinalizacao.",
+            "Fundacao UDP/tempo real reservada para o proximo experimento continuo."
         };
         return state;
     }
@@ -180,6 +183,24 @@ public sealed class WindowSessionSessionInfo
 
     [DataMember(Name = "notes", Order = 15)]
     public List<string> Notes { get; set; } = new List<string>();
+
+    [DataMember(Name = "realtimeMode", Order = 16)]
+    public string RealtimeMode { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeProtocol", Order = 17)]
+    public string RealtimeProtocol { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeHost", Order = 18)]
+    public string RealtimeHost { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPort", Order = 19)]
+    public int RealtimeAudioPort { get; set; }
+
+    [DataMember(Name = "realtimeVideoPort", Order = 20)]
+    public int RealtimeVideoPort { get; set; }
+
+    [DataMember(Name = "realtimeTransportReady", Order = 21)]
+    public bool RealtimeTransportReady { get; set; }
 }
 
 [DataContract]
@@ -248,6 +269,24 @@ public sealed class ExperimentalWebRtcSessionState
 
     [DataMember(Name = "notes", Order = 17)]
     public List<string> Notes { get; set; } = new List<string>();
+
+    [DataMember(Name = "realtimeMode", Order = 18)]
+    public string RealtimeMode { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeProtocol", Order = 19)]
+    public string RealtimeProtocol { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeHost", Order = 20)]
+    public string RealtimeHost { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPort", Order = 21)]
+    public int RealtimeAudioPort { get; set; }
+
+    [DataMember(Name = "realtimeVideoPort", Order = 22)]
+    public int RealtimeVideoPort { get; set; }
+
+    [DataMember(Name = "realtimeTransportReady", Order = 23)]
+    public bool RealtimeTransportReady { get; set; }
 }
 
 [DataContract]
@@ -282,4 +321,22 @@ public sealed class ExperimentalWebRtcOfferAccepted
 
     [DataMember(Name = "notes", Order = 10)]
     public List<string> Notes { get; set; } = new List<string>();
+
+    [DataMember(Name = "realtimeMode", Order = 11)]
+    public string RealtimeMode { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeProtocol", Order = 12)]
+    public string RealtimeProtocol { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeHost", Order = 13)]
+    public string RealtimeHost { get; set; } = string.Empty;
+
+    [DataMember(Name = "realtimeAudioPort", Order = 14)]
+    public int RealtimeAudioPort { get; set; }
+
+    [DataMember(Name = "realtimeVideoPort", Order = 15)]
+    public int RealtimeVideoPort { get; set; }
+
+    [DataMember(Name = "realtimeTransportReady", Order = 16)]
+    public bool RealtimeTransportReady { get; set; }
 }

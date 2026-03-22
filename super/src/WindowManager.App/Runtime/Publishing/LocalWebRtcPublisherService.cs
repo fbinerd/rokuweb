@@ -19,6 +19,7 @@ public sealed class LocalWebRtcPublisherService
 {
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly ExperimentalWebRtcAvService _experimentalWebRtcAvService;
+    private readonly ExperimentalRealtimeTransportService _experimentalRealtimeTransportService;
     private readonly ExperimentalAvMediaService _experimentalAvMediaService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
@@ -31,10 +32,11 @@ public sealed class LocalWebRtcPublisherService
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, ExperimentalWebRtcAvService experimentalWebRtcAvService, ExperimentalAvMediaService experimentalAvMediaService, ExperimentalMediaHttpServer experimentalMediaHttpServer, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, ExperimentalWebRtcAvService experimentalWebRtcAvService, ExperimentalRealtimeTransportService experimentalRealtimeTransportService, ExperimentalAvMediaService experimentalAvMediaService, ExperimentalMediaHttpServer experimentalMediaHttpServer, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _experimentalWebRtcAvService = experimentalWebRtcAvService;
+        _experimentalRealtimeTransportService = experimentalRealtimeTransportService;
         _experimentalAvMediaService = experimentalAvMediaService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
@@ -976,7 +978,14 @@ public sealed class LocalWebRtcPublisherService
 
         var routeSuffix = segments.Length > 1 ? segments[1] : string.Empty;
         var sessionState = _experimentalWebRtcAvService.GetOrCreateSession(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl);
+        var realtimeCandidate = _experimentalRealtimeTransportService.GetOrCreate(windowId, LinkRtcAddressBuilder.ResolvePublicHost(WebRtcBindMode.Lan, string.Empty));
         sessionState.MediaUrl = BuildExperimentalMediaUrl(windowId);
+        sessionState.RealtimeMode = realtimeCandidate?.Mode ?? string.Empty;
+        sessionState.RealtimeProtocol = realtimeCandidate?.Protocol ?? string.Empty;
+        sessionState.RealtimeHost = realtimeCandidate?.Host ?? string.Empty;
+        sessionState.RealtimeAudioPort = realtimeCandidate?.AudioPort ?? 0;
+        sessionState.RealtimeVideoPort = realtimeCandidate?.VideoPort ?? 0;
+        sessionState.RealtimeTransportReady = realtimeCandidate?.Ready ?? false;
         _experimentalAvMediaService.EnsureStarted(windowId);
         sessionState.TransportStatus = BuildExperimentalTransportStatus(windowId);
         sessionState.MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _);
@@ -1057,6 +1066,7 @@ public sealed class LocalWebRtcPublisherService
             }
 
             _experimentalAvMediaService.Invalidate(windowId);
+            _experimentalRealtimeTransportService.Invalidate(windowId);
             var mediaUrl = BuildExperimentalMediaUrl(windowId);
             var updated = _experimentalWebRtcAvService.RegisterOffer(windowId, snapshot.Title, snapshot.InitialUrl, snapshot.ExperimentalAvUrl, mediaUrl, payload);
             AppLog.Write(
@@ -1079,11 +1089,18 @@ public sealed class LocalWebRtcPublisherService
                 AnswerSdp = updated.AnswerSdp,
                 MediaUrl = updated.MediaUrl,
                 TransportStatus = updated.TransportStatus,
+                RealtimeMode = updated.RealtimeMode,
+                RealtimeProtocol = updated.RealtimeProtocol,
+                RealtimeHost = updated.RealtimeHost,
+                RealtimeAudioPort = updated.RealtimeAudioPort,
+                RealtimeVideoPort = updated.RealtimeVideoPort,
+                RealtimeTransportReady = updated.RealtimeTransportReady,
                 Notes = new List<string>
                 {
                     "Offer recebida pelo super.",
                     "Resposta SDP placeholder gerada.",
-                    "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador."
+                    "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador.",
+                    "Candidatos UDP experimentais foram reservados para a proxima etapa de transporte continuo."
                 }
             };
 
@@ -1115,15 +1132,23 @@ public sealed class LocalWebRtcPublisherService
                 "session-discovery",
                 "offer-post",
                 "state-poll",
-                "media-endpoint"
+                "media-endpoint",
+                "continuous-udp-prototype"
             },
             MediaUrl = BuildExperimentalMediaUrl(windowId),
             TransportStatus = BuildExperimentalTransportStatus(windowId),
             MediaTransportImplemented = _experimentalAvMediaService.TryGetMp4Path(windowId, out _),
+            RealtimeMode = sessionState.RealtimeMode,
+            RealtimeProtocol = sessionState.RealtimeProtocol,
+            RealtimeHost = sessionState.RealtimeHost,
+            RealtimeAudioPort = sessionState.RealtimeAudioPort,
+            RealtimeVideoPort = sessionState.RealtimeVideoPort,
+            RealtimeTransportReady = sessionState.RealtimeTransportReady,
             Notes = new List<string>
             {
                 "Foundation plus signaling: esta branch ja aceita POST de offer e exibe state da sessao experimental.",
-                "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador."
+                "O transporte experimental atual usa frame atual do painel com audio recente capturado do navegador.",
+                "O super agora publica candidatos UDP de fundacao para a proxima etapa de transporte continuo."
             }
         };
 

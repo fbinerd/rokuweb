@@ -28,11 +28,12 @@ public sealed class Bootstrapper
         var browserSnapshotService = new BrowserSnapshotService();
         var browserAudioCaptureService = new BrowserAudioCaptureService();
         var experimentalWebRtcAvService = new ExperimentalWebRtcAvService();
+        var experimentalRealtimeTransportService = new ExperimentalRealtimeTransportService();
         var experimentalAvMediaService = new ExperimentalAvMediaService(browserSnapshotService, browserAudioCaptureService);
         var experimentalMediaHttpServer = new ExperimentalMediaHttpServer(experimentalAvMediaService);
         var appUpdateManifestService = new AppUpdateManifestService();
         var appUpdatePreferenceStore = new AppUpdatePreferenceStore();
-        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, experimentalWebRtcAvService, experimentalAvMediaService, experimentalMediaHttpServer, appUpdatePreferenceStore);
+        var webRtcPublisherService = new LocalWebRtcPublisherService(browserSnapshotService, experimentalWebRtcAvService, experimentalRealtimeTransportService, experimentalAvMediaService, experimentalMediaHttpServer, appUpdatePreferenceStore);
         var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();
