@@ -492,7 +492,9 @@ sub showFullscreen()
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
-    startPanelAudio(entry)
+    if not m.videoUsesStream
+        startPanelAudio(entry)
+    end if
     startFullscreenStream()
     m.top.setFocus(true)
 end sub
@@ -552,7 +554,6 @@ sub startPanelAudio(entry as object)
     m.audioChunkUrl = audioUrl
     m.audioMode = "scenegraph"
     if m.audioUsesHls and m.panelAudioVideo <> invalid
-        ? "[HLS-A] play => "; content.url
         m.panelAudioVideo.content = content
         m.panelAudioVideo.control = "stop"
         m.panelAudioVideo.control = "play"
@@ -676,8 +677,6 @@ sub onPanelAudioVideoStateChanged()
     if state = ""
         return
     end if
-
-    ? "[HLS-A] video state => "; state
 
     if state = "playing"
         m.audioMode = "scenegraph"

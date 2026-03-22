@@ -55,6 +55,7 @@ public sealed class BrowserPanelRollingHlsService
         }
 
         var stream = _streams.GetOrAdd(windowId, id => new WindowRollingStream(id, Path.Combine(_rootDirectory, id.ToString("N"))));
+        stream.ResetIfAwaitingFreshAudio(!_audioCaptureService.HasRecentAudio(windowId));
         stream.Touch();
         stream.EnsureStarted(_snapshotService, _audioCaptureService, _ffmpegPath);
     }
@@ -206,6 +207,31 @@ public sealed class BrowserPanelRollingHlsService
             _lastTouchedUtc = DateTime.UtcNow;
         }
 
+        public void ResetIfAwaitingFreshAudio(bool awaitingFreshAudio)
+        {
+            if (!awaitingFreshAudio)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (_segments.Count == 0 && !File.Exists(Path.Combine(OutputDirectory, "index.m3u8")))
+                {
+                    return;
+                }
+
+                _segments.Clear();
+                _sequence = 0;
+                _loggedPlaylistReady = false;
+                TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
+                foreach (var stale in Directory.GetFiles(OutputDirectory, "segment-*.ts"))
+                {
+                    TryDelete(stale);
+                }
+            }
+        }
+
         public void EnsureStarted(BrowserSnapshotService snapshotService, BrowserAudioCaptureService audioCaptureService, string ffmpegPath)
         {
             lock (_gate)
@@ -235,7 +261,10 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
-                    if (jpegBytes is null || jpegBytes.Length < 1024)
+                    var wavBytes = UseSyntheticAudio
+                        ? BuildSineWaveSnapshot()
+                        : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
+                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
                         continue;
@@ -243,15 +272,18 @@ public sealed class BrowserPanelRollingHlsService
 
                     var nextSequence = Interlocked.Increment(ref _sequence);
                     var imagePath = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}.jpg");
+                    var audioPath = Path.Combine(OutputDirectory, $"audio-{nextSequence:D6}.wav");
                     var segmentFileName = $"segment-{nextSequence:D6}.ts";
                     var segmentPath = Path.Combine(OutputDirectory, segmentFileName);
 
                     File.WriteAllBytes(imagePath, jpegBytes);
+                    File.WriteAllBytes(audioPath, wavBytes);
 
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -t {1:0.###} -an -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{2}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
                         imagePath,
+                        audioPath,
                         SegmentDuration.TotalSeconds,
                         segmentPath);
 
@@ -289,6 +321,7 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     TryDelete(imagePath);
+                    TryDelete(audioPath);
                 }
                 catch (OperationCanceledException)
                 {
