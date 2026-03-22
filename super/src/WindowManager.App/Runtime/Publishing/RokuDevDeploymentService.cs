@@ -112,27 +112,33 @@ public sealed class RokuDevDeploymentService
                         "Basic",
                         Convert.ToBase64String(Encoding.ASCII.GetBytes(username + ":" + password)));
 
-                var keyName = powerOn ? "PowerOn" : "PowerOff";
-                var commandUri = new Uri(string.Format("http://{0}:8060/keypress/{1}", host, keyName));
-                var response = await client.PostAsync(commandUri, new StringContent(string.Empty)).ConfigureAwait(false);
-                var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var attemptedKeys = powerOn
+                    ? new[] { "PowerOn", "Power" }
+                    : new[] { "PowerOff", "Power" };
 
-                AppLog.Write(
-                    "RokuPower",
-                    string.Format(
-                        "Comando {0} enviado para TV id={1}, host={2}, status={3}, body={4}",
-                        keyName,
-                        display.DeviceId,
-                        host,
-                        (int)response.StatusCode,
-                        SummarizeResponseBody(responseBody)));
-
-                if (!response.IsSuccessStatusCode)
+                foreach (var keyName in attemptedKeys)
                 {
-                    return "falha_" + (int)response.StatusCode;
+                    var commandUri = new Uri(string.Format("http://{0}:8060/keypress/{1}", host, keyName));
+                    var response = await client.PostAsync(commandUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                    var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                    AppLog.Write(
+                        "RokuPower",
+                        string.Format(
+                            "Comando {0} enviado para TV id={1}, host={2}, status={3}, body={4}",
+                            keyName,
+                            display.DeviceId,
+                            host,
+                            (int)response.StatusCode,
+                            SummarizeResponseBody(responseBody)));
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return keyName == attemptedKeys[0] ? "ok" : "ok_fallback_" + keyName;
+                    }
                 }
 
-                return "ok";
+                return "falha_comandos_energia";
             }
         }
         catch (Exception ex)
