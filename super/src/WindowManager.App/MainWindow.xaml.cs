@@ -23,6 +23,7 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly BrowserSnapshotService _browserSnapshotService;
+    private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, Image> _previewImages = new Dictionary<Guid, Image>();
     private readonly Dictionary<Guid, BrowserCaptureWindow> _captureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
@@ -32,12 +33,13 @@ public partial class MainWindow : Window
     private bool _isRefreshingPreviews;
     private Point? _lastExpandedPreviewMousePoint;
 
-    public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService)
+    public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
         InitializeComponent();
 
         _viewModel = viewModel;
         _browserSnapshotService = browserSnapshotService;
+        _browserAudioCaptureService = browserAudioCaptureService;
         DataContext = viewModel;
 
         _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
@@ -50,7 +52,7 @@ public partial class MainWindow : Window
 
         _previewRefreshTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(900)
+            Interval = TimeSpan.FromMilliseconds(120)
         };
         _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
 
@@ -307,6 +309,7 @@ public partial class MainWindow : Window
         if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
         {
             _browserSnapshotService.Unregister(session.Id);
+            _browserAudioCaptureService.Unregister(session.Id);
             captureWindow.Close();
             _captureWindows.Remove(session.Id);
         }
@@ -540,6 +543,7 @@ public partial class MainWindow : Window
 
         if (e.PropertyName == nameof(WindowSession.InitialUri))
         {
+            _browserSnapshotService.InvalidateCapture(session.Id);
             if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
             {
                 captureWindow.UpdateAddress(session.InitialUri);
@@ -603,7 +607,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var captureWindow = new BrowserCaptureWindow(session.InitialUri);
+        var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService);
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
         captureWindow.Show();

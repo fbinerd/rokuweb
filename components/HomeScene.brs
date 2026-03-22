@@ -22,6 +22,15 @@ sub init()
     m.firmwareVersion = deviceInfo.GetVersion()
     m.channelVersion = GetRokuChannelReleaseId()
     m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
+    m.audioSessionId = ""
+    m.audioMode = ""
+    m.audioChunkUrl = ""
+    m.audioPlayer = invalid
+    m.audioUsesHls = false
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -41,7 +50,14 @@ sub init()
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
+    m.fullscreenVideoWatchTimer = m.top.findNode("fullscreenVideoWatchTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
+    m.audioRetryTimer = m.top.findNode("audioRetryTimer")
+    m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
+    m.audioHlsRestartTimer = m.top.findNode("audioHlsRestartTimer")
+    m.panelAudioNode = m.top.findNode("panelAudioNode")
+    m.panelAudioVideo = m.top.findNode("panelAudioVideo")
+    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -84,11 +100,24 @@ sub init()
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
+    m.fullscreenVideoWatchTimer.observeField("fire", "onFullscreenVideoWatchTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
+    m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
+    m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
+    m.audioHlsRestartTimer.observeField("fire", "onAudioHlsRestartTimerFire")
     m.fullscreenPosterA.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
+    if m.panelAudioNode <> invalid
+        m.panelAudioNode.observeField("state", "onPanelAudioStateChanged")
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.observeField("state", "onPanelAudioVideoStateChanged")
+    end if
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
+    end if
     m.top.setFocus(true)
 
     m.titleLabel.text = GetRokuAppShortName()
@@ -266,7 +295,10 @@ sub applyBridgeResponse()
             title: getString(window.title, "Janela sem titulo")
             state: getString(window.state, "Desconhecido")
             thumbnailUrl: getString(window.thumbnailUrl, "")
+            streamUrl: getString(window.streamUrl, "")
             initialUrl: getString(window.initialUrl, "")
+            audioStreamUrl: getString(window.audioStreamUrl, "")
+            audioAvailable: getBool(window.audioAvailable, false)
         })
     end for
 
@@ -433,14 +465,36 @@ sub showFullscreen()
     m.subtitleLabel.visible = false
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
-    m.activeFullscreenPoster.visible = true
-    m.bufferFullscreenPoster.visible = false
-    m.bufferFullscreenPoster.uri = ""
+    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
+    m.videoStreamUrl = getString(entry.streamUrl, "")
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
+    if m.videoUsesStream and m.fullscreenVideo <> invalid
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(m.videoStreamUrl)
+        content.streamFormat = "hls"
+        content.title = getString(entry.title, "Painel")
+        ? "[HLS] play => "; content.url
+        m.fullscreenVideo.content = content
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.visible = true
+        m.fullscreenVideo.control = "play"
+        m.activeFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.visible = false
+        m.statusLabel.text = "Iniciando stream HLS do painel..."
+    else
+        m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.activeFullscreenPoster.visible = true
+        m.bufferFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.uri = ""
+    end if
     m.cursorMarker.visible = true
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
+    if not m.videoUsesStream
+        startPanelAudio(entry)
+    end if
     startFullscreenStream()
     m.top.setFocus(true)
 end sub
@@ -449,6 +503,17 @@ sub hideFullscreen()
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()
+    stopPanelAudio()
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    if m.fullscreenVideo <> invalid
+        m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.content = invalid
+        m.fullscreenVideo.visible = false
+    end if
+    if m.fullscreenVideoWatchTimer <> invalid
+        m.fullscreenVideoWatchTimer.control = "stop"
+    end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
@@ -458,6 +523,301 @@ sub hideFullscreen()
     startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
+end sub
+
+sub startPanelAudio(entry as object)
+    stopPanelAudio()
+
+    if m.panelAudioNode = invalid
+        return
+    end if
+
+    if entry = invalid
+        return
+    end if
+
+    audioUrl = getString(entry.audioStreamUrl, "")
+    if audioUrl = ""
+        return
+    end if
+
+    m.audioUsesHls = Instr(1, LCase(audioUrl), ".m3u8") > 0
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(audioUrl)
+    if m.audioUsesHls
+        content.streamFormat = "hls"
+    else
+        content.streamFormat = "wav"
+    end if
+    content.title = getString(entry.title, "Audio do painel")
+    m.audioSessionId = getString(entry.id, "")
+    m.audioChunkUrl = audioUrl
+    m.audioMode = "scenegraph"
+    if m.audioUsesHls and m.panelAudioVideo <> invalid
+        m.panelAudioVideo.content = content
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.control = "play"
+        m.statusLabel.text = "Iniciando audio HLS do painel..."
+    else
+        m.panelAudioNode.content = content
+        m.panelAudioNode.control = "stop"
+        m.panelAudioNode.control = "play"
+    end if
+    if m.audioFallbackTimer <> invalid
+        m.audioFallbackTimer.control = "stop"
+        m.audioFallbackTimer.control = "start"
+    end if
+end sub
+
+sub onFullscreenVideoStateChanged()
+    if m.fullscreenVideo = invalid or not m.videoUsesStream
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    ? "[HLS] video state => "; state
+
+    if state = "playing"
+        m.fullscreenVideoStallCount = 0
+        m.statusLabel.text = "Stream HLS do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando stream HLS do painel..."
+    else if state = "error"
+        m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
+    else if state = "finished" or state = "stopped"
+        if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
+            content = CreateObject("roSGNode", "ContentNode")
+            content.url = appendCacheBust(m.videoStreamUrl)
+            content.streamFormat = "hls"
+            content.title = "Painel"
+            m.fullscreenVideo.content = content
+            m.fullscreenVideo.control = "stop"
+            m.fullscreenVideo.control = "play"
+            m.statusLabel.text = "Reiniciando stream HLS do painel..."
+        end if
+    end if
+end sub
+
+sub onFullscreenVideoWatchTimerFire()
+    return
+end sub
+
+sub stopPanelAudio()
+    if m.panelAudioNode = invalid
+        return
+    end if
+
+    m.audioSessionId = ""
+    m.audioMode = ""
+    m.audioChunkUrl = ""
+    if m.audioRetryTimer <> invalid
+        m.audioRetryTimer.control = "stop"
+    end if
+    if m.audioFallbackTimer <> invalid
+        m.audioFallbackTimer.control = "stop"
+    end if
+    if m.audioHlsRestartTimer <> invalid
+        m.audioHlsRestartTimer.control = "stop"
+    end if
+    m.audioUsesHls = false
+    if m.panelAudioNode <> invalid
+        m.panelAudioNode.control = "stop"
+        m.panelAudioNode.content = invalid
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.content = invalid
+    end if
+    if m.audioPlayer <> invalid
+        m.audioPlayer.Stop()
+    end if
+end sub
+
+sub onPanelAudioStateChanged()
+    if m.panelAudioNode = invalid or m.audioUsesHls
+        return
+    end if
+
+    state = LCase(getString(m.panelAudioNode.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.audioMode = "scenegraph"
+        if m.audioFallbackTimer <> invalid
+            m.audioFallbackTimer.control = "stop"
+        end if
+        m.statusLabel.text = "Audio do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando audio do painel..."
+    else if state = "stopped"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Audio do painel parado"
+            scheduleAudioRetry()
+        end if
+    else if state = "error"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Falha ao reproduzir audio do painel"
+            scheduleAudioRetry()
+        end if
+    end if
+end sub
+
+sub onPanelAudioVideoStateChanged()
+    if m.panelAudioVideo = invalid or not m.audioUsesHls
+        return
+    end if
+
+    state = LCase(getString(m.panelAudioVideo.state, ""))
+    if state = ""
+        return
+    end if
+
+    if state = "playing"
+        m.audioMode = "scenegraph"
+        if m.audioFallbackTimer <> invalid
+            m.audioFallbackTimer.control = "stop"
+        end if
+        m.statusLabel.text = "Audio HLS do painel em reproducao"
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando audio HLS..."
+    else if state = "stopped" or state = "error" or state = "finished"
+        if m.isFullscreen and m.audioSessionId <> ""
+            m.statusLabel.text = "Reiniciando audio HLS do painel..."
+            scheduleAudioHlsRestart()
+        end if
+    end if
+end sub
+
+sub scheduleAudioHlsRestart()
+    if m.audioHlsRestartTimer = invalid
+        restartPanelAudio()
+        return
+    end if
+
+    m.audioHlsRestartTimer.control = "stop"
+    m.audioHlsRestartTimer.control = "start"
+end sub
+
+sub onAudioHlsRestartTimerFire()
+    if not m.audioUsesHls
+        return
+    end if
+
+    restartPanelAudio()
+end sub
+
+sub scheduleAudioRetry()
+    if m.audioRetryTimer = invalid
+        restartPanelAudio()
+        return
+    end if
+
+    m.audioRetryTimer.control = "stop"
+    m.audioRetryTimer.control = "start"
+end sub
+
+sub onAudioRetryTimerFire()
+    if m.audioMode = "legacy"
+        playLegacyPanelAudioChunk()
+        return
+    end if
+
+    if m.audioUsesHls
+        restartPanelAudio()
+        return
+    end if
+
+    restartPanelAudio()
+end sub
+
+sub restartPanelAudio()
+    if not m.isFullscreen or m.audioSessionId = ""
+        return
+    end if
+
+    if m.selectedIndex < 0 or m.selectedIndex >= m.windowEntries.Count()
+        return
+    end if
+
+    entry = m.windowEntries[m.selectedIndex]
+    if getString(entry.id, "") <> m.audioSessionId
+        return
+    end if
+
+    startPanelAudio(entry)
+end sub
+
+sub onAudioFallbackTimerFire()
+    if not m.isFullscreen or m.audioSessionId = ""
+        return
+    end if
+
+    if m.audioUsesHls and m.panelAudioVideo <> invalid
+        state = LCase(getString(m.panelAudioVideo.state, ""))
+        if state = "playing"
+            return
+        end if
+    end if
+
+    if m.audioMode = "scenegraph" and not m.audioUsesHls and m.panelAudioNode <> invalid
+        state = LCase(getString(m.panelAudioNode.state, ""))
+        if state = "playing"
+            return
+        end if
+    end if
+
+    m.statusLabel.text = "Tentando audio legado do painel..."
+    startLegacyPanelAudio()
+end sub
+
+sub startLegacyPanelAudio()
+    if m.audioChunkUrl = ""
+        return
+    end if
+
+    m.audioMode = "legacy"
+    m.audioUsesHls = false
+    if m.panelAudioNode <> invalid
+        m.panelAudioNode.control = "stop"
+        m.panelAudioNode.content = invalid
+    end if
+    if m.panelAudioVideo <> invalid
+        m.panelAudioVideo.control = "stop"
+        m.panelAudioVideo.content = invalid
+    end if
+
+    playLegacyPanelAudioChunk()
+end sub
+
+sub playLegacyPanelAudioChunk()
+    if not m.isFullscreen or m.audioSessionId = "" or m.audioChunkUrl = ""
+        return
+    end if
+
+    audioItem = CreateObject("roAssociativeArray")
+    audioItem.url = appendCacheBust(m.audioChunkUrl)
+    audioItem.streamformat = "wav"
+    audioItem.title = "Audio do painel"
+
+    if m.audioPlayer <> invalid
+        m.audioPlayer.Stop()
+    end if
+    m.audioPlayer = CreateObject("roAudioPlayer")
+    m.audioPlayer.SetLoop(false)
+    m.audioPlayer.AddContent(audioItem)
+    m.audioPlayer.Play()
+    m.statusLabel.text = "Audio legado do painel em reproducao"
+
+    if m.audioRetryTimer <> invalid
+        m.audioRetryTimer.control = "stop"
+        m.audioRetryTimer.control = "start"
+    end if
 end sub
 
 sub moveCursor(command as string)
@@ -817,6 +1177,22 @@ function getString(value as dynamic, fallback as string) as string
 
     if Type(value) = "roString" or Type(value) = "String"
         return value
+    end if
+
+    return fallback
+end function
+
+function getBool(value as dynamic, fallback as boolean) as boolean
+    if value = invalid
+        return fallback
+    end if
+
+    if value = true
+        return true
+    end if
+
+    if value = false
+        return false
     end if
 
     return fallback

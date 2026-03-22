@@ -3,7 +3,8 @@ param(
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
-    [switch]$SkipSideload
+    [switch]$SkipSideload,
+    [switch]$UseSyntheticPanelAudio
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
+$sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 
 function Invoke-Step {
     param(
@@ -36,28 +38,22 @@ function New-MultipartBody {
         [string]$Password
     )
 
-    $boundary = "---------------------------" + [Guid]::NewGuid().ToString("N")
+    $boundary = "---------------------------" + [DateTime]::UtcNow.Ticks.ToString()
     $newLine = "`r`n"
-    $fileName = [System.IO.Path]::GetFileName($PackagePath)
-    $headerText = @(
-        "--$boundary"
-        'Content-Disposition: form-data; name="mysubmit"'
-        ""
-        "Install"
-        "--$boundary"
-        'Content-Disposition: form-data; name="passwd"'
-        ""
-        $Password
-        "--$boundary"
-        "Content-Disposition: form-data; name=`"archive`"; filename=`"$fileName`""
-        "Content-Type: application/octet-stream"
-        ""
-    ) -join $newLine
+    $headerBuilder = New-Object System.Text.StringBuilder
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="mysubmit"').Append($newLine).Append($newLine)
+    [void]$headerBuilder.Append("Install").Append($newLine)
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="passwd"').Append($newLine).Append($newLine)
+    [void]$headerBuilder.Append($Password).Append($newLine)
+    [void]$headerBuilder.Append("--").Append($boundary).Append($newLine)
+    [void]$headerBuilder.Append('Content-Disposition: form-data; name="archive"; filename="').Append([System.IO.Path]::GetFileName($PackagePath)).Append('"').Append($newLine)
+    [void]$headerBuilder.Append("Content-Type: application/octet-stream").Append($newLine).Append($newLine)
 
-    $footerText = $newLine + "--$boundary--" + $newLine
-    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headerText)
+    $headerBytes = [System.Text.Encoding]::UTF8.GetBytes($headerBuilder.ToString())
     $fileBytes = [System.IO.File]::ReadAllBytes($PackagePath)
-    $footerBytes = [System.Text.Encoding]::ASCII.GetBytes($footerText)
+    $footerBytes = [System.Text.Encoding]::UTF8.GetBytes($newLine + "--" + $boundary + "--" + $newLine)
 
     $buffer = New-Object byte[] ($headerBytes.Length + $fileBytes.Length + $footerBytes.Length)
     [System.Buffer]::BlockCopy($headerBytes, 0, $buffer, 0, $headerBytes.Length)
@@ -87,7 +83,11 @@ function Invoke-RokuSideload {
     $handler.PreAuthenticate = $true
 
     $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(12)
     try {
+        New-Item -ItemType Directory -Force -Path $sideloadLogRoot | Out-Null
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
         $basic = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$Username`:$Password"))
         $client.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Basic", $basic)
 
@@ -98,16 +98,46 @@ function Invoke-RokuSideload {
         $installUri = "http://$RokuHost/plugin_install"
         $installResponse = $client.PostAsync($installUri, $content).GetAwaiter().GetResult()
         $installBody = $installResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $installDumpPath = Join-Path $sideloadLogRoot ("plugin_install-{0}-{1}.html" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+        Set-Content -Path $installDumpPath -Value $installBody -Encoding UTF8
         Write-Host ("plugin_install => status={0}" -f [int]$installResponse.StatusCode)
+        if (-not [string]::IsNullOrWhiteSpace($installBody)) {
+            $compactInstallBody = ($installBody -replace '\s+', ' ').Trim()
+            if ($compactInstallBody.Length -gt 220) {
+                $compactInstallBody = $compactInstallBody.Substring(0, 220) + "..."
+            }
+            Write-Host ("plugin_install body => {0}" -f $compactInstallBody)
+        }
+        Write-Host ("plugin_install dump => {0}" -f $installDumpPath)
         if (-not $installResponse.IsSuccessStatusCode) {
             throw "Falha no plugin_install: $([int]$installResponse.StatusCode) $installBody"
         }
 
-        Start-Sleep -Milliseconds 600
-        $null = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-        Start-Sleep -Milliseconds 600
+        Start-Sleep -Milliseconds 1200
+        try {
+            $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+            Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+        }
+        catch {
+            Write-Host "keypress/Home => falhou"
+        }
+        Start-Sleep -Milliseconds 1200
         $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+        $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+        Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
         Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
+        Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
+    }
+    catch {
+        $message = $_.Exception.Message
+        $inner = $_.Exception.InnerException
+        while ($inner -ne $null) {
+            $message = $message + " | " + $inner.Message
+            $inner = $inner.InnerException
+        }
+
+        throw "Falha ao comunicar com a Roku em $RokuHost. Detalhes: $message"
     }
     finally {
         $client.Dispose()
@@ -115,8 +145,36 @@ function Invoke-RokuSideload {
     }
 }
 
+function Test-TcpEndpoint {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetHost,
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connectTask = $tcp.ConnectAsync($TargetHost, $Port)
+        if (-not $connectTask.Wait(3000)) {
+            return $false
+        }
+
+        return $tcp.Connected
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $tcp.Dispose()
+    }
+}
+
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
+    if ($UseSyntheticPanelAudio) {
+        $env:SUPERPAINEL_SYNTH_AUDIO = "1"
+    }
     try {
         Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
@@ -129,6 +187,9 @@ Invoke-Step -Label "Compilar super em modo local" -Action {
     finally {
         Pop-Location
         Remove-Item Env:SUPER_BUILD_CHANNEL -ErrorAction SilentlyContinue
+        if (-not $LaunchSuper) {
+            Remove-Item Env:SUPERPAINEL_SYNTH_AUDIO -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -149,9 +210,26 @@ if ($LaunchSuper) {
     }
 }
 
+if (-not $LaunchSuper) {
+    Remove-Item Env:SUPERPAINEL_SYNTH_AUDIO -ErrorAction SilentlyContinue
+}
+
 if (-not $SkipSideload) {
     if ([string]::IsNullOrWhiteSpace($RokuIp)) {
         throw "Informe -RokuIp para fazer sideload local, ou use -SkipSideload."
+    }
+
+    Invoke-Step -Label "Verificar conectividade da Roku em $RokuIp" -Action {
+        $rokuHost = $RokuIp.Trim()
+        $devPortOk = Test-TcpEndpoint -TargetHost $rokuHost -Port 80
+        $ecpPortOk = Test-TcpEndpoint -TargetHost $rokuHost -Port 8060
+
+        Write-Host ("porta 80 => {0}" -f $(if ($devPortOk) { "ok" } else { "falhou" }))
+        Write-Host ("porta 8060 => {0}" -f $(if ($ecpPortOk) { "ok" } else { "falhou" }))
+
+        if (-not $devPortOk -and -not $ecpPortOk) {
+            throw "A Roku em $rokuHost nao respondeu nas portas 80 e 8060. Verifique IP, modo developer e conectividade de rede."
+        }
     }
 
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {

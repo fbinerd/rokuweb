@@ -181,6 +181,26 @@ public sealed class RokuDevDeploymentService
 
     private async Task<RokuResolvedPackage> ResolvePackageAsync(string expectedVersion)
     {
+        if (string.Equals(UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel), UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase))
+        {
+            var localPackage = ResolveLocalPackagePath();
+            if (!string.IsNullOrWhiteSpace(localPackage) && File.Exists(localPackage))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Build local detectado; usando pacote Roku local diretamente. esperado={0}, arquivo={1}",
+                        expectedVersion,
+                        localPackage));
+
+                return new RokuResolvedPackage
+                {
+                    PackagePath = localPackage,
+                    Source = "local"
+                };
+            }
+        }
+
         try
         {
             return await DownloadLatestRokuPackageAsync(expectedVersion).ConfigureAwait(false);
