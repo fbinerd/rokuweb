@@ -211,6 +211,36 @@ public sealed class LocalWebRtcPublisherService
         return result;
     }
 
+    public async Task<string> SendPowerCommandToDisplayTargetAsync(DisplayTarget target, bool powerOn, CancellationToken cancellationToken)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return "tv_sem_ip";
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var display = new RegisteredDisplaySnapshot
+        {
+            DeviceId = string.IsNullOrWhiteSpace(target.DeviceUniqueId)
+                ? "roku-target-" + target.NetworkAddress.Replace(".", "-")
+                : target.DeviceUniqueId,
+            DeviceType = "roku",
+            DeviceModel = target.Name,
+            NetworkAddress = target.NetworkAddress,
+            LastSeenUtc = DateTime.UtcNow.ToString("O")
+        };
+
+        var registered = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase));
+        if (registered is not null)
+        {
+            display = registered;
+        }
+
+        return await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn).ConfigureAwait(false);
+    }
+
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;

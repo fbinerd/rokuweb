@@ -651,25 +651,13 @@ public sealed class MainViewModel : ViewModelBase
     private async Task PowerOnConnectedRokusAsync()
     {
         UpdateStatusMessage = "Enviando comando para ligar TVs Roku compativeis...";
-        var result = await _webRtcPublisherService.SendPowerCommandToConnectedDisplaysAsync(powerOn: true, CancellationToken.None);
-        UpdateStatusMessage = string.Format(
-            "Comando de ligar concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}, ignorada(s): {3}.",
-            result.TargetedCount,
-            result.SuccessCount,
-            result.FailureCount,
-            result.SkippedCount);
+        UpdateStatusMessage = await SendPowerCommandToKnownRokusAsync(powerOn: true);
     }
 
     private async Task PowerOffConnectedRokusAsync()
     {
         UpdateStatusMessage = "Enviando comando para desligar TVs Roku compativeis...";
-        var result = await _webRtcPublisherService.SendPowerCommandToConnectedDisplaysAsync(powerOn: false, CancellationToken.None);
-        UpdateStatusMessage = string.Format(
-            "Comando de desligar concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}, ignorada(s): {3}.",
-            result.TargetedCount,
-            result.SuccessCount,
-            result.FailureCount,
-            result.SkippedCount);
+        UpdateStatusMessage = await SendPowerCommandToKnownRokusAsync(powerOn: false);
     }
 
     private async Task UpdateSelectedTargetAsync()
@@ -809,6 +797,54 @@ public sealed class MainViewModel : ViewModelBase
         StatusMessage = Targets.Count == 0
             ? "Nenhum destino encontrado."
             : string.Format("{0} destino(s) encontrados.", Targets.Count);
+    }
+
+    private async Task<string> SendPowerCommandToKnownRokusAsync(bool powerOn)
+    {
+        var connectedResult = await _webRtcPublisherService.SendPowerCommandToConnectedDisplaysAsync(powerOn, CancellationToken.None);
+        if (connectedResult.TargetedCount > 0)
+        {
+            return string.Format(
+                "Comando de {0} concluido. Alvo(s): {1}, sucesso(s): {2}, falha(s): {3}, ignorada(s): {4}.",
+                powerOn ? "ligar" : "desligar",
+                connectedResult.TargetedCount,
+                connectedResult.SuccessCount,
+                connectedResult.FailureCount,
+                connectedResult.SkippedCount);
+        }
+
+        var rokuTargets = Targets
+            .Where(x => x.TransportKind == DisplayTransportKind.LanStreaming && !string.IsNullOrWhiteSpace(x.NetworkAddress))
+            .ToList();
+
+        if (rokuTargets.Count == 0)
+        {
+            return "Nenhuma TV Roku compativel foi encontrada para o comando de energia.";
+        }
+
+        var successCount = 0;
+        var failureCount = 0;
+
+        foreach (var target in rokuTargets)
+        {
+            var result = await _webRtcPublisherService.SendPowerCommandToDisplayTargetAsync(target, powerOn, CancellationToken.None);
+            if (string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ||
+                result.StartsWith("ok_fallback_", StringComparison.OrdinalIgnoreCase))
+            {
+                successCount++;
+            }
+            else
+            {
+                failureCount++;
+            }
+        }
+
+        return string.Format(
+            "Comando de {0} concluido via TVs descobertas. Alvo(s): {1}, sucesso(s): {2}, falha(s): {3}.",
+            powerOn ? "ligar" : "desligar",
+            rokuTargets.Count,
+            successCount,
+            failureCount);
     }
 
     private bool CanAssignSelectedWindow() => SelectedWindow is not null && SelectedTarget is not null;
