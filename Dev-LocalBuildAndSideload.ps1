@@ -3,6 +3,7 @@ param(
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
+    [switch]$LaunchRokuApp,
     [switch]$SkipSideload,
     [switch]$UseSyntheticPanelAudio
 )
@@ -75,7 +76,9 @@ function Invoke-RokuSideload {
         [Parameter(Mandatory = $true)]
         [string]$Password,
         [Parameter(Mandatory = $true)]
-        [string]$PackagePath
+        [string]$PackagePath,
+        [Parameter(Mandatory = $false)]
+        [bool]$LaunchChannel = $false
     )
 
     $handler = New-Object System.Net.Http.HttpClientHandler
@@ -113,21 +116,27 @@ function Invoke-RokuSideload {
             throw "Falha no plugin_install: $([int]$installResponse.StatusCode) $installBody"
         }
 
-        Start-Sleep -Milliseconds 1200
-        try {
-            $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-            Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+        if ($LaunchChannel) {
+            Start-Sleep -Milliseconds 1200
+            try {
+                $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+                Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+            }
+            catch {
+                Write-Host "keypress/Home => falhou"
+            }
+
+            Start-Sleep -Milliseconds 1200
+            $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+            $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+            Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
+            Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
+            Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
         }
-        catch {
-            Write-Host "keypress/Home => falhou"
+        else {
+            Write-Host "launch/dev => ignorado (use -LaunchRokuApp para relancar o canal na TV)"
         }
-        Start-Sleep -Milliseconds 1200
-        $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-        $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-        $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
-        Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
-        Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
-        Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
     }
     catch {
         $message = $_.Exception.Message
@@ -233,7 +242,7 @@ if (-not $SkipSideload) {
     }
 
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {
-        Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip
+        Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip -LaunchChannel:$LaunchRokuApp
     }
 }
 
