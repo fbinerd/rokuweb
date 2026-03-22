@@ -920,7 +920,7 @@ public sealed class LocalWebRtcPublisherService
     {
         if (realtimeCandidate is not null && realtimeCandidate.AudioPacketsReceived > 0)
         {
-            return "continuous-udp-active";
+            return "continuous-udp-rtp-active";
         }
 
         if (!_experimentalAvMediaService.IsAvailable)
@@ -990,6 +990,18 @@ public sealed class LocalWebRtcPublisherService
         sessionState.RealtimeHost = realtimeCandidate?.Host ?? string.Empty;
         sessionState.RealtimeAudioPort = realtimeCandidate?.AudioPort ?? 0;
         sessionState.RealtimeVideoPort = realtimeCandidate?.VideoPort ?? 0;
+        if (realtimeCandidate is not null)
+        {
+            var sampleRate = realtimeCandidate.AudioSampleRate > 0 ? realtimeCandidate.AudioSampleRate : 44100;
+            var channels = realtimeCandidate.AudioChannels > 0 ? realtimeCandidate.AudioChannels : 2;
+            sessionState.AnswerSdp = ExperimentalWebRtcAvService.BuildAudioRtpAnswerSdp(
+                windowId,
+                realtimeCandidate.Host,
+                realtimeCandidate.AudioPort,
+                sampleRate,
+                channels,
+                realtimeCandidate.AudioPayloadType);
+        }
         sessionState.RealtimeTransportReady = realtimeCandidate?.Ready ?? false;
         sessionState.RealtimeAudioPacketsReceived = realtimeCandidate?.AudioPacketsReceived ?? 0;
         sessionState.RealtimeAudioBytesReceived = realtimeCandidate?.AudioBytesReceived ?? 0;

@@ -91,13 +91,13 @@ public sealed class ExperimentalWebRtcAvService
         state.OfferCount += 1;
         state.Status = "answer-ready";
         state.AnswerType = "answer";
-        state.AnswerSdp = BuildPlaceholderAnswerSdp(windowId);
+        state.AnswerSdp = string.Empty;
         state.MediaTransportImplemented = false;
         state.MediaReady = false;
         state.MediaUrl = mediaUrl;
         state.TransportStatus = "awaiting-media-transport";
-        state.RealtimeMode = "continuous-udp-prototype";
-        state.RealtimeProtocol = "udp";
+        state.RealtimeMode = "continuous-udp-rtp-prototype";
+        state.RealtimeProtocol = "udp-rtp";
         state.LastTouchedUtc = DateTime.UtcNow.ToString("O");
         state.Notes = new List<string>
         {
@@ -115,20 +115,20 @@ public sealed class ExperimentalWebRtcAvService
         return state;
     }
 
-    private static string BuildPlaceholderAnswerSdp(Guid windowId)
+    public static string BuildAudioRtpAnswerSdp(Guid windowId, string host, int audioPort, int sampleRate, int channels, int payloadType)
     {
         return
             "v=0\r\n" +
-            "o=superpainel 0 0 IN IP4 127.0.0.1\r\n" +
+            "o=superpainel 0 0 IN IP4 " + host + "\r\n" +
             "s=SuperPainel Experimental AV\r\n" +
             "t=0 0\r\n" +
             "a=msid-semantic: WMS " + windowId.ToString("N") + "\r\n" +
-            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" +
-            "c=IN IP4 0.0.0.0\r\n" +
+            "m=audio " + audioPort.ToString() + " RTP/AVP " + payloadType.ToString() + "\r\n" +
+            "c=IN IP4 " + host + "\r\n" +
             "a=mid:0\r\n" +
-            "a=inactive\r\n" +
-            "a=rtpmap:111 opus/48000/2\r\n" +
-            "m=video 9 UDP/TLS/RTP/SAVPF 102\r\n" +
+            "a=sendonly\r\n" +
+            "a=rtpmap:" + payloadType.ToString() + " L16/" + sampleRate.ToString() + "/" + channels.ToString() + "\r\n" +
+            "m=video 9 RTP/AVP 102\r\n" +
             "c=IN IP4 0.0.0.0\r\n" +
             "a=mid:1\r\n" +
             "a=inactive\r\n" +

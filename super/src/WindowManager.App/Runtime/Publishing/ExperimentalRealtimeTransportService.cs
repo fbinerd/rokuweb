@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace WindowManager.App.Runtime.Publishing;
@@ -86,7 +85,10 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             Protocol = "udp",
             AudioPort = audioPort,
             VideoPort = videoPort,
-            Mode = "continuous-udp-prototype",
+            Mode = "continuous-udp-rtp-prototype",
+            AudioCodec = "L16",
+            AudioPayloadType = 97,
+            AudioSsrc = Environment.TickCount ^ audioPort ^ videoPort,
             Ready = false
         };
 
@@ -111,6 +113,8 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
         private readonly Task _videoLoop;
         private bool _audioStreamAnnounced;
         private bool _audioPacketMirroringAnnounced;
+        private ushort _audioSequenceNumber;
+        private uint _audioTimestamp;
 
         public ReservedRealtimeTransport(RealtimeTransportCandidate candidate, UdpClient audioSocket, UdpClient videoSocket)
         {
@@ -138,10 +142,12 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             AppLog.Write(
                 "ExpWebRtc",
                 string.Format(
-                    "Fluxo de audio continuo experimental conectado: sampleRate={0}, channels={1}, port={2}",
+                    "Fluxo de audio continuo experimental conectado: sampleRate={0}, channels={1}, port={2}, codec={3}, payloadType={4}",
                     sampleRate,
                     channels,
-                    Candidate.AudioPort));
+                    Candidate.AudioPort,
+                    Candidate.AudioCodec,
+                    Candidate.AudioPayloadType));
         }
 
         public void SendAudioPacket(byte[] pcmBytes)
@@ -153,13 +159,10 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
 
             try
             {
-                var header = Encoding.ASCII.GetBytes("SPAUD1");
-                var payload = new byte[header.Length + pcmBytes.Length];
-                Buffer.BlockCopy(header, 0, payload, 0, header.Length);
-                Buffer.BlockCopy(pcmBytes, 0, payload, header.Length, pcmBytes.Length);
-                _audioSender.Send(payload, payload.Length, IPAddress.Loopback.ToString(), Candidate.AudioPort);
+                var packet = BuildAudioRtpPacket(pcmBytes);
+                _audioSender.Send(packet, packet.Length, IPAddress.Loopback.ToString(), Candidate.AudioPort);
                 Candidate.AudioPacketsSent += 1;
-                Candidate.AudioBytesSent += payload.Length;
+                Candidate.AudioBytesSent += packet.Length;
                 if (Candidate.AudioPacketsSent == 1 || Candidate.AudioPacketsSent % 200 == 0)
                 {
                     AppLog.Write(
@@ -236,6 +239,30 @@ public sealed class ExperimentalRealtimeTransportService : IDisposable
             _audioSocket.Dispose();
             _videoSocket.Dispose();
         }
+
+        private byte[] BuildAudioRtpPacket(byte[] pcmBytes)
+        {
+            var packet = new byte[12 + pcmBytes.Length];
+            packet[0] = 0x80;
+            packet[1] = (byte)(Candidate.AudioPayloadType & 0x7F);
+            packet[2] = (byte)((_audioSequenceNumber >> 8) & 0xFF);
+            packet[3] = (byte)(_audioSequenceNumber & 0xFF);
+            packet[4] = (byte)((_audioTimestamp >> 24) & 0xFF);
+            packet[5] = (byte)((_audioTimestamp >> 16) & 0xFF);
+            packet[6] = (byte)((_audioTimestamp >> 8) & 0xFF);
+            packet[7] = (byte)(_audioTimestamp & 0xFF);
+            packet[8] = (byte)((Candidate.AudioSsrc >> 24) & 0xFF);
+            packet[9] = (byte)((Candidate.AudioSsrc >> 16) & 0xFF);
+            packet[10] = (byte)((Candidate.AudioSsrc >> 8) & 0xFF);
+            packet[11] = (byte)(Candidate.AudioSsrc & 0xFF);
+            Buffer.BlockCopy(pcmBytes, 0, packet, 12, pcmBytes.Length);
+
+            _audioSequenceNumber++;
+            var bytesPerFrame = Math.Max(2, Candidate.AudioChannels * 2);
+            var frameCount = pcmBytes.Length / bytesPerFrame;
+            _audioTimestamp += (uint)Math.Max(1, frameCount);
+            return packet;
+        }
     }
 }
 
@@ -245,13 +272,13 @@ public sealed class RealtimeTransportCandidate
 
     public string Host { get; set; } = string.Empty;
 
-    public string Protocol { get; set; } = "udp";
+    public string Protocol { get; set; } = "udp-rtp";
 
     public int AudioPort { get; set; }
 
     public int VideoPort { get; set; }
 
-    public string Mode { get; set; } = "continuous-udp-prototype";
+    public string Mode { get; set; } = "continuous-udp-rtp-prototype";
 
     public bool Ready { get; set; }
 
@@ -272,4 +299,10 @@ public sealed class RealtimeTransportCandidate
     public long AudioPacketsSent { get; set; }
 
     public long AudioBytesSent { get; set; }
+
+    public string AudioCodec { get; set; } = "L16";
+
+    public int AudioPayloadType { get; set; } = 97;
+
+    public int AudioSsrc { get; set; }
 }
