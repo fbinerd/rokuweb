@@ -10,12 +10,17 @@ sub execute()
         return
     end if
 
-    ok = socket.bindToLocalPort(0)
+    datagram = GetInterface(socket, "ifDatagramSocket")
+    if datagram = invalid
+        m.top.errorMessage = "ifDatagramSocket indisponivel."
+        m.top.completedToken = "error-interface"
+        return
+    end if
+
+    ok = datagram.bindToLocalPort(0)
     if not ok
         reason = ""
-        if GetInterface(socket, "ifDatagramSocket") <> invalid
-            reason = getString(socket.getFailureReason(), "")
-        end if
+        reason = getString(datagram.getFailureReason(), "")
         if reason = ""
             reason = "Falha ao bindar porta UDP local."
         end if
@@ -24,7 +29,7 @@ sub execute()
         return
     end if
 
-    m.top.receiverPort = socket.getLocalPort()
+    m.top.receiverPort = datagram.getLocalPort()
     m.top.completedToken = "ready-" + m.top.receiverPort.ToStr()
 
     while true
