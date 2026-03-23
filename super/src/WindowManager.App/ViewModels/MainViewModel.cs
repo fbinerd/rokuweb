@@ -793,10 +793,36 @@ public sealed class MainViewModel : ViewModelBase
         UpdateStatusMessage = "Verificando TVs conectadas para sideload...";
         AppLog.Write("RokuDeploy", "Disparo manual solicitado para atualizar TVs conectadas.");
 
-        var updatedCount = await _webRtcPublisherService.ForceUpdateConnectedDisplaysAsync(CancellationToken.None);
+        var expectedVersion = await ResolveExpectedRokuReleaseIdAsync();
+        if (string.IsNullOrWhiteSpace(expectedVersion))
+        {
+            UpdateStatusMessage = "Nao foi possivel determinar a release Roku esperada para atualizacao.";
+            return;
+        }
+
+        var updatedCount = await _webRtcPublisherService.ForceUpdateConnectedDisplaysAsync(expectedVersion, CancellationToken.None);
+        var attemptedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var target in Targets.Where(IsRokuUpdatableTarget))
+        {
+            var key = !string.IsNullOrWhiteSpace(target.DeviceUniqueId)
+                ? target.DeviceUniqueId
+                : target.NetworkAddress ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(key) || !attemptedTargets.Add(key))
+            {
+                continue;
+            }
+
+            var result = await _webRtcPublisherService.ForceUpdateDisplayTargetAsync(target, expectedVersion, CancellationToken.None);
+            if (string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+            {
+                updatedCount++;
+            }
+        }
+
         UpdateStatusMessage = updatedCount <= 0
-            ? "Nenhuma TV conectada precisava de atualizacao."
-            : string.Format("{0} TV(s) receberam sideload de atualizacao.", updatedCount);
+            ? "Nenhuma TV Roku conectada precisava de atualizacao."
+            : string.Format("{0} TV(s) Roku receberam sideload de atualizacao.", updatedCount);
     }
 
     private async Task PowerOnConnectedRokusAsync()
@@ -1315,8 +1341,15 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
+        var expectedVersion = await ResolveExpectedRokuReleaseIdAsync();
+        if (string.IsNullOrWhiteSpace(expectedVersion))
+        {
+            StatusMessage = "Nao foi possivel determinar a release Roku esperada para atualizacao.";
+            return;
+        }
+
         StatusMessage = string.Format("Enviando atualizacao para a TV '{0}'...", SelectedTarget.Name);
-        var result = await _webRtcPublisherService.ForceUpdateDisplayTargetAsync(SelectedTarget, CancellationToken.None);
+        var result = await _webRtcPublisherService.ForceUpdateDisplayTargetAsync(SelectedTarget, expectedVersion, CancellationToken.None);
         StatusMessage = string.Format("Resultado da atualizacao da TV '{0}': {1}", SelectedTarget.Name, result);
         AppLog.Write(
             "RokuDeploy",
@@ -1325,6 +1358,46 @@ public sealed class MainViewModel : ViewModelBase
                 SelectedTarget.Name,
                 SelectedTarget.NetworkAddress,
                 result));
+    }
+
+    private async Task<string> ResolveExpectedRokuReleaseIdAsync()
+    {
+        if (IsLocalDevelopmentBuild)
+        {
+            return BuildVersionInfo.ReleaseId;
+        }
+
+        if (_lastUpdateCheckResult is not null &&
+            _lastUpdateCheckResult.Succeeded &&
+            string.Equals(
+                AppUpdateManifestService.BuildManifestUrl(SelectedUpdateChannel),
+                _lastUpdateCheckResult.ManifestUrl,
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(_lastUpdateCheckResult.LatestReleaseId))
+        {
+            return _lastUpdateCheckResult.LatestReleaseId;
+        }
+
+        var result = await _appUpdateManifestService.CheckForUpdateAsync(SelectedUpdateChannel, CancellationToken.None);
+        if (!string.IsNullOrWhiteSpace(result.LatestReleaseId))
+        {
+            return result.LatestReleaseId;
+        }
+
+        return BuildVersionInfo.ReleaseId;
+    }
+
+    private static bool IsRokuUpdatableTarget(DisplayTarget target)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return false;
+        }
+
+        var transportName = target.TransportKind.ToString();
+        return target.Name.IndexOf("roku", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               (!string.IsNullOrWhiteSpace(target.DeviceUniqueId) && target.DeviceUniqueId.IndexOf("roku-", StringComparison.OrdinalIgnoreCase) >= 0) ||
+               transportName.IndexOf("Lan", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private async Task<AppUpdateCheckResult> RefreshUpdateInfoAsync(bool ignoreLocalBuildRestriction = false)

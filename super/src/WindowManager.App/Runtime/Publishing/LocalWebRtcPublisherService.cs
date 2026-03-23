@@ -82,9 +82,13 @@ public sealed class LocalWebRtcPublisherService
         return Task.CompletedTask;
     }
 
-    public async Task<int> ForceUpdateConnectedDisplaysAsync(CancellationToken cancellationToken)
+    public Task<int> ForceUpdateConnectedDisplaysAsync(CancellationToken cancellationToken)
     {
-        var expectedVersion = GetExpectedRokuChannelVersion();
+        return ForceUpdateConnectedDisplaysAsync(GetExpectedRokuChannelVersion(), cancellationToken);
+    }
+
+    public async Task<int> ForceUpdateConnectedDisplaysAsync(string expectedVersion, CancellationToken cancellationToken)
+    {
         var displays = _registeredDisplays.Values.ToArray();
         var updatedCount = 0;
 
@@ -133,7 +137,12 @@ public sealed class LocalWebRtcPublisherService
         return updatedCount;
     }
 
-    public async Task<string> ForceUpdateDisplayTargetAsync(DisplayTarget target, CancellationToken cancellationToken)
+    public Task<string> ForceUpdateDisplayTargetAsync(DisplayTarget target, CancellationToken cancellationToken)
+    {
+        return ForceUpdateDisplayTargetAsync(target, GetExpectedRokuChannelVersion(), cancellationToken);
+    }
+
+    public async Task<string> ForceUpdateDisplayTargetAsync(DisplayTarget target, string expectedVersion, CancellationToken cancellationToken)
     {
         if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
         {
@@ -141,8 +150,6 @@ public sealed class LocalWebRtcPublisherService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-
-        var expectedVersion = GetExpectedRokuChannelVersion();
         RegisteredDisplaySnapshot display;
 
         var registered = _registeredDisplays.Values.FirstOrDefault(x =>
