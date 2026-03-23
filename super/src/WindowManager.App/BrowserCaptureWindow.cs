@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using CefSharp.Wpf;
 using WindowManager.App.Runtime.Publishing;
@@ -29,6 +30,11 @@ public sealed class BrowserCaptureWindow : Window
     }
 
     public ChromiumWebBrowser Browser { get; }
+
+    public static Task ApplyNavigationBarPreferenceAsync(ChromiumWebBrowser browser, bool enabled)
+    {
+        return Task.CompletedTask;
+    }
 
     public void UpdateAddress(Uri? address)
     {
