@@ -52,6 +52,7 @@ sub init()
     m.textControlTask = m.top.findNode("textControlTask")
     m.panelRefreshTimer = m.top.findNode("panelRefreshTimer")
     m.previewRefreshTimer = m.top.findNode("previewRefreshTimer")
+    m.editableActivationTimer = m.top.findNode("editableActivationTimer")
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.fullscreenVideoWatchTimer = m.top.findNode("fullscreenVideoWatchTimer")
@@ -113,6 +114,9 @@ sub init()
     m.fullscreenPosterB.observeField("loadStatus", "onBufferPosterLoadStatusChanged")
     m.clickControlTask.observeField("completedToken", "onClickControlTaskCompleted")
     m.textControlTask.observeField("completedToken", "onTextControlTaskCompleted")
+    if m.editableActivationTimer <> invalid
+        m.editableActivationTimer.observeField("fire", "onEditableActivationTimerFire")
+    end if
     if m.panelAudioNode <> invalid
         m.panelAudioNode.observeField("state", "onPanelAudioStateChanged")
     end if
@@ -123,6 +127,9 @@ sub init()
         m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
     end if
     m.top.setFocus(true)
+    m.pendingEditableActivation = false
+    m.pendingEditableValue = ""
+    m.pendingEditableMultiline = false
 
     m.titleLabel.text = GetRokuAppShortName()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
@@ -133,13 +140,15 @@ sub init()
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
+    normalizedKey = LCase(getString(key, ""))
+
     if m.isKeyboardOpen
         return false
     end if
 
     if m.isFullscreen
         if not press
-            if key = "back" or key = "Back"
+            if normalizedKey = "back"
                 heldMs = 0
                 if m.backHoldTimespan <> invalid
                     heldMs = m.backHoldTimespan.TotalMilliseconds()
@@ -166,7 +175,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 return true
             end if
 
-            if key = m.heldDirectionKey
+            if normalizedKey = m.heldDirectionKey
                 stopHeldDirection()
                 return true
             end if
@@ -174,26 +183,75 @@ function onKeyEvent(key as string, press as boolean) as boolean
             return false
         end if
 
-        reportInputKey(key)
+        reportInputKey(normalizedKey)
 
-        if key = "back" or key = "Back"
+        if normalizedKey = "back"
             m.backHoldTimespan = CreateObject("roTimespan")
             m.backHoldTimespan.Mark()
             return true
         end if
 
-        if key = "OK"
+        if normalizedKey = "ok"
+            if m.pendingEditableActivation
+                openKeyboardDialog(m.pendingEditableValue, m.pendingEditableMultiline)
+                clearPendingEditableActivation()
+                return true
+            end if
             sendClickCommand()
             return true
         end if
 
-        if key = "up" or key = "down" or key = "left" or key = "right"
-            startHeldDirection(key)
+        if isInstantReplayKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("reload")
+            scheduleFullscreenRefresh()
             return true
         end if
 
-        if key = "Play"
-            sendRemoteCommand("tab")
+        if isMinusKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("history-back")
+            scheduleFullscreenRefresh()
+            return true
+        end if
+
+        if isPlusKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("history-forward")
+            scheduleFullscreenRefresh()
+            return true
+        end if
+
+        if isOptionsKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("enter")
+            scheduleFullscreenRefresh()
+            return true
+        end if
+
+        if isRevKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("media-seek-backward")
+            scheduleFullscreenRefresh()
+            return true
+        end if
+
+        if isFwdKey(normalizedKey)
+            clearPendingEditableActivation()
+            sendRemoteCommand("media-seek-forward")
+            scheduleFullscreenRefresh()
+            return true
+        end if
+
+        if normalizedKey = "up" or normalizedKey = "down" or normalizedKey = "left" or normalizedKey = "right"
+            clearPendingEditableActivation()
+            startHeldDirection(normalizedKey)
+            return true
+        end if
+
+        if normalizedKey = "play"
+            clearPendingEditableActivation()
+            sendRemoteCommand("media-play-pause")
             scheduleFullscreenRefresh()
             return true
         end if
@@ -205,29 +263,29 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return false
     end if
 
-    reportInputKey(key)
+    reportInputKey(normalizedKey)
 
-    if key = "up"
+    if normalizedKey = "up"
         moveSelection(-m.gridColumns)
         return true
     end if
 
-    if key = "down"
+    if normalizedKey = "down"
         moveSelection(m.gridColumns)
         return true
     end if
 
-    if key = "left"
+    if normalizedKey = "left"
         moveSelection(-1)
         return true
     end if
 
-    if key = "right"
+    if normalizedKey = "right"
         moveSelection(1)
         return true
     end if
 
-    if key = "OK"
+    if normalizedKey = "ok"
         if m.windowEntries.Count() > 0
             showFullscreen()
         else
@@ -240,7 +298,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return true
     end if
 
-    if key = "Play"
+    if normalizedKey = "play"
         loadWindows()
         return true
     end if
@@ -528,6 +586,7 @@ sub showFullscreen()
     end if
 
     m.isFullscreen = true
+    clearPendingEditableActivation()
     m.cursorX = 640
     m.cursorY = 360
     hideGrid()
@@ -576,6 +635,7 @@ sub hideFullscreen()
     end if
 
     m.isFullscreen = false
+    clearPendingEditableActivation()
     stopHeldDirection()
     stopFullscreenStream()
     stopPanelAudio()
@@ -1096,7 +1156,9 @@ sub onClickControlTaskCompleted()
     end if
 
     if result.editable = true
-        openKeyboardDialog(getString(result.value, ""), result.multiline = true)
+        armPendingEditableActivation(getString(result.value, ""), result.multiline = true)
+    else
+        clearPendingEditableActivation()
     end if
 end sub
 
@@ -1170,6 +1232,30 @@ sub closeKeyboardDialog()
         m.top.setFocus(true)
     end if
     m.isClosingKeyboard = false
+end sub
+
+sub armPendingEditableActivation(initialValue as string, multiline as boolean)
+    m.pendingEditableActivation = true
+    m.pendingEditableValue = initialValue
+    m.pendingEditableMultiline = multiline
+    m.statusLabel.text = "Pressione OK novamente para digitar"
+    if m.editableActivationTimer <> invalid
+        m.editableActivationTimer.control = "stop"
+        m.editableActivationTimer.control = "start"
+    end if
+end sub
+
+sub clearPendingEditableActivation()
+    m.pendingEditableActivation = false
+    m.pendingEditableValue = ""
+    m.pendingEditableMultiline = false
+    if m.editableActivationTimer <> invalid
+        m.editableActivationTimer.control = "stop"
+    end if
+end sub
+
+sub onEditableActivationTimerFire()
+    clearPendingEditableActivation()
 end sub
 
 sub onKeyboardDialogButtonSelected()
@@ -1307,4 +1393,28 @@ function normalizeBridgeHost(value as string) as string
     end if
 
     return host
+end function
+
+function isInstantReplayKey(key as string) as boolean
+    return key = "instantreplay" or key = "replay"
+end function
+
+function isRevKey(key as string) as boolean
+    return key = "rev" or key = "reverse" or key = "rewind"
+end function
+
+function isFwdKey(key as string) as boolean
+    return key = "fwd" or key = "forward" or key = "fastforward"
+end function
+
+function isPlusKey(key as string) as boolean
+    return key = "volumeup" or key = "channelup"
+end function
+
+function isMinusKey(key as string) as boolean
+    return key = "volumedown" or key = "channeldown"
+end function
+
+function isOptionsKey(key as string) as boolean
+    return key = "info" or key = "options"
 end function

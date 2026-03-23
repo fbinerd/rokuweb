@@ -73,6 +73,16 @@ public sealed class BrowserSnapshotService
         });
     }
 
+    public Task SetNavigationBarEnabledAsync(Guid windowId, bool enabled)
+    {
+        if (!_browsers.TryGetValue(windowId, out var browser))
+        {
+            return Task.CompletedTask;
+        }
+
+        return BrowserCaptureWindow.ApplyNavigationBarPreferenceAsync(browser, enabled);
+    }
+
     public void InvalidateCapture(Guid windowId)
     {
         _cachedFrames.TryRemove(windowId, out _);
@@ -180,6 +190,11 @@ public sealed class BrowserSnapshotService
                     InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", "Escape enviado ao CEF.");
                     return RemoteCommandResult.Success();
+                case "reload":
+                    browser.Reload();
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", "Reload enviado ao CEF.");
+                    return RemoteCommandResult.Success();
                 case "history-back":
                     if (cefBrowser.CanGoBack)
                     {
@@ -191,6 +206,37 @@ public sealed class BrowserSnapshotService
 
                     AppLog.Write("RokuControl", "Historico voltar ignorado; navegador sem pagina anterior.");
                     return RemoteCommandResult.Success();
+                case "history-forward":
+                    if (cefBrowser.CanGoForward)
+                    {
+                        cefBrowser.GoForward();
+                        InvalidateCapture(windowId);
+                        AppLog.Write("RokuControl", "Historico avancar enviado ao CEF.");
+                        return RemoteCommandResult.Success();
+                    }
+
+                    AppLog.Write("RokuControl", "Historico avancar ignorado; navegador sem pagina seguinte.");
+                    return RemoteCommandResult.Success();
+                case "media-seek-backward":
+                    var seekBackwardResult = await SeekMediaAsync(frame, host, -10).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", string.Format("Voltar video enviado ao CEF. ok={0}", seekBackwardResult.Ok));
+                    return seekBackwardResult;
+                case "media-seek-forward":
+                    var seekForwardResult = await SeekMediaAsync(frame, host, 10).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", string.Format("Avancar video enviado ao CEF. ok={0}", seekForwardResult.Ok));
+                    return seekForwardResult;
+                case "enter":
+                    SendKey(host, 0x0D);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", "Enter enviado ao CEF.");
+                    return RemoteCommandResult.Success();
+                case "media-play-pause":
+                    var mediaToggleResult = await ToggleMediaPlayPauseAsync(frame, host).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", string.Format("Play/Pause enviado ao CEF. ok={0}", mediaToggleResult.Ok));
+                    return mediaToggleResult;
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);
@@ -647,6 +693,78 @@ public sealed class BrowserSnapshotService
         var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
         await Task.Delay(120).ConfigureAwait(false);
         return ParseRemoteCommandResult(response?.Result as string);
+    }
+
+    private static async Task<RemoteCommandResult> ToggleMediaPlayPauseAsync(IFrame frame, IBrowserHost host)
+    {
+        var script = @"
+(function() {
+  try {
+    const activeMedia = Array.from(document.querySelectorAll('video, audio')).find(el => !!el && typeof el.paused === 'boolean');
+    if (activeMedia) {
+      if (activeMedia.paused) {
+        const playResult = activeMedia.play();
+        if (playResult && typeof playResult.catch === 'function') {
+          playResult.catch(function(){});
+        }
+      } else {
+        activeMedia.pause();
+      }
+      return JSON.stringify({ ok: true });
+    }
+
+    const youtubeButton = document.querySelector('.ytp-play-button');
+    if (youtubeButton && typeof youtubeButton.click === 'function') {
+      youtubeButton.click();
+      return JSON.stringify({ ok: true });
+    }
+
+    return JSON.stringify({ ok: false });
+  } catch (e) {
+    return JSON.stringify({ ok: false });
+  }
+})();";
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        var result = ParseRemoteCommandResult(response?.Result as string);
+        if (!result.Ok)
+        {
+            SendKey(host, 0xB3);
+            result = RemoteCommandResult.Success();
+        }
+
+        await Task.Delay(120).ConfigureAwait(false);
+        return result;
+    }
+
+    private static async Task<RemoteCommandResult> SeekMediaAsync(IFrame frame, IBrowserHost host, int secondsDelta)
+    {
+        var script = string.Format(@"
+(function() {{
+  try {{
+    const media = Array.from(document.querySelectorAll('video, audio')).find(el => !!el && typeof el.currentTime === 'number');
+    if (!media) {{
+      return JSON.stringify({{ ok: false }});
+    }}
+
+    const targetTime = Math.max(0, (media.currentTime || 0) + ({0}));
+    media.currentTime = targetTime;
+    return JSON.stringify({{ ok: true }});
+  }} catch (e) {{
+    return JSON.stringify({{ ok: false }});
+  }}
+}})();", secondsDelta);
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        var result = ParseRemoteCommandResult(response?.Result as string);
+        if (!result.Ok)
+        {
+            SendKey(host, secondsDelta < 0 ? 0x25 : 0x27);
+            result = RemoteCommandResult.Success();
+        }
+
+        await Task.Delay(120).ConfigureAwait(false);
+        return result;
     }
 
     private static string EscapeJavaScriptString(string value)
