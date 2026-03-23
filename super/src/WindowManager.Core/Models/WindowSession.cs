@@ -22,6 +22,7 @@ public sealed class WindowSession : INotifyPropertyChanged
     private string _profileName = string.Empty;
     private Guid _activeSessionId = Guid.Empty;
     private string _activeSessionName = string.Empty;
+    private bool _isPrimaryExclusive;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -119,6 +120,12 @@ public sealed class WindowSession : INotifyPropertyChanged
     {
         get => _activeSessionName;
         set => SetProperty(ref _activeSessionName, value);
+    }
+
+    public bool IsPrimaryExclusive
+    {
+        get => _isPrimaryExclusive;
+        set => SetProperty(ref _isPrimaryExclusive, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -14,6 +14,8 @@ sub init()
     m.heldDirectionKey = ""
     m.cursorX = 640
     m.cursorY = 360
+    m.lockedFullscreen = false
+    m.lockedWindowId = ""
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
     m.keyboardPurpose = ""
@@ -146,6 +148,9 @@ function onKeyEvent(key as string, press as boolean) as boolean
         reportInputKey(key)
 
         if key = "back" or key = "Back"
+            if m.lockedFullscreen
+                return true
+            end if
             hideFullscreen()
             return true
         end if
@@ -304,6 +309,7 @@ sub applyBridgeResponse()
             initialUrl: getString(window.initialUrl, "")
             audioStreamUrl: getString(window.audioStreamUrl, "")
             audioAvailable: getBool(window.audioAvailable, false)
+            autoOpenFullscreen: getBool(window.autoOpenFullscreen, false)
         })
     end for
 
@@ -325,6 +331,16 @@ sub applyBridgeResponse()
         end for
     end if
 
+    autoFullscreenIndex = findAutoOpenFullscreenIndex()
+    if autoFullscreenIndex >= 0
+        m.selectedIndex = autoFullscreenIndex
+        m.lockedFullscreen = true
+        m.lockedWindowId = getString(m.windowEntries[autoFullscreenIndex].id, "")
+    else
+        m.lockedFullscreen = false
+        m.lockedWindowId = ""
+    end if
+
     m.pageStart = 0
 
     if activeSessionName <> ""
@@ -335,8 +351,27 @@ sub applyBridgeResponse()
     m.isAutoConnecting = false
     startPanelRefresh()
     refreshGrid()
+    if not m.isFullscreen and autoFullscreenIndex >= 0
+        m.selectedIndex = autoFullscreenIndex
+        showFullscreen()
+        return
+    end if
     m.top.setFocus(true)
 end sub
+
+function findAutoOpenFullscreenIndex() as integer
+    if m.windowEntries = invalid or m.windowEntries.Count() = 0
+        return -1
+    end if
+
+    for i = 0 to m.windowEntries.Count() - 1
+        if getBool(m.windowEntries[i].autoOpenFullscreen, false)
+            return i
+        end if
+    end for
+
+    return -1
+end function
 
 sub beginAutoConnect()
     m.autoConnectAttempts = 0
@@ -509,6 +544,10 @@ sub showFullscreen()
 end sub
 
 sub hideFullscreen()
+    if m.lockedFullscreen
+        return
+    end if
+
     m.isFullscreen = false
     stopHeldDirection()
     stopFullscreenStream()

@@ -268,4 +268,7 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 4)]
     public bool IsEnabled { get; set; }
+
+    [DataMember(Order = 5)]
+    public bool IsPrimaryExclusive { get; set; }
 }

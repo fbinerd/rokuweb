@@ -303,16 +303,29 @@ public partial class MainWindow : Window
         };
         streamToggle.Click += OnStreamWindowEnabledToggleClick;
 
+        var exclusiveToggle = new CheckBox
+        {
+            Content = "So esta janela",
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = session.IsPrimaryExclusive,
+            Tag = session.Id
+        };
+        exclusiveToggle.Click += OnStreamWindowPrimaryExclusiveToggleClick;
+
         var headerTopRow = new Grid();
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         Grid.SetColumn(headerTitle, 0);
         Grid.SetColumn(streamToggle, 1);
-        Grid.SetColumn(deleteButton, 2);
+        Grid.SetColumn(exclusiveToggle, 2);
+        Grid.SetColumn(deleteButton, 3);
         headerTopRow.Children.Add(headerTitle);
         headerTopRow.Children.Add(streamToggle);
+        headerTopRow.Children.Add(exclusiveToggle);
         headerTopRow.Children.Add(deleteButton);
 
         var header = new StackPanel
@@ -451,6 +464,7 @@ public partial class MainWindow : Window
                     else if (child is CheckBox checkBox)
                     {
                         checkBox.Click -= OnStreamWindowEnabledToggleClick;
+                        checkBox.Click -= OnStreamWindowPrimaryExclusiveToggleClick;
                     }
                 }
             }
@@ -537,12 +551,23 @@ public partial class MainWindow : Window
         };
         streamToggle.Click += OnStreamWindowEnabledToggleClick;
 
+        var exclusiveToggle = new CheckBox
+        {
+            Content = "So esta janela",
+            Margin = new Thickness(0, 0, 0, 6),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = item.IsPrimaryExclusive,
+            Tag = item.Id
+        };
+        exclusiveToggle.Click += OnStreamWindowPrimaryExclusiveToggleClick;
+
         var header = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 8),
             Tag = item.Id
         };
         header.Children.Add(streamToggle);
+        header.Children.Add(exclusiveToggle);
         header.Children.Add(headerTitle);
         header.Children.Add(headerUrl);
         header.Children.Add(headerState);
@@ -1365,12 +1390,17 @@ public partial class MainWindow : Window
             toggle.IsChecked = item.IsEnabled;
         }
 
-        if (header.Children[1] is TextBlock titleText)
+        if (header.Children[1] is CheckBox exclusiveToggle)
+        {
+            exclusiveToggle.IsChecked = item.IsPrimaryExclusive;
+        }
+
+        if (header.Children[2] is TextBlock titleText)
         {
             titleText.Text = item.Nickname;
         }
 
-        if (header.Children[2] is TextBlock urlText)
+        if (header.Children[3] is TextBlock urlText)
         {
             urlText.Text = item.Url;
         }
@@ -1392,6 +1422,27 @@ public partial class MainWindow : Window
         if (item is not null)
         {
             checkBox.IsChecked = item.IsEnabled;
+        }
+    }
+
+    private async void OnStreamWindowPrimaryExclusiveToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox checkBox || checkBox.Tag is not Guid itemId)
+        {
+            return;
+        }
+
+        await _viewModel.SetStreamWindowPrimaryExclusiveAsync(itemId, checkBox.IsChecked == true);
+
+        var stream = _viewModel.WindowProfiles.FirstOrDefault(x => x.Windows.Any(w => w.Id == itemId));
+        if (stream is null)
+        {
+            return;
+        }
+
+        foreach (var item in stream.Windows)
+        {
+            RefreshStreamDefinitionPreviewCardHeader(item);
         }
     }
 

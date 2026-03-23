@@ -950,9 +950,25 @@ public sealed class MainViewModel : ViewModelBase
                 Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
                 Nickname = window.Nickname,
                 Url = window.Url,
-                IsEnabled = window.IsEnabled
+                IsEnabled = window.IsEnabled,
+                IsPrimaryExclusive = window.IsPrimaryExclusive
             })
             .ToList();
+
+        var exclusiveWindow = desiredWindows.FirstOrDefault(x => x.IsPrimaryExclusive);
+        if (exclusiveWindow is not null)
+        {
+            desiredWindows = desiredWindows
+                .Select(x => new
+                {
+                    x.Id,
+                    x.Nickname,
+                    x.Url,
+                    IsEnabled = x.Id == exclusiveWindow.Id,
+                    IsPrimaryExclusive = x.Id == exclusiveWindow.Id
+                })
+                .ToList();
+        }
 
         var desiredWindowIds = desiredWindows.Select(x => x.Id).ToHashSet();
         var windowsToRemove = windowProfile.Windows
@@ -974,7 +990,8 @@ public sealed class MainViewModel : ViewModelBase
                     Id = desiredWindow.Id,
                     Nickname = desiredWindow.Nickname,
                     Url = desiredWindow.Url,
-                    IsEnabled = desiredWindow.IsEnabled
+                    IsEnabled = desiredWindow.IsEnabled,
+                    IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive
                 });
                 continue;
             }
@@ -982,6 +999,7 @@ public sealed class MainViewModel : ViewModelBase
             existingWindow.Nickname = desiredWindow.Nickname;
             existingWindow.Url = desiredWindow.Url;
             existingWindow.IsEnabled = desiredWindow.IsEnabled;
+            existingWindow.IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive;
         }
 
         SelectedWindowProfile = windowProfile;
@@ -2558,7 +2576,8 @@ public sealed class MainViewModel : ViewModelBase
                     Id = window.Id,
                     Nickname = window.Nickname,
                     Url = window.Url,
-                    IsEnabled = window.IsEnabled
+                    IsEnabled = window.IsEnabled,
+                    IsPrimaryExclusive = window.IsPrimaryExclusive
                 }).ToList()
             }).ToList();
     }
@@ -2635,7 +2654,8 @@ public sealed class MainViewModel : ViewModelBase
                     Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
                     Nickname = window.Nickname,
                     Url = window.Url,
-                    IsEnabled = window.IsEnabled
+                    IsEnabled = window.IsEnabled,
+                    IsPrimaryExclusive = window.IsPrimaryExclusive
                 });
             }
 
@@ -2716,6 +2736,7 @@ public sealed class MainViewModel : ViewModelBase
                 duplicateWindow.Nickname = string.IsNullOrWhiteSpace(duplicateWindow.Nickname) ? window.Nickname : duplicateWindow.Nickname;
                 duplicateWindow.Url = string.IsNullOrWhiteSpace(duplicateWindow.Url) ? window.Url : duplicateWindow.Url;
                 duplicateWindow.IsEnabled = duplicateWindow.IsEnabled || window.IsEnabled;
+                duplicateWindow.IsPrimaryExclusive = duplicateWindow.IsPrimaryExclusive || window.IsPrimaryExclusive;
             }
         }
 
@@ -2763,7 +2784,8 @@ public sealed class MainViewModel : ViewModelBase
                         Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
                         Nickname = window.Nickname,
                         Url = window.Url,
-                        IsEnabled = window.IsEnabled
+                        IsEnabled = window.IsEnabled,
+                        IsPrimaryExclusive = window.IsPrimaryExclusive
                     });
                 }
 
@@ -2803,7 +2825,44 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         item.IsEnabled = isEnabled;
+        if (!isEnabled)
+        {
+            item.IsPrimaryExclusive = false;
+        }
         await ApplyStreamWindowRuntimeStateAsync(stream, item);
+        await SaveProfileInternalAsync(updateStatus: false);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    public async Task SetStreamWindowPrimaryExclusiveAsync(Guid itemId, bool isPrimaryExclusive)
+    {
+        var stream = WindowProfiles.FirstOrDefault(x => x.Windows.Any(window => window.Id == itemId));
+        var item = stream?.Windows.FirstOrDefault(window => window.Id == itemId);
+        if (stream is null || item is null)
+        {
+            return;
+        }
+
+        if (isPrimaryExclusive)
+        {
+            foreach (var streamItem in stream.Windows)
+            {
+                var isCurrent = streamItem.Id == itemId;
+                streamItem.IsPrimaryExclusive = isCurrent;
+                streamItem.IsEnabled = isCurrent;
+            }
+
+            foreach (var streamItem in stream.Windows.ToList())
+            {
+                await ApplyStreamWindowRuntimeStateAsync(stream, streamItem);
+            }
+        }
+        else
+        {
+            item.IsPrimaryExclusive = false;
+        }
+
         await SaveProfileInternalAsync(updateStatus: false);
         UpdateBridgeSnapshot();
         await PersistActiveSessionsAsync();
@@ -2835,6 +2894,7 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (!item.IsEnabled)
         {
+            item.IsPrimaryExclusive = false;
             var existingWindow = Windows.FirstOrDefault(x => x.Id == item.Id);
             if (existingWindow is not null)
             {
@@ -2901,6 +2961,7 @@ public sealed class MainViewModel : ViewModelBase
         browserWindow.ActiveSessionId = stream.Id;
         browserWindow.ActiveSessionName = stream.Name;
         browserWindow.AssignedTarget = resolvedTarget;
+        browserWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
 
         if (!Windows.Any(x => x.Id == browserWindow.Id))
         {
@@ -3586,6 +3647,7 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     private string _nickname = string.Empty;
     private string _url = string.Empty;
     private bool _isEnabled;
+    private bool _isPrimaryExclusive;
 
     public Guid Id
     {
@@ -3609,6 +3671,12 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     {
         get => _isEnabled;
         set => SetProperty(ref _isEnabled, value);
+    }
+
+    public bool IsPrimaryExclusive
+    {
+        get => _isPrimaryExclusive;
+        set => SetProperty(ref _isPrimaryExclusive, value);
     }
 }
 

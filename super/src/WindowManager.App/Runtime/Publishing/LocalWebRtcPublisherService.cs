@@ -1039,6 +1039,7 @@ public sealed class LocalWebRtcPublisherService
             ProfileName = window.ProfileName ?? string.Empty,
             ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
             ActiveSessionName = window.ActiveSessionName ?? string.Empty,
+            AutoOpenFullscreen = window.IsPrimaryExclusive,
             AssignedDisplayId = window.AssignedTarget?.Id.ToString("N") ?? string.Empty,
             AssignedDisplayName = window.AssignedTarget?.Name ?? string.Empty,
             AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty
@@ -1286,13 +1287,16 @@ public sealed class BridgeWindowSnapshot
     [DataMember(Name = "activeSessionName", Order = 14)]
     public string ActiveSessionName { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayId", Order = 15)]
+    [DataMember(Name = "autoOpenFullscreen", Order = 15)]
+    public bool AutoOpenFullscreen { get; set; }
+
+    [DataMember(Name = "assignedDisplayId", Order = 16)]
     public string AssignedDisplayId { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayName", Order = 16)]
+    [DataMember(Name = "assignedDisplayName", Order = 17)]
     public string AssignedDisplayName { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayAddress", Order = 17)]
+    [DataMember(Name = "assignedDisplayAddress", Order = 18)]
     public string AssignedDisplayAddress { get; set; } = string.Empty;
 }
 
