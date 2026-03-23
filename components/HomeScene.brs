@@ -1047,6 +1047,7 @@ sub onPreviewRefreshTimerFire()
 end sub
 
 sub onFullscreenStreamTimerFire()
+    loadWindows(true)
     refreshFullscreenPreview()
 end sub
 

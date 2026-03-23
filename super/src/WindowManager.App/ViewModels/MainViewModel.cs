@@ -2863,6 +2863,7 @@ public sealed class MainViewModel : ViewModelBase
         else
         {
             item.IsPrimaryExclusive = false;
+            await ApplyStreamWindowRuntimeStateAsync(stream, item);
         }
 
         await SaveProfileInternalAsync(updateStatus: false);
