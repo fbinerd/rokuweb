@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
+using WindowManager.App.Runtime.Discovery;
 using WindowManager.Core.Models;
 
 namespace WindowManager.App.ViewModels;
@@ -13,10 +15,26 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
     private DisplayTarget? _selectedAvailableTarget;
     private TvProfileTargetEditorViewModel? _selectedIncludedTarget;
     private DisplayTarget? _selectedAssociationTarget;
+    private bool _isRefreshingTargets;
+    private readonly Func<Task<IReadOnlyList<DisplayTarget>>>? _refreshTargetsAsync;
+    private readonly Func<DisplayTarget, Task<DisplayTarget>>? _resolveCurrentTargetAsync;
 
-    public TvProfileSetupViewModel(IEnumerable<DisplayTarget> targets, TvProfileViewModel? existingProfile = null)
+    public TvProfileSetupViewModel(
+        IEnumerable<DisplayTarget> targets,
+        TvProfileViewModel? existingProfile = null,
+        Func<Task<IReadOnlyList<DisplayTarget>>>? refreshTargetsAsync = null,
+        Func<DisplayTarget, Task<DisplayTarget>>? resolveCurrentTargetAsync = null)
     {
-        AvailableTargets = new ObservableCollection<DisplayTarget>(targets.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase));
+        _refreshTargetsAsync = refreshTargetsAsync;
+        _resolveCurrentTargetAsync = resolveCurrentTargetAsync;
+        AvailableTargets = new ObservableCollection<DisplayTarget>();
+        ReplaceAvailableTargets(targets);
+        ProfileName = string.Empty;
+        ManualIp = string.Empty;
+        SelectedAvailableTarget = null;
+        SelectedIncludedTarget = null;
+        SelectedAssociationTarget = null;
+        IncludedTargets.Clear();
 
         if (existingProfile is not null)
         {
@@ -30,11 +48,14 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
                     NetworkAddress = target.NetworkAddress,
                     DeviceUniqueId = target.DeviceUniqueId,
                     MacAddress = target.MacAddress,
+                    AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
                     DiscoverySource = target.DiscoverySource,
                     NativeWidth = target.NativeWidth,
                     NativeHeight = target.NativeHeight
                 });
             }
+
+            SelectedIncludedTarget = IncludedTargets.FirstOrDefault();
         }
     }
 
@@ -72,6 +93,32 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
         set => SetProperty(ref _selectedAssociationTarget, value);
     }
 
+    public bool IsRefreshingTargets
+    {
+        get => _isRefreshingTargets;
+        set => SetProperty(ref _isRefreshingTargets, value);
+    }
+
+    public async Task RefreshAvailableTargetsAsync()
+    {
+        if (_refreshTargetsAsync is null)
+        {
+            return;
+        }
+
+        IsRefreshingTargets = true;
+        try
+        {
+            var refreshedTargets = await _refreshTargetsAsync();
+            ReplaceAvailableTargets(refreshedTargets);
+            await ReconcileIncludedTargetAsync();
+        }
+        finally
+        {
+            IsRefreshingTargets = false;
+        }
+    }
+
     public void AddSelectedTarget()
     {
         if (SelectedAvailableTarget is null)
@@ -79,14 +126,7 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             return;
         }
 
-        if (IncludedTargets.Any(x =>
-                x.DisplayTargetId == SelectedAvailableTarget.Id ||
-                (!string.IsNullOrWhiteSpace(x.NetworkAddress) &&
-                 string.Equals(x.NetworkAddress, SelectedAvailableTarget.NetworkAddress, StringComparison.OrdinalIgnoreCase))))
-        {
-            return;
-        }
-
+        IncludedTargets.Clear();
         IncludedTargets.Add(new TvProfileTargetEditorViewModel
         {
             DisplayTargetId = SelectedAvailableTarget.Id,
@@ -109,12 +149,7 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             return false;
         }
 
-        if (IncludedTargets.Any(x => string.Equals(x.NetworkAddress, manualIp, StringComparison.OrdinalIgnoreCase)))
-        {
-            ManualIp = string.Empty;
-            return false;
-        }
-
+        IncludedTargets.Clear();
         IncludedTargets.Add(new TvProfileTargetEditorViewModel
         {
             DisplayTargetId = Guid.Empty,
@@ -140,6 +175,9 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
 
         var macsToMerge = new[] { SelectedIncludedTarget.MacAddress }
             .Concat(SelectedIncludedTarget.AlternateMacAddresses ?? Enumerable.Empty<string>())
+            .Concat(new[] { SelectedAssociationTarget.MacAddress })
+            .Concat(SelectedAssociationTarget.AlternateMacAddresses ?? Enumerable.Empty<string>())
+            .Select(MacAddressFormatter.Normalize)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -149,26 +187,14 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(SelectedAssociationTarget.MacAddress))
-        {
-            macsToMerge.Add(SelectedAssociationTarget.MacAddress);
-        }
-
-        macsToMerge.AddRange(SelectedAssociationTarget.AlternateMacAddresses ?? Enumerable.Empty<string>());
-        var mergedMacs = macsToMerge
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
         SelectedIncludedTarget.DisplayTargetId = SelectedAssociationTarget.Id;
         SelectedIncludedTarget.DisplayName = SelectedAssociationTarget.Name;
         SelectedIncludedTarget.NetworkAddress = SelectedAssociationTarget.NetworkAddress;
         SelectedIncludedTarget.DeviceUniqueId = SelectedAssociationTarget.DeviceUniqueId;
         SelectedIncludedTarget.MacAddress = string.IsNullOrWhiteSpace(SelectedAssociationTarget.MacAddress)
-            ? mergedMacs.FirstOrDefault() ?? string.Empty
+            ? macsToMerge.FirstOrDefault() ?? string.Empty
             : SelectedAssociationTarget.MacAddress;
-        SelectedIncludedTarget.AlternateMacAddresses = mergedMacs
+        SelectedIncludedTarget.AlternateMacAddresses = macsToMerge
             .Where(x => !string.Equals(x, SelectedIncludedTarget.MacAddress, StringComparison.OrdinalIgnoreCase))
             .ToList();
         SelectedIncludedTarget.DiscoverySource = SelectedAssociationTarget.DiscoverySource;
@@ -187,13 +213,63 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
         IncludedTargets.Remove(SelectedIncludedTarget);
         SelectedIncludedTarget = IncludedTargets.FirstOrDefault();
     }
+
+    private void ReplaceAvailableTargets(IEnumerable<DisplayTarget> targets)
+    {
+        var selectedAvailableId = SelectedAvailableTarget?.Id;
+        var selectedAssociationId = SelectedAssociationTarget?.Id;
+
+        AvailableTargets.Clear();
+        foreach (var target in targets.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            AvailableTargets.Add(target);
+        }
+
+        SelectedAvailableTarget = selectedAvailableId is null
+            ? null
+            : AvailableTargets.FirstOrDefault(x => x.Id == selectedAvailableId.Value);
+        SelectedAssociationTarget = selectedAssociationId is null
+            ? null
+            : AvailableTargets.FirstOrDefault(x => x.Id == selectedAssociationId.Value);
+    }
+
+    private async Task ReconcileIncludedTargetAsync()
+    {
+        if (_resolveCurrentTargetAsync is null || SelectedIncludedTarget is null)
+        {
+            return;
+        }
+
+        var resolved = await _resolveCurrentTargetAsync(new DisplayTarget
+        {
+            Id = SelectedIncludedTarget.DisplayTargetId,
+            Name = SelectedIncludedTarget.DisplayName,
+            NetworkAddress = SelectedIncludedTarget.NetworkAddress,
+            DeviceUniqueId = SelectedIncludedTarget.DeviceUniqueId,
+            MacAddress = SelectedIncludedTarget.MacAddress,
+            AlternateMacAddresses = SelectedIncludedTarget.AlternateMacAddresses.ToList(),
+            DiscoverySource = SelectedIncludedTarget.DiscoverySource,
+            NativeWidth = SelectedIncludedTarget.NativeWidth,
+            NativeHeight = SelectedIncludedTarget.NativeHeight,
+            TransportKind = DisplayTransportKind.LanStreaming,
+            IsStaticTarget = true
+        });
+
+        SelectedIncludedTarget.DisplayTargetId = resolved.Id;
+        SelectedIncludedTarget.DisplayName = resolved.Name;
+        SelectedIncludedTarget.NetworkAddress = resolved.NetworkAddress;
+        SelectedIncludedTarget.DeviceUniqueId = resolved.DeviceUniqueId;
+        SelectedIncludedTarget.MacAddress = resolved.MacAddress;
+        SelectedIncludedTarget.AlternateMacAddresses = resolved.AlternateMacAddresses.ToList();
+        SelectedIncludedTarget.DiscoverySource = resolved.DiscoverySource;
+        SelectedIncludedTarget.NativeWidth = resolved.NativeWidth;
+        SelectedIncludedTarget.NativeHeight = resolved.NativeHeight;
+    }
 }
 
 public sealed class WindowProfileSetupViewModel : ViewModelBase
 {
     private string _profileName = string.Empty;
-    private string _nickname = string.Empty;
-    private string _url = string.Empty;
     private TvProfileViewModel? _selectedTvProfile;
     private WindowLinkEditorViewModel? _selectedWindow;
 
@@ -203,14 +279,23 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
         if (existingProfile is not null)
         {
+            EditingProfileId = existingProfile.Id;
             ProfileName = existingProfile.Name;
-            foreach (var window in existingProfile.Windows)
+            foreach (var window in GetDistinctWindows(
+                existingProfile.Windows.Select(x => new WindowLinkEditorViewModel
+                {
+                    Id = x.Id,
+                    Nickname = x.Nickname,
+                    Url = x.Url
+                })))
             {
                 Windows.Add(new WindowLinkEditorViewModel
                 {
                     Id = window.Id,
                     Nickname = window.Nickname,
-                    Url = window.Url
+                    Url = window.Url,
+                    IsEnabled = window.IsEnabled,
+                    Number = Windows.Count + 1
                 });
             }
 
@@ -222,22 +307,17 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
     public ObservableCollection<WindowLinkEditorViewModel> Windows { get; } = new ObservableCollection<WindowLinkEditorViewModel>();
 
+    public Guid? EditingProfileId { get; }
+
+    public IReadOnlyList<WindowLinkEditorViewModel> GetDistinctWindowDefinitions()
+    {
+        return GetDistinctWindows(Windows).ToList();
+    }
+
     public string ProfileName
     {
         get => _profileName;
         set => SetProperty(ref _profileName, value);
-    }
-
-    public string Nickname
-    {
-        get => _nickname;
-        set => SetProperty(ref _nickname, value);
-    }
-
-    public string Url
-    {
-        get => _url;
-        set => SetProperty(ref _url, value);
     }
 
     public TvProfileViewModel? SelectedTvProfile
@@ -252,25 +332,38 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
         set => SetProperty(ref _selectedWindow, value);
     }
 
-    public bool AddWindow()
+    public void AddOrUpdateWindow(string? nickname, string? url, WindowLinkEditorViewModel? existingWindow = null)
     {
-        var nickname = Nickname?.Trim() ?? string.Empty;
-        var url = Url?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(nickname) || string.IsNullOrWhiteSpace(url))
+        var normalizedUrl = url?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedUrl))
         {
-            return false;
+            return;
         }
 
-        Windows.Add(new WindowLinkEditorViewModel
+        var normalizedNickname = nickname?.Trim() ?? string.Empty;
+        var resolvedNickname = string.IsNullOrWhiteSpace(normalizedNickname)
+            ? GetNextDefaultWindowNickname()
+            : normalizedNickname;
+
+        if (existingWindow is not null)
+        {
+            existingWindow.Nickname = resolvedNickname;
+            existingWindow.Url = normalizedUrl;
+            SelectedWindow = existingWindow;
+            return;
+        }
+
+        var window = new WindowLinkEditorViewModel
         {
             Id = Guid.NewGuid(),
-            Nickname = nickname,
-            Url = url
-        });
+            Nickname = resolvedNickname,
+            Url = normalizedUrl,
+            Number = Windows.Count + 1
+        };
 
-        Nickname = string.Empty;
-        Url = string.Empty;
-        return true;
+        Windows.Add(window);
+        SelectedWindow = window;
+        RenumberWindows();
     }
 
     public void RemoveSelectedWindow()
@@ -282,6 +375,70 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
         Windows.Remove(SelectedWindow);
         SelectedWindow = Windows.FirstOrDefault();
+        RenumberWindows();
+    }
+
+    private string GetNextDefaultWindowNickname()
+    {
+        var usedNumbers = Windows
+            .Select(x => x.Nickname?.Trim() ?? string.Empty)
+            .Where(x => x.StartsWith("Janela ", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Substring(7))
+            .Select(x => int.TryParse(x, out var number) ? number : -1)
+            .Where(x => x > 0)
+            .ToHashSet();
+
+        var next = 1;
+        while (usedNumbers.Contains(next))
+        {
+            next++;
+        }
+
+        return string.Format("Janela {0}", next);
+    }
+
+    private void RenumberWindows()
+    {
+        for (var index = 0; index < Windows.Count; index++)
+        {
+            Windows[index].Number = index + 1;
+        }
+    }
+
+    private static IEnumerable<WindowLinkEditorViewModel> GetDistinctWindows(IEnumerable<WindowLinkEditorViewModel> windows)
+    {
+        var seenIds = new HashSet<Guid>();
+        var seenFallbacks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var window in windows)
+        {
+            if (window is null)
+            {
+                continue;
+            }
+
+            if (window.Id != Guid.Empty)
+            {
+                if (!seenIds.Add(window.Id))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                var fallbackKey = string.Format(
+                    "{0}|{1}",
+                    window.Nickname?.Trim() ?? string.Empty,
+                    window.Url?.Trim() ?? string.Empty);
+
+                if (!seenFallbacks.Add(fallbackKey))
+                {
+                    continue;
+                }
+            }
+
+            yield return window;
+        }
     }
 }
 
@@ -326,7 +483,8 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
         get => _macAddress;
         set
         {
-            if (SetProperty(ref _macAddress, value))
+            var normalized = MacAddressFormatter.Normalize(value);
+            if (SetProperty(ref _macAddress, normalized))
             {
                 RaisePropertyChanged(nameof(MacSummary));
             }
@@ -338,7 +496,8 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
         get => _alternateMacAddresses;
         set
         {
-            if (SetProperty(ref _alternateMacAddresses, value ?? new List<string>()))
+            var normalized = MacAddressFormatter.NormalizeMany(value);
+            if (SetProperty(ref _alternateMacAddresses, normalized))
             {
                 RaisePropertyChanged(nameof(MacSummary));
             }
@@ -349,11 +508,7 @@ public sealed class TvProfileTargetEditorViewModel : ViewModelBase
     {
         get
         {
-            var macs = new[] { MacAddress }
-                .Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var macs = MacAddressFormatter.NormalizeMany(new[] { MacAddress }.Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())).ToArray();
             return macs.Length == 0 ? "MAC nao identificado" : string.Join(", ", macs);
         }
     }
@@ -396,12 +551,52 @@ public sealed class WindowLinkEditorViewModel : ViewModelBase
     private Guid _id;
     private string _nickname = string.Empty;
     private string _url = string.Empty;
+    private int _number;
+    private bool _isEnabled;
 
     public Guid Id
     {
         get => _id;
         set => SetProperty(ref _id, value);
     }
+
+    public string Nickname
+    {
+        get => _nickname;
+        set => SetProperty(ref _nickname, value);
+    }
+
+    public string Url
+    {
+        get => _url;
+        set => SetProperty(ref _url, value);
+    }
+
+    public int Number
+    {
+        get => _number;
+        set
+        {
+            if (SetProperty(ref _number, value))
+            {
+                RaisePropertyChanged(nameof(NumberLabel));
+            }
+        }
+    }
+
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        set => SetProperty(ref _isEnabled, value);
+    }
+
+    public string NumberLabel => Number <= 0 ? string.Empty : Number.ToString();
+}
+
+public sealed class StreamWindowEditorViewModel : ViewModelBase
+{
+    private string _nickname = string.Empty;
+    private string _url = string.Empty;
 
     public string Nickname
     {

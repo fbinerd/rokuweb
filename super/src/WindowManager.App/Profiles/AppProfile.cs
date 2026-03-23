@@ -44,6 +44,9 @@ public sealed class AppProfile
 
     [DataMember(Order = 12)]
     public List<WindowGroupProfile> WindowProfiles { get; set; } = new List<WindowGroupProfile>();
+
+    [DataMember(Order = 13)]
+    public List<ActiveSessionRecord> ActiveSessions { get; set; } = new List<ActiveSessionRecord>();
 }
 
 [DataContract]
@@ -262,4 +265,7 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 3)]
     public string Url { get; set; } = string.Empty;
+
+    [DataMember(Order = 4)]
+    public bool IsEnabled { get; set; }
 }

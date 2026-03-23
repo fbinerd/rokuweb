@@ -46,6 +46,12 @@ public sealed class ProfileStore
             return Task.FromResult(defaultProfileName);
         }
 
+        var lastProfileName = ReadProfileNameFromFile(_lastProfileFilePath);
+        if (!string.IsNullOrWhiteSpace(lastProfileName))
+        {
+            return Task.FromResult(lastProfileName);
+        }
+
         return Task.FromResult("default");
     }
 

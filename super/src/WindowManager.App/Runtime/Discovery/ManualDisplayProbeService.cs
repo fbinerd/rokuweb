@@ -79,7 +79,7 @@ public sealed class ManualDisplayProbeService
                     Name = friendlyName,
                     NetworkAddress = address,
                     LastKnownNetworkAddress = address,
-                    MacAddress = FirstNonEmpty(wifiMac, ethernetMac, ipAddress is null ? string.Empty : TryResolveMacAddress(ipAddress)),
+                    MacAddress = MacAddressFormatter.Normalize(FirstNonEmpty(wifiMac, ethernetMac, ipAddress is null ? string.Empty : TryResolveMacAddress(ipAddress))),
                     DeviceUniqueId = uniqueId,
                     DiscoverySource = string.Format("TV detectada manualmente ({0} {1})", vendorName, modelName).Trim(),
                     TransportKind = DisplayTransportKind.LanStreaming,

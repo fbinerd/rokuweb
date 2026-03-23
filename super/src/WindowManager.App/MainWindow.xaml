@@ -9,6 +9,19 @@
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <Style TargetType="Button">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="MinHeight" Value="28" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="28" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="28" />
+        </Style>
     </Window.Resources>
     <Grid Margin="16">
         <Grid.ColumnDefinitions>
@@ -42,9 +55,10 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <GroupBox Header="Perfil">
+                <GroupBox Header="Base de configuracao">
                     <Grid Margin="12">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -56,106 +70,178 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBox Grid.Column="0"
-                                 Height="34"
+                        <TextBlock Grid.ColumnSpan="4"
+                                   Text="Cada perfil representa uma base de configuracao independente. O perfil de fabrica e o 'default'. Todas as alteracoes do programa ficam salvas no perfil selecionado."
+                                   TextWrapping="Wrap"
+                                   Foreground="#334155" />
+
+                        <TextBox Grid.Row="1"
+                                 Grid.Column="0"
+                                 Margin="0,10,0,0"
+                                 Height="28"
                                  VerticalContentAlignment="Center"
                                  Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <Button Grid.Column="1"
-                                Margin="8,0,0,0"
-                                Width="80"
-                                Height="34"
+                        <Button Grid.Row="1"
+                                Grid.Column="1"
+                                Margin="8,10,0,0"
+                                Width="68"
+                                Height="28"
                                 Content="Salvar"
                                 Command="{Binding SaveProfileCommand}" />
 
-                        <Button Grid.Column="2"
-                                Margin="8,0,0,0"
-                                Width="80"
-                                Height="34"
+                        <Button Grid.Row="1"
+                                Grid.Column="2"
+                                Margin="8,10,0,0"
+                                Width="72"
+                                Height="28"
                                 Content="Carregar"
                                 Command="{Binding LoadProfileCommand}" />
 
-                        <Button Grid.Column="3"
-                                Margin="8,0,0,0"
-                                Width="80"
-                                Height="34"
+                        <Button Grid.Row="1"
+                                Grid.Column="3"
+                                Margin="8,10,0,0"
+                                Width="64"
+                                Height="28"
                                 Content="Excluir"
                                 Command="{Binding DeleteProfileCommand}" />
 
-                        <ComboBox Grid.Row="1"
+                        <ComboBox Grid.Row="2"
                                   Grid.ColumnSpan="4"
-                                  Margin="0,12,0,0"
-                                  Height="34"
+                                  Margin="0,10,0,0"
+                                  Height="28"
                                   ItemsSource="{Binding AvailableProfiles}"
                                   SelectedItem="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <Grid Grid.Row="2" Grid.ColumnSpan="4" Margin="0,12,0,0">
+                        <Grid Grid.Row="3" Grid.ColumnSpan="4" Margin="0,10,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock VerticalAlignment="Center"
+                            <TextBlock Grid.Column="0"
+                                       VerticalAlignment="Center"
                                        Text="{Binding IsDefaultProfile, StringFormat=Perfil padrao ativo: {0}}" />
 
                             <Button Grid.Column="1"
                                     Margin="8,0,0,0"
-                                    Width="140"
-                                    Height="34"
+                                    Width="108"
+                                    Height="28"
                                     Content="Definir padrao"
                                     Command="{Binding SetDefaultProfileCommand}" />
+
+                            <Button Grid.Row="1"
+                                    Grid.Column="0"
+                                    Margin="0,10,0,0"
+                                    Height="28"
+                                    Content="Salvar backup"
+                                    Click="OnExportApplicationDataClick" />
+
+                            <Button Grid.Row="1"
+                                    Grid.Column="1"
+                                    Margin="8,10,0,0"
+                                    Width="118"
+                                    Height="28"
+                                    Content="Restaurar backup"
+                                    Click="OnImportApplicationDataClick" />
+
+                            <Button Grid.Row="1"
+                                    Grid.Column="2"
+                                    Margin="8,10,0,0"
+                                    Width="104"
+                                    Height="28"
+                                    Content="Resetar base"
+                                    Click="OnResetApplicationDataClick" />
                         </Grid>
                     </Grid>
                 </GroupBox>
 
                 <GroupBox Header="Setup TV" Margin="0,12,0,0">
                     <StackPanel Margin="12">
-                        <TextBlock Text="Crie um perfil de TVs escolhendo os aparelhos disponiveis ou inserindo um IP manual quando a TV nao aparecer."
+                        <TextBlock Text="Crie um perfil de TV escolhendo a TV base do perfil ou inserindo um IP manual quando ela nao aparecer."
                                    TextWrapping="Wrap" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Setup TV"
-                                Click="OnOpenTvProfileSetupClick" />
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Width="40"
+                                    Height="34"
+                                    FontSize="18"
+                                    Content="+"
+                                    Click="OnOpenTvProfileSetupClick" />
+                            <Button Grid.Column="2"
+                                    Width="40"
+                                    Height="34"
+                                    FontSize="18"
+                                    Content="-"
+                                    Command="{Binding DeleteSelectedTvProfileCommand}" />
+                        </Grid>
                         <ListBox Margin="0,12,0,0"
                                  Height="180"
                                  ItemsSource="{Binding TvProfiles}"
-                                 SelectedItem="{Binding SelectedTvProfile}">
+                                 SelectedItem="{Binding SelectedTvProfile}"
+                                 MouseDoubleClick="OnEditSelectedTvProfileDoubleClick">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Margin="0,4">
                                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                                         <TextBlock Margin="0,2,0,0"
-                                                   Text="{Binding Targets.Count, StringFormat=TVs no grupo: {0}}"
+                                                   Text="{Binding PrimaryDisplayName, StringFormat=TV base: {0}}"
                                                    Foreground="#334155" />
+                                        <TextBlock Margin="0,1,0,0"
+                                                   Text="{Binding PrimaryNetworkAddress, StringFormat=IP: {0}}"
+                                                   Foreground="DimGray" />
                                     </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Excluir perfil de TV selecionado"
-                                Command="{Binding DeleteSelectedTvProfileCommand}" />
                     </StackPanel>
                 </GroupBox>
 
-                <GroupBox Header="Setup Janelas" Margin="0,12,0,0">
+                <GroupBox Header="Setup Stream" Margin="0,12,0,0">
                     <StackPanel Margin="12">
-                        <TextBlock Text="Monte um grupo de janelas com nickname e link. No final, atribua um perfil de TV para concluir a configuracao."
+                        <TextBlock Text="Crie um stream de janelas CEF com nickname, escolha o perfil de TV de destino e defina as janelas 1, 2, 3..."
                                    TextWrapping="Wrap" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Setup Janelas"
-                                Click="OnOpenWindowProfileSetupClick" />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Width="40"
+                                    Height="28"
+                                    FontSize="18"
+                                    Content="+"
+                                    Click="OnOpenWindowProfileSetupClick" />
+                            <Button Grid.Column="2"
+                                    Width="40"
+                                    Height="28"
+                                    FontSize="18"
+                                    Content="-"
+                                    Command="{Binding DeleteSelectedWindowProfileCommand}" />
+                        </Grid>
                         <ListBox Margin="0,12,0,0"
+                                 x:Name="StreamProfilesListBox"
                                  Height="180"
                                  ItemsSource="{Binding WindowProfiles}"
-                                 SelectedItem="{Binding SelectedWindowProfile}">
+                                 SelectedItem="{Binding SelectedWindowProfile}"
+                                 MouseDoubleClick="OnEditSelectedWindowProfileDoubleClick">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Margin="0,4">
                                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                                         <TextBlock Margin="0,2,0,0"
-                                                   Text="{Binding Windows.Count, StringFormat=Janelas no grupo: {0}}"
+                                                   Text="{Binding Windows.Count, StringFormat=Janelas no stream: {0}}"
                                                    Foreground="#334155" />
                                         <TextBlock Margin="0,1,0,0"
                                                    Text="{Binding AssignedTvProfileName, StringFormat=Perfil de TV: {0}}"
@@ -164,20 +250,16 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Excluir perfil de janelas selecionado"
-                                Command="{Binding DeleteSelectedWindowProfileCommand}" />
                     </StackPanel>
                 </GroupBox>
 
                 <GroupBox Header="Execucao e Sessoes Ativas" Margin="0,12,0,0">
                     <StackPanel Margin="12">
-                        <TextBlock Text="Selecione um perfil de janelas ja configurado. Ele usara o perfil de TV associado para abrir uma sessao simultanea."
+                        <TextBlock Text="Selecione um stream ja configurado. Ele usara o perfil de TV associado para abrir uma sessao simultanea."
                                    TextWrapping="Wrap" />
                         <Button Margin="0,12,0,0"
                                 Height="34"
-                                Content="Criar sessao da configuracao selecionada"
+                                Content="Criar sessao do stream selecionado"
                                 Command="{Binding CreateSessionFromWindowProfileCommand}" />
                         <ListBox Margin="0,12,0,0"
                                  Height="220"
@@ -340,25 +422,6 @@
                                     Content="Desligar TVs Roku"
                                     Command="{Binding PowerOffConnectedRokusCommand}" />
                         </Grid>
-                    </StackPanel>
-                </GroupBox>
-
-                <GroupBox Header="Base Local" Margin="0,12,0,0">
-                    <StackPanel Margin="12">
-                        <TextBlock Text="Use estas acoes para testar backup, restauracao e reset da base local do aplicativo."
-                                   TextWrapping="Wrap" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Salvar backup da base"
-                                Click="OnExportApplicationDataClick" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Restaurar backup da base"
-                                Click="OnImportApplicationDataClick" />
-                        <Button Margin="0,12,0,0"
-                                Height="34"
-                                Content="Resetar base local"
-                                Click="OnResetApplicationDataClick" />
                     </StackPanel>
                 </GroupBox>
 
@@ -589,9 +652,9 @@
         </ScrollViewer>
 
         <Grid Grid.Row="1" Grid.Column="2">
-            <GroupBox Header="Painel Simultaneo">
+            <GroupBox Header="Streams">
                 <ScrollViewer Margin="12" VerticalScrollBarVisibility="Auto">
-                    <WrapPanel x:Name="PreviewPanel" ItemWidth="360" ItemHeight="260" />
+                    <StackPanel x:Name="StreamPreviewSectionsHost" />
                 </ScrollViewer>
             </GroupBox>
 

@@ -61,11 +61,7 @@ public sealed class DisplayTarget
             var source = DiscoverySource;
             var transport = GetTransportLabel();
             var staticLabel = IsStaticTarget ? "Estatica" : string.Empty;
-            var macs = new[] { MacAddress }
-                .Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var macs = MacAddressFormatter.NormalizeMany(new[] { MacAddress }.Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())).ToArray();
             var macLabel = macs.Length == 0 ? string.Empty : string.Format("MAC {0}", string.Join(", ", macs));
 
             if (!string.IsNullOrWhiteSpace(staticLabel) && !string.IsNullOrWhiteSpace(macLabel))

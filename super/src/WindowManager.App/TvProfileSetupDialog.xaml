@@ -6,7 +6,11 @@
         Height="680"
         MinWidth="840"
         MinHeight="620"
+        Loaded="OnLoaded"
         WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    </Window.Resources>
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -32,11 +36,30 @@
             <GroupBox Header="TVs disponiveis">
                 <Grid Margin="12">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <ListBox ItemsSource="{Binding AvailableTargets}"
+                    <Button Height="34"
+                            Content="Redescobrir TVs"
+                            Click="OnRefreshTargetsClick" />
+
+                    <StackPanel Margin="0,12,0,0"
+                                Grid.Row="1"
+                                Orientation="Vertical"
+                                Visibility="{Binding IsRefreshingTargets, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="Buscando TVs disponiveis..."
+                                   Foreground="#334155"
+                                   Margin="0,0,0,8" />
+                        <ProgressBar Height="6"
+                                     IsIndeterminate="True" />
+                    </StackPanel>
+
+                    <ListBox Grid.Row="2"
+                             Margin="0,12,0,0"
+                             ItemsSource="{Binding AvailableTargets}"
                              SelectedItem="{Binding SelectedAvailableTarget}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
@@ -49,15 +72,15 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <Button Grid.Row="1"
+                    <Button Grid.Row="3"
                             Margin="0,12,0,0"
                             Height="34"
-                            Content="Adicionar TV selecionada"
+                            Content="Definir TV selecionada"
                             Click="OnAddSelectedTargetClick" />
                 </Grid>
             </GroupBox>
 
-            <GroupBox Grid.Column="2" Header="Grupo de TVs">
+            <GroupBox Grid.Column="2" Header="TV do Perfil">
                 <Grid Margin="12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -72,7 +95,7 @@
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.ColumnSpan="2"
-                               Text="Se a TV nao aparecer, informe o IP manualmente."
+                               Text="Selecione a TV base do perfil. Se ela nao aparecer, informe o IP manualmente."
                                TextWrapping="Wrap" />
                     <TextBox Grid.Row="1"
                              Margin="0,8,8,0"
@@ -83,7 +106,7 @@
                             Grid.Column="1"
                             Margin="0,8,0,0"
                             Height="34"
-                            Content="Inserir IP"
+                            Content="Usar IP"
                             Click="OnAddManualIpClick" />
 
                     <ListBox Grid.Row="2"
@@ -107,7 +130,7 @@
                     <StackPanel Grid.Row="3"
                                 Grid.ColumnSpan="2"
                                 Margin="0,12,0,0">
-                        <TextBlock Text="Associar a TV selecionada a outra TV conhecida"
+                        <TextBlock Text="Associar MAC adicional a esta TV"
                                    FontWeight="SemiBold" />
                         <ComboBox Margin="0,8,0,0"
                                   Height="34"
@@ -124,7 +147,7 @@
                         </ComboBox>
                         <Button Margin="0,8,0,0"
                                 Height="34"
-                                Content="Associar MAC da TV selecionada"
+                                Content="Associar MAC a esta TV"
                                 Click="OnAssociateTargetClick" />
                     </StackPanel>
 
@@ -132,7 +155,7 @@
                             Grid.ColumnSpan="2"
                             Margin="0,12,0,0"
                             Height="34"
-                            Content="Remover TV selecionada"
+                            Content="Limpar TV do perfil"
                             Click="OnRemoveIncludedTargetClick" />
                 </Grid>
             </GroupBox>

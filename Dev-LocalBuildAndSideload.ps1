@@ -20,6 +20,7 @@ $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\S
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
+$desktopShortcutPath = Join-Path $env:USERPROFILE "Desktop\SuperPainel Local.lnk"
 
 function Invoke-Step {
     param(
@@ -206,6 +207,34 @@ function Reset-SuperLocalData {
     Write-Host ("Base local resetada em: {0}" -f $DataRoot)
 }
 
+function Update-SuperDesktopShortcut {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExePath,
+        [Parameter(Mandatory = $true)]
+        [string]$ShortcutPath
+    )
+
+    if (-not (Test-Path $ExePath)) {
+        throw "Executavel nao encontrado para criar atalho: $ExePath"
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $ExePath
+        $shortcut.WorkingDirectory = Split-Path -Parent $ExePath
+        $shortcut.IconLocation = "$ExePath,0"
+        $shortcut.Description = "SuperPainel local do repositorio rokuweb"
+        $shortcut.Save()
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+    }
+
+    Write-Host ("Atalho atualizado em: {0}" -f $ShortcutPath)
+}
+
 if ($ResetLocalData) {
     Invoke-Step -Label "Resetar base local do SuperPainel" -Action {
         Reset-SuperLocalData -DataRoot $superDataRoot
@@ -240,6 +269,10 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao empacotar local-roku.zip."
     }
+}
+
+Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
+    Update-SuperDesktopShortcut -ExePath $superExePath -ShortcutPath $desktopShortcutPath
 }
 
 if ($LaunchSuper) {
