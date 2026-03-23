@@ -52,6 +52,27 @@ public sealed class BrowserSnapshotService
         _cursorStates.TryRemove(windowId, out _);
     }
 
+    public bool IsRegistered(Guid windowId)
+    {
+        return _browsers.ContainsKey(windowId);
+    }
+
+    public void NavigateRegisteredBrowser(Guid windowId, Uri uri)
+    {
+        if (!_browsers.TryGetValue(windowId, out var browser))
+        {
+            return;
+        }
+
+        _ = browser.Dispatcher.InvokeAsync(() =>
+        {
+            if (!string.Equals(browser.Address, uri.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                browser.Address = uri.ToString();
+            }
+        });
+    }
+
     public void InvalidateCapture(Guid windowId)
     {
         _cachedFrames.TryRemove(windowId, out _);

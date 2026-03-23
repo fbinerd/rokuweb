@@ -4,6 +4,7 @@ param(
     [string]$RokuPassword = "1234",
     [switch]$LaunchSuper,
     [switch]$LaunchRokuApp,
+    [switch]$ResetLocalData,
     [switch]$SkipSideload,
     [switch]$UseSyntheticPanelAudio
 )
@@ -16,8 +17,11 @@ Add-Type -AssemblyName System.Net.Http
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
+$superWatchdogScriptPath = Join-Path $repoRoot "Run-SuperPainelWatchdog.ps1"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
+$superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
+$desktopShortcutPath = Join-Path $env:USERPROFILE "Desktop\SuperPainel Local.lnk"
 
 function Invoke-Step {
     param(
@@ -179,6 +183,70 @@ function Test-TcpEndpoint {
     }
 }
 
+function Reset-SuperLocalData {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DataRoot
+    )
+
+    if (-not (Test-Path $DataRoot)) {
+        Write-Host "Base local inexistente; nada para resetar."
+        return
+    }
+
+    Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+
+    Get-ChildItem -Path $DataRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.PSIsContainer -and $_.Name -ieq "cef") {
+            return
+        }
+
+        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host ("Base local resetada em: {0}" -f $DataRoot)
+}
+
+function Update-SuperDesktopShortcut {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ShortcutPath,
+        [Parameter(Mandatory = $false)]
+        [string]$Arguments = "",
+        [Parameter(Mandatory = $false)]
+        [string]$WorkingDirectory = ""
+    )
+
+    if (-not (Test-Path $TargetPath)) {
+        throw "Destino nao encontrado para criar atalho: $TargetPath"
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $TargetPath
+        $shortcut.Arguments = $Arguments
+        $shortcut.WorkingDirectory = $(if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { Split-Path -Parent $TargetPath } else { $WorkingDirectory })
+        $shortcut.IconLocation = "$superExePath,0"
+        $shortcut.Description = "SuperPainel local com watchdog automatico"
+        $shortcut.Save()
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+    }
+
+    Write-Host ("Atalho atualizado em: {0}" -f $ShortcutPath)
+}
+
+if ($ResetLocalData) {
+    Invoke-Step -Label "Resetar base local do SuperPainel" -Action {
+        Reset-SuperLocalData -DataRoot $superDataRoot
+    }
+}
+
 Invoke-Step -Label "Compilar super em modo local" -Action {
     $env:SUPER_BUILD_CHANNEL = "local"
     if ($UseSyntheticPanelAudio) {
@@ -209,13 +277,28 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
     }
 }
 
+Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
+    $shortcutArguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$superWatchdogScriptPath`" -ExePath `"$superExePath`""
+    Update-SuperDesktopShortcut `
+        -TargetPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -ShortcutPath $desktopShortcutPath `
+        -Arguments $shortcutArguments `
+        -WorkingDirectory $repoRoot
+}
+
 if ($LaunchSuper) {
     Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        if (-not (Test-Path $superExePath)) {
-            throw "Executavel nao encontrado: $superExePath"
+        if (-not (Test-Path $superWatchdogScriptPath)) {
+            throw "Script watchdog nao encontrado: $superWatchdogScriptPath"
         }
 
-        Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath)
+        Start-Process -FilePath "powershell.exe" -ArgumentList @(
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $superWatchdogScriptPath,
+            "-ExePath", $superExePath
+        ) -WorkingDirectory $repoRoot
     }
 }
 

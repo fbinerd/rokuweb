@@ -80,6 +80,12 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             candidate.LastKnownNetworkAddress = string.IsNullOrWhiteSpace(knownMatch.NetworkAddress)
                 ? knownMatch.LastKnownNetworkAddress
                 : knownMatch.NetworkAddress;
+            candidate.AlternateMacAddresses = GetKnownMacs(knownMatch)
+                .Concat(GetTargetMacs(candidate))
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Where(x => !string.Equals(x, candidate.MacAddress, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             candidate.DiscoverySource = string.Equals(candidate.NetworkAddress, knownMatch.NetworkAddress, StringComparison.OrdinalIgnoreCase)
                 ? "TV real no IP conhecido"
                 : "TV real com IP atualizado";
@@ -94,6 +100,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
                 NetworkAddress = known.NetworkAddress,
                 LastKnownNetworkAddress = known.LastKnownNetworkAddress,
                 MacAddress = known.MacAddress,
+                AlternateMacAddresses = known.AlternateMacAddresses.ToList(),
                 DeviceUniqueId = known.DeviceUniqueId,
                 DiscoverySource = known.IsStaticTarget ? "TV estatica offline" : "Historico offline",
                 TransportKind = known.TransportKind,
@@ -253,7 +260,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             Name = friendlyName,
             NetworkAddress = response.RemoteAddress.ToString(),
             LastKnownNetworkAddress = response.RemoteAddress.ToString(),
-            MacAddress = TryResolveMacAddress(response.RemoteAddress),
+            MacAddress = MacAddressFormatter.Normalize(TryResolveMacAddress(response.RemoteAddress)),
             DeviceUniqueId = uniqueId,
             DiscoverySource = discoverySource,
             TransportKind = transportKind,
@@ -325,9 +332,9 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             return true;
         }
 
-        if (!string.IsNullOrWhiteSpace(known.MacAddress) &&
-            !string.IsNullOrWhiteSpace(target.MacAddress) &&
-            string.Equals(known.MacAddress, target.MacAddress, StringComparison.OrdinalIgnoreCase))
+        var knownMacs = GetKnownMacs(known);
+        var targetMacs = GetTargetMacs(target);
+        if (knownMacs.Count > 0 && targetMacs.Count > 0 && knownMacs.Overlaps(targetMacs))
         {
             return true;
         }
@@ -347,6 +354,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
                 ? target.NetworkAddress
                 : target.LastKnownNetworkAddress,
             MacAddress = target.MacAddress,
+            AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
             DeviceUniqueId = target.DeviceUniqueId,
             DiscoverySource = target.DiscoverySource,
             TransportKind = target.TransportKind,
@@ -364,6 +372,24 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             .ThenByDescending(x => x.WasPreviouslyKnown)
             .ThenBy(x => x.Name)
             .First();
+    }
+
+    private static HashSet<string> GetKnownMacs(KnownDisplayRecord record)
+    {
+        return new[] { record.MacAddress }
+            .Concat(record.AlternateMacAddresses ?? Enumerable.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static HashSet<string> GetTargetMacs(DisplayTarget target)
+    {
+        return new[] { target.MacAddress }
+            .Concat(target.AlternateMacAddresses ?? Enumerable.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool HasReadableDisplayName(string? name)
@@ -781,7 +807,7 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
                     Name = friendlyName,
                     NetworkAddress = address,
                     LastKnownNetworkAddress = address,
-                    MacAddress = FirstNonEmpty(wifiMac, ethernetMac, TryResolveMacAddress(IPAddress.Parse(address))),
+                    MacAddress = MacAddressFormatter.Normalize(FirstNonEmpty(wifiMac, ethernetMac, TryResolveMacAddress(IPAddress.Parse(address)))),
                     DeviceUniqueId = uniqueId,
                     DiscoverySource = string.Format("TV detectada por varredura HTTP ({0} {1})", vendorName, modelName).Trim(),
                     TransportKind = DisplayTransportKind.LanStreaming,

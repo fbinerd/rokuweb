@@ -28,17 +28,24 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IDisplayDiscoveryService _displayDiscoveryService;
     private readonly RoutingService _routingService;
     private readonly ProfileStore _profileStore;
+    private readonly ActiveSessionStore _activeSessionStore;
+    private readonly ManualDisplayProbeService _manualDisplayProbeService;
+    private readonly DisplayIdentityResolverService _displayIdentityResolverService;
     private readonly LocalWebRtcPublisherService _webRtcPublisherService;
     private readonly KnownDisplayStore _knownDisplayStore;
     private readonly AppUpdateManifestService _appUpdateManifestService;
     private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
     private readonly AppSelfUpdateService _appSelfUpdateService;
     private readonly AppDataMaintenanceService _appDataMaintenanceService;
+    private readonly SemaphoreSlim _profileLoadSemaphore = new SemaphoreSlim(1, 1);
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
     private WindowSession? _selectedWindow;
     private DisplayTarget? _selectedTarget;
+    private ActiveSessionViewModel? _selectedActiveSession;
+    private TvProfileViewModel? _selectedTvProfile;
+    private WindowProfileViewModel? _selectedWindowProfile;
     private StaticDisplayPanelViewModel? _selectedStaticPanel;
     private string _profileName = "default";
     private string _browserUrlInput = "https://emei.lovable.app";
@@ -58,12 +65,20 @@ public sealed class MainViewModel : ViewModelBase
     private AppUpdateCheckResult? _lastUpdateCheckResult;
     private string _additionalDiscoveryCidrs = string.Empty;
     private string _selectedUpdateChannel = UpdateChannelNames.Stable;
+    private string _selectedSessionProfileName = "default";
+    private bool _isRestoringActiveSessions;
+    private bool _suppressActiveSessionPersistence;
+    private bool _isInitializingStartup;
+    private bool _isNormalizingWindowProfiles;
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
         IDisplayDiscoveryService displayDiscoveryService,
         RoutingService routingService,
         ProfileStore profileStore,
+        ActiveSessionStore activeSessionStore,
+        ManualDisplayProbeService manualDisplayProbeService,
+        DisplayIdentityResolverService displayIdentityResolverService,
         LocalWebRtcPublisherService webRtcPublisherService,
         KnownDisplayStore knownDisplayStore,
         AppUpdateManifestService appUpdateManifestService,
@@ -75,6 +90,9 @@ public sealed class MainViewModel : ViewModelBase
         _displayDiscoveryService = displayDiscoveryService;
         _routingService = routingService;
         _profileStore = profileStore;
+        _activeSessionStore = activeSessionStore;
+        _manualDisplayProbeService = manualDisplayProbeService;
+        _displayIdentityResolverService = displayIdentityResolverService;
         _webRtcPublisherService = webRtcPublisherService;
         _knownDisplayStore = knownDisplayStore;
         _appUpdateManifestService = appUpdateManifestService;
@@ -86,6 +104,7 @@ public sealed class MainViewModel : ViewModelBase
         WebRtcBindModes = Enum.GetValues(typeof(WebRtcBindMode)).Cast<WebRtcBindMode>().ToArray();
 
         Windows.CollectionChanged += OnWindowsCollectionChanged;
+        WindowProfiles.CollectionChanged += OnWindowProfilesInternalCollectionChanged;
 
         CreateWindowCommand = new AsyncRelayCommand(CreateWindowAsync);
         NavigateSelectedWindowCommand = new AsyncRelayCommand(NavigateSelectedWindowAsync, CanNavigateSelectedWindow);
@@ -108,6 +127,15 @@ public sealed class MainViewModel : ViewModelBase
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
         PowerOnConnectedRokusCommand = new AsyncRelayCommand(PowerOnConnectedRokusAsync);
         PowerOffConnectedRokusCommand = new AsyncRelayCommand(PowerOffConnectedRokusAsync);
+        CreateSessionFromProfileCommand = new AsyncRelayCommand(CreateSessionFromProfileAsync, CanCreateSessionFromProfile);
+        BindSelectedTargetToSessionCommand = new AsyncRelayCommand(BindSelectedTargetToSessionAsync, CanBindSelectedTargetToSession);
+        UnbindSelectedTargetFromSessionCommand = new AsyncRelayCommand(UnbindSelectedTargetFromSessionAsync, CanBindSelectedTargetToSession);
+        RemoveSelectedSessionCommand = new AsyncRelayCommand(RemoveSelectedSessionAsync, CanRemoveSelectedSession);
+        AddSelectedWindowToSessionCommand = new AsyncRelayCommand(AddSelectedWindowToSessionAsync, CanAddSelectedWindowToSession);
+        RemoveSelectedWindowFromSessionCommand = new AsyncRelayCommand(RemoveSelectedWindowFromSessionAsync, CanRemoveSelectedWindowFromSession);
+        CreateSessionFromWindowProfileCommand = new AsyncRelayCommand(CreateSessionFromWindowProfileAsync, CanCreateSessionFromWindowProfile);
+        DeleteSelectedTvProfileCommand = new AsyncRelayCommand(DeleteSelectedTvProfileAsync, CanDeleteSelectedTvProfile);
+        DeleteSelectedWindowProfileCommand = new AsyncRelayCommand(DeleteSelectedWindowProfileAsync, CanDeleteSelectedWindowProfile);
 
         UpdateBridgeSnapshot();
     }
@@ -117,6 +145,14 @@ public sealed class MainViewModel : ViewModelBase
     public ObservableCollection<DisplayTarget> Targets { get; } = new ObservableCollection<DisplayTarget>();
 
     public ObservableCollection<string> AvailableProfiles { get; } = new ObservableCollection<string>();
+
+    public ObservableCollection<ProfileDisplayBindingViewModel> ProfileDisplayBindings { get; } = new ObservableCollection<ProfileDisplayBindingViewModel>();
+
+    public ObservableCollection<ActiveSessionViewModel> ActiveSessions { get; } = new ObservableCollection<ActiveSessionViewModel>();
+
+    public ObservableCollection<TvProfileViewModel> TvProfiles { get; } = new ObservableCollection<TvProfileViewModel>();
+
+    public ObservableCollection<WindowProfileViewModel> WindowProfiles { get; } = new ObservableCollection<WindowProfileViewModel>();
 
     public ObservableCollection<StaticDisplayPanelViewModel> StaticPanels { get; } = new ObservableCollection<StaticDisplayPanelViewModel>();
 
@@ -151,6 +187,15 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
     public AsyncRelayCommand PowerOnConnectedRokusCommand { get; }
     public AsyncRelayCommand PowerOffConnectedRokusCommand { get; }
+    public AsyncRelayCommand CreateSessionFromProfileCommand { get; }
+    public AsyncRelayCommand BindSelectedTargetToSessionCommand { get; }
+    public AsyncRelayCommand UnbindSelectedTargetFromSessionCommand { get; }
+    public AsyncRelayCommand RemoveSelectedSessionCommand { get; }
+    public AsyncRelayCommand AddSelectedWindowToSessionCommand { get; }
+    public AsyncRelayCommand RemoveSelectedWindowFromSessionCommand { get; }
+    public AsyncRelayCommand CreateSessionFromWindowProfileCommand { get; }
+    public AsyncRelayCommand DeleteSelectedTvProfileCommand { get; }
+    public AsyncRelayCommand DeleteSelectedWindowProfileCommand { get; }
 
     public WindowSession? SelectedWindow
     {
@@ -168,6 +213,8 @@ public sealed class MainViewModel : ViewModelBase
                 SaveProfileCommand.RaiseCanExecuteChanged();
                 DeleteSelectedWindowCommand.RaiseCanExecuteChanged();
                 PublishWebRtcCommand.RaiseCanExecuteChanged();
+                AddSelectedWindowToSessionCommand.RaiseCanExecuteChanged();
+                RemoveSelectedWindowFromSessionCommand.RaiseCanExecuteChanged();
                 QueueAutoSave();
             }
         }
@@ -204,6 +251,48 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public ActiveSessionViewModel? SelectedActiveSession
+    {
+        get => _selectedActiveSession;
+        set
+        {
+            if (SetProperty(ref _selectedActiveSession, value))
+            {
+                BindSelectedTargetToSessionCommand.RaiseCanExecuteChanged();
+                UnbindSelectedTargetFromSessionCommand.RaiseCanExecuteChanged();
+                RemoveSelectedSessionCommand.RaiseCanExecuteChanged();
+                AddSelectedWindowToSessionCommand.RaiseCanExecuteChanged();
+                RemoveSelectedWindowFromSessionCommand.RaiseCanExecuteChanged();
+                RaisePropertyChanged(nameof(SelectedActiveSessionSummary));
+            }
+        }
+    }
+
+    public TvProfileViewModel? SelectedTvProfile
+    {
+        get => _selectedTvProfile;
+        set
+        {
+            if (SetProperty(ref _selectedTvProfile, value))
+            {
+                DeleteSelectedTvProfileCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public WindowProfileViewModel? SelectedWindowProfile
+    {
+        get => _selectedWindowProfile;
+        set
+        {
+            if (SetProperty(ref _selectedWindowProfile, value))
+            {
+                CreateSessionFromWindowProfileCommand.RaiseCanExecuteChanged();
+                DeleteSelectedWindowProfileCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
     public string ProfileName
     {
         get => _profileName;
@@ -216,11 +305,27 @@ public sealed class MainViewModel : ViewModelBase
 
             if (SetProperty(ref _profileName, value))
             {
+                if (string.IsNullOrWhiteSpace(SelectedSessionProfileName))
+                {
+                    SelectedSessionProfileName = value;
+                }
                 SaveProfileCommand.RaiseCanExecuteChanged();
                 SetDefaultProfileCommand.RaiseCanExecuteChanged();
                 LoadProfileCommand.RaiseCanExecuteChanged();
                 DeleteProfileCommand.RaiseCanExecuteChanged();
                 _ = SyncDefaultProfileSelectionAsync();
+            }
+        }
+    }
+
+    public string SelectedSessionProfileName
+    {
+        get => _selectedSessionProfileName;
+        set
+        {
+            if (SetProperty(ref _selectedSessionProfileName, value?.Trim() ?? string.Empty))
+            {
+                CreateSessionFromProfileCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -418,6 +523,17 @@ public sealed class MainViewModel : ViewModelBase
             ? "Nenhuma TV selecionada"
             : string.Format("Resolucao detectada da TV: {0}x{1}", SelectedTarget.NativeWidth, SelectedTarget.NativeHeight);
 
+    public string SelectedActiveSessionSummary =>
+        SelectedActiveSession is null
+            ? "Nenhuma sessao ativa selecionada"
+            : string.Format(
+                "Sessao '{0}' | Perfil: {1} | Janelas: {2} | TVs: {3} | Bindings: {4}",
+                SelectedActiveSession.Name,
+                SelectedActiveSession.ProfileName,
+                SelectedActiveSession.WindowCount,
+                SelectedActiveSession.BoundDisplays.Count,
+                SelectedActiveSession.BindingCount);
+
     public string? GetWindowLinkRtcUrl(WindowSession? window)
     {
         if (window is null || !window.IsWebRtcPublishingEnabled)
@@ -493,9 +609,34 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task InitializeAfterStartupAsync()
     {
-        await LoadPreferencesAsync();
-        await ReloadPersistedStateAsync();
-        _ = CheckForAppUpdatesAsync();
+        _isInitializingStartup = true;
+        LoadProfileCommand.RaiseCanExecuteChanged();
+        try
+        {
+            await LoadPreferencesAsync();
+            await ReloadPersistedStateAsync();
+            await Task.Delay(350);
+            NormalizeWindowProfilesInMemory();
+            RefreshWindowProfilesCollection();
+            _ = CheckForAppUpdatesAsync();
+        }
+        finally
+        {
+            _isInitializingStartup = false;
+            LoadProfileCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public async Task<IReadOnlyList<DisplayTarget>> RefreshTargetsForSetupAsync()
+    {
+        await RefreshTargetsAsync();
+        await _displayIdentityResolverService.ReconcileKnownDisplaysAsync(Targets, CancellationToken.None);
+        return Targets.ToList();
+    }
+
+    public async Task<DisplayTarget> ResolveCurrentTargetForSetupAsync(DisplayTarget target)
+    {
+        return await _displayIdentityResolverService.ResolveCurrentTargetAsync(target, Targets, CancellationToken.None);
     }
 
     public async Task ExportApplicationDataAsync(string destinationZipPath)
@@ -532,12 +673,14 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task ReloadPersistedStateAsync()
     {
-        await RefreshTargetsAsync();
         await RefreshProfileNamesAsync();
 
         var startupProfileName = await _profileStore.GetStartupProfileNameAsync(CancellationToken.None);
         ProfileName = startupProfileName;
         await LoadProfileAsync();
+        SelectedSessionProfileName = ProfileName;
+        await RefreshTargetsAsync();
+        NormalizeWindowProfilesInMemory();
     }
 
     private async Task CheckForAppUpdatesAsync()
@@ -580,6 +723,14 @@ public sealed class MainViewModel : ViewModelBase
     private bool CanInstallUpdate() => !IsCheckingForUpdates && IsUpdateAvailable && _lastUpdateCheckResult is not null;
     private bool CanMigrateToRemoteBuild() => !IsCheckingForUpdates && IsLocalDevelopmentBuild;
     private bool CanUpdateSelectedTarget() => SelectedTarget is not null && !string.IsNullOrWhiteSpace(SelectedTarget.NetworkAddress);
+    private bool CanCreateSessionFromProfile() => !string.IsNullOrWhiteSpace(SelectedSessionProfileName);
+    private bool CanCreateSessionFromWindowProfile() => SelectedWindowProfile is not null;
+    private bool CanBindSelectedTargetToSession() => SelectedTarget is not null && SelectedActiveSession is not null;
+    private bool CanRemoveSelectedSession() => SelectedActiveSession is not null;
+    private bool CanAddSelectedWindowToSession() => SelectedWindow is not null && SelectedActiveSession is not null;
+    private bool CanRemoveSelectedWindowFromSession() => SelectedWindow is not null && SelectedActiveSession is not null;
+    private bool CanDeleteSelectedTvProfile() => SelectedTvProfile is not null;
+    private bool CanDeleteSelectedWindowProfile() => SelectedWindowProfile is not null;
 
     private async Task SearchUpdatesAsync()
     {
@@ -658,6 +809,502 @@ public sealed class MainViewModel : ViewModelBase
     {
         UpdateStatusMessage = "Enviando comando para desligar TVs Roku compativeis...";
         UpdateStatusMessage = await SendPowerCommandToKnownRokusAsync(powerOn: false);
+    }
+
+    public async Task ApplyTvProfileSetupAsync(TvProfileSetupViewModel setup)
+    {
+        var name = setup.ProfileName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusMessage = "Informe um nome para o perfil de TV.";
+            return;
+        }
+
+        if (setup.IncludedTargets.Count == 0)
+        {
+            StatusMessage = "Selecione a TV base do perfil.";
+            return;
+        }
+
+        var tvProfile = TvProfiles.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (tvProfile is null)
+        {
+            tvProfile = new TvProfileViewModel
+            {
+                Id = Guid.NewGuid()
+            };
+            TvProfiles.Add(tvProfile);
+        }
+
+        tvProfile.Name = name;
+        tvProfile.Targets.Clear();
+
+        var entry = setup.IncludedTargets.First();
+        var target = await EnsureTargetForTvProfileEntryAsync(entry);
+        tvProfile.Targets.Add(new TvProfileTargetViewModel
+        {
+            DisplayTargetId = target.Id,
+            DisplayName = string.IsNullOrWhiteSpace(entry.DisplayName) ? target.Name : entry.DisplayName,
+            NetworkAddress = target.NetworkAddress,
+            DeviceUniqueId = target.DeviceUniqueId,
+            MacAddress = target.MacAddress,
+            AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
+            DiscoverySource = target.DiscoverySource,
+            NativeWidth = target.NativeWidth,
+            NativeHeight = target.NativeHeight
+        });
+        tvProfile.NotifyTargetSummaryChanged();
+
+        SelectedTvProfile = tvProfile;
+        await PersistKnownTargetsAsync();
+        await SaveProfileInternalAsync(updateStatus: false);
+        StatusMessage = string.Format("Perfil de TV '{0}' salvo para a TV '{1}'.", tvProfile.Name, tvProfile.Targets.First().DisplayName);
+    }
+
+    public async Task ApplyWindowProfileSetupAsync(WindowProfileSetupViewModel setup)
+    {
+        var name = setup.ProfileName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusMessage = "Informe um nickname para o stream.";
+            return;
+        }
+
+        var distinctWindows = setup.GetDistinctWindowDefinitions();
+        if (distinctWindows.Count == 0)
+        {
+            StatusMessage = "Adicione pelo menos uma janela ao stream.";
+            return;
+        }
+
+        if (setup.SelectedTvProfile is null)
+        {
+            StatusMessage = "Selecione um perfil de TV para transmitir.";
+            return;
+        }
+
+        var occupiedByAnotherStream = WindowProfiles.FirstOrDefault(x =>
+            x.AssignedTvProfileId == setup.SelectedTvProfile.Id &&
+            (!setup.EditingProfileId.HasValue || x.Id != setup.EditingProfileId.Value));
+
+        if (occupiedByAnotherStream is not null)
+        {
+            StatusMessage = string.Format(
+                "O perfil de TV '{0}' ja esta ocupado pelo stream '{1}'.",
+                setup.SelectedTvProfile.Name,
+                occupiedByAnotherStream.Name);
+            return;
+        }
+
+        var windowProfile = setup.EditingProfileId.HasValue
+            ? WindowProfiles.FirstOrDefault(x => x.Id == setup.EditingProfileId.Value)
+            : null;
+
+        if (windowProfile is null)
+        {
+            windowProfile = WindowProfiles.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (windowProfile is null)
+        {
+            windowProfile = new WindowProfileViewModel
+            {
+                Id = Guid.NewGuid()
+            };
+            WindowProfiles.Add(windowProfile);
+        }
+
+        windowProfile.Name = name;
+        windowProfile.AssignedTvProfileId = setup.SelectedTvProfile.Id;
+        windowProfile.AssignedTvProfileName = setup.SelectedTvProfile.Name;
+
+        var desiredWindows = distinctWindows
+            .Select(window => new
+            {
+                Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
+                Nickname = window.Nickname,
+                Url = window.Url,
+                IsEnabled = window.IsEnabled
+            })
+            .ToList();
+
+        var desiredWindowIds = desiredWindows.Select(x => x.Id).ToHashSet();
+        var windowsToRemove = windowProfile.Windows
+            .Where(existing => !desiredWindowIds.Contains(existing.Id))
+            .ToList();
+
+        foreach (var removedWindow in windowsToRemove)
+        {
+            windowProfile.Windows.Remove(removedWindow);
+        }
+
+        foreach (var desiredWindow in desiredWindows)
+        {
+            var existingWindow = windowProfile.Windows.FirstOrDefault(x => x.Id == desiredWindow.Id);
+            if (existingWindow is null)
+            {
+                windowProfile.Windows.Add(new WindowProfileItemViewModel
+                {
+                    Id = desiredWindow.Id,
+                    Nickname = desiredWindow.Nickname,
+                    Url = desiredWindow.Url,
+                    IsEnabled = desiredWindow.IsEnabled
+                });
+                continue;
+            }
+
+            existingWindow.Nickname = desiredWindow.Nickname;
+            existingWindow.Url = desiredWindow.Url;
+            existingWindow.IsEnabled = desiredWindow.IsEnabled;
+        }
+
+        SelectedWindowProfile = windowProfile;
+        NormalizeWindowProfilesInMemory();
+        await SyncWindowProfileRuntimeAsync(windowProfile);
+        await SaveProfileInternalAsync(updateStatus: false);
+        StatusMessage = string.Format(
+            "Stream '{0}' salvo e vinculado ao perfil de TV '{1}'.",
+            windowProfile.Name,
+            windowProfile.AssignedTvProfileName);
+    }
+
+    public async Task DeleteSelectedTvProfileAsync()
+    {
+        if (SelectedTvProfile is null)
+        {
+            return;
+        }
+
+        var removedName = SelectedTvProfile.Name;
+        var removedId = SelectedTvProfile.Id;
+        TvProfiles.Remove(SelectedTvProfile);
+        SelectedTvProfile = TvProfiles.FirstOrDefault();
+
+        foreach (var windowProfile in WindowProfiles.Where(x => x.AssignedTvProfileId == removedId))
+        {
+            windowProfile.AssignedTvProfileId = null;
+            windowProfile.AssignedTvProfileName = string.Empty;
+        }
+
+        await SaveProfileInternalAsync(updateStatus: false);
+        StatusMessage = string.Format("Perfil de TV '{0}' removido.", removedName);
+    }
+
+    public async Task DeleteSelectedWindowProfileAsync()
+    {
+        if (SelectedWindowProfile is null)
+        {
+            return;
+        }
+
+        var removedName = SelectedWindowProfile.Name;
+        WindowProfiles.Remove(SelectedWindowProfile);
+        SelectedWindowProfile = WindowProfiles.FirstOrDefault();
+        await SaveProfileInternalAsync(updateStatus: false);
+        StatusMessage = string.Format("Stream '{0}' removido.", removedName);
+    }
+
+    private async Task CreateSessionFromWindowProfileAsync()
+    {
+        if (SelectedWindowProfile is null)
+        {
+            StatusMessage = "Selecione um stream.";
+            return;
+        }
+
+        var windowProfile = SelectedWindowProfile;
+        var tvProfile = TvProfiles.FirstOrDefault(x => x.Id == windowProfile.AssignedTvProfileId);
+        if (tvProfile is null)
+        {
+            StatusMessage = string.Format(
+                "O stream '{0}' nao possui um perfil de TV valido vinculado.",
+                windowProfile.Name);
+            return;
+        }
+
+        var sessionId = Guid.NewGuid();
+        var sessionName = BuildSessionName(windowProfile.Name);
+
+        foreach (var windowDefinition in windowProfile.Windows)
+        {
+            Uri? initialUri = null;
+            if (!string.IsNullOrWhiteSpace(windowDefinition.Url))
+            {
+                Uri.TryCreate(windowDefinition.Url, UriKind.Absolute, out initialUri);
+            }
+
+            var browserWindow = await _browserInstanceHost.CreateAsync(
+                initialUri ?? new Uri("about:blank"),
+                CancellationToken.None,
+                windowDefinition.Id,
+                windowDefinition.Nickname);
+            browserWindow.Title = string.IsNullOrWhiteSpace(windowDefinition.Nickname) ? browserWindow.Title : windowDefinition.Nickname;
+            browserWindow.InitialUri = initialUri;
+            browserWindow.State = WindowSessionState.Created;
+            browserWindow.ProfileName = windowProfile.Name;
+            browserWindow.ActiveSessionId = sessionId;
+            browserWindow.ActiveSessionName = sessionName;
+            browserWindow.AssignedTarget = null;
+            Windows.Add(browserWindow);
+        }
+
+        RebuildActiveSessionsFromWindows();
+        SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == sessionId);
+        if (SelectedActiveSession is not null)
+        {
+            var binding = tvProfile.Targets.FirstOrDefault();
+            if (binding is not null)
+            {
+                var resolvedBindingTarget = await _displayIdentityResolverService.ResolveCurrentTargetAsync(
+                    new DisplayTarget
+                    {
+                        Id = binding.DisplayTargetId,
+                        Name = binding.DisplayName,
+                        NetworkAddress = binding.NetworkAddress,
+                        DeviceUniqueId = binding.DeviceUniqueId,
+                        MacAddress = binding.MacAddress,
+                        AlternateMacAddresses = binding.AlternateMacAddresses.ToList(),
+                        DiscoverySource = binding.DiscoverySource,
+                        NativeWidth = binding.NativeWidth,
+                        NativeHeight = binding.NativeHeight,
+                        TransportKind = DisplayTransportKind.LanStreaming,
+                        IsStaticTarget = true
+                    },
+                    Targets,
+                    CancellationToken.None);
+
+                if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == binding.DisplayTargetId))
+                {
+                    SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = resolvedBindingTarget.Id != Guid.Empty ? resolvedBindingTarget.Id : binding.DisplayTargetId,
+                        DisplayName = string.IsNullOrWhiteSpace(resolvedBindingTarget.Name) ? binding.DisplayName : resolvedBindingTarget.Name,
+                        NetworkAddress = string.IsNullOrWhiteSpace(resolvedBindingTarget.NetworkAddress) ? binding.NetworkAddress : resolvedBindingTarget.NetworkAddress,
+                        DeviceUniqueId = string.IsNullOrWhiteSpace(resolvedBindingTarget.DeviceUniqueId) ? binding.DeviceUniqueId : resolvedBindingTarget.DeviceUniqueId,
+                        BindingName = tvProfile.Name
+                    });
+                }
+            }
+
+            SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
+        }
+
+        StatusMessage = string.Format(
+            "Sessao '{0}' criada a partir do stream '{1}' com o perfil de TV '{2}'.",
+            sessionName,
+            windowProfile.Name,
+            tvProfile.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task CreateSessionFromProfileAsync()
+    {
+        var profileName = SelectedSessionProfileName?.Trim();
+        if (string.IsNullOrWhiteSpace(profileName))
+        {
+            StatusMessage = "Selecione um perfil para criar a sessao.";
+            return;
+        }
+
+        var profile = await _profileStore.LoadAsync(profileName!, CancellationToken.None);
+        if (profile is null)
+        {
+            StatusMessage = string.Format("Perfil '{0}' nao foi encontrado.", profileName);
+            return;
+        }
+
+        var sessionId = Guid.NewGuid();
+        var sessionName = BuildSessionName(profile.Name);
+
+        foreach (var persistedWindow in profile.Windows)
+        {
+            Uri? initialUri = null;
+            if (!string.IsNullOrWhiteSpace(persistedWindow.InitialUrl))
+            {
+                Uri.TryCreate(persistedWindow.InitialUrl, UriKind.Absolute, out initialUri);
+            }
+
+            var browserWindow = await _browserInstanceHost.CreateAsync(initialUri ?? new Uri("about:blank"), CancellationToken.None);
+            browserWindow.Title = string.IsNullOrWhiteSpace(persistedWindow.Title) ? browserWindow.Title : persistedWindow.Title;
+            browserWindow.InitialUri = initialUri;
+            browserWindow.State = persistedWindow.State;
+            browserWindow.BrowserResolutionMode = persistedWindow.BrowserResolutionMode;
+            browserWindow.BrowserManualWidth = persistedWindow.BrowserManualWidth;
+            browserWindow.BrowserManualHeight = persistedWindow.BrowserManualHeight;
+            browserWindow.TargetResolutionMode = persistedWindow.TargetResolutionMode;
+            browserWindow.TargetManualWidth = persistedWindow.TargetManualWidth;
+            browserWindow.TargetManualHeight = persistedWindow.TargetManualHeight;
+            browserWindow.IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled;
+            browserWindow.ProfileName = profile.Name;
+            browserWindow.ActiveSessionId = sessionId;
+            browserWindow.ActiveSessionName = sessionName;
+            browserWindow.AssignedTarget = null;
+
+            Windows.Add(browserWindow);
+        }
+
+        RebuildActiveSessionsFromWindows();
+        SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == sessionId);
+        if (SelectedActiveSession is not null)
+        {
+            foreach (var binding in profile.DisplayBindings)
+            {
+                if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == binding.DisplayTargetId))
+                {
+                    SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = binding.DisplayTargetId,
+                        DisplayName = string.IsNullOrWhiteSpace(binding.Name) ? binding.DisplayTargetName : binding.Name,
+                        NetworkAddress = binding.NetworkAddress,
+                        DeviceUniqueId = binding.DeviceUniqueId,
+                        BindingName = string.IsNullOrWhiteSpace(binding.Name) ? binding.DisplayTargetName : binding.Name
+                    });
+                }
+            }
+
+            SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
+        }
+
+        StatusMessage = string.Format("Sessao '{0}' criada a partir do perfil '{1}'.", sessionName, profile.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task BindSelectedTargetToSessionAsync()
+    {
+        if (SelectedTarget is null || SelectedActiveSession is null)
+        {
+            return;
+        }
+
+        foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+        {
+            var existing = session.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
+            if (existing is not null)
+            {
+                session.BoundDisplays.Remove(existing);
+                session.TvCount = session.BoundDisplays.Count;
+            }
+        }
+
+        if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == SelectedTarget.Id))
+        {
+            SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+            {
+                DisplayTargetId = SelectedTarget.Id,
+                DisplayName = SelectedTarget.Name,
+                NetworkAddress = SelectedTarget.NetworkAddress,
+                DeviceUniqueId = SelectedTarget.DeviceUniqueId,
+                BindingName = SelectedTarget.Name
+            });
+            SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
+        }
+
+        StatusMessage = string.Format("TV '{0}' vinculada a sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task AddSelectedWindowToSessionAsync()
+    {
+        if (SelectedWindow is null || SelectedActiveSession is null)
+        {
+            return;
+        }
+
+        SelectedWindow.ActiveSessionId = SelectedActiveSession.Id;
+        SelectedWindow.ActiveSessionName = SelectedActiveSession.Name;
+        SelectedWindow.ProfileName = SelectedActiveSession.ProfileName;
+        if (!SelectedActiveSession.WindowIds.Contains(SelectedWindow.Id))
+        {
+            foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+            {
+                session.WindowIds.Remove(SelectedWindow.Id);
+                session.WindowCount = session.WindowIds.Count;
+            }
+
+            SelectedActiveSession.WindowIds.Add(SelectedWindow.Id);
+            SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+        }
+
+        RebuildActiveSessionsFromWindows();
+        StatusMessage = string.Format("Janela '{0}' adicionada a sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task RemoveSelectedWindowFromSessionAsync()
+    {
+        if (SelectedWindow is null || SelectedActiveSession is null)
+        {
+            return;
+        }
+
+        if (SelectedWindow.ActiveSessionId == SelectedActiveSession.Id)
+        {
+            SelectedWindow.ActiveSessionId = Guid.Empty;
+            SelectedWindow.ActiveSessionName = string.Empty;
+        }
+
+        SelectedActiveSession.WindowIds.Remove(SelectedWindow.Id);
+        SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+        RebuildActiveSessionsFromWindows();
+        StatusMessage = string.Format("Janela '{0}' removida da sessao '{1}'.", SelectedWindow.Title, SelectedActiveSession.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task UnbindSelectedTargetFromSessionAsync()
+    {
+        if (SelectedTarget is null || SelectedActiveSession is null)
+        {
+            return;
+        }
+
+        var binding = SelectedActiveSession.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
+        if (binding is not null)
+        {
+            SelectedActiveSession.BoundDisplays.Remove(binding);
+            SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            SelectedActiveSession.BindingCount = SelectedActiveSession.BoundDisplays.Count;
+            StatusMessage = string.Format("TV '{0}' removida da sessao '{1}'.", SelectedTarget.Name, SelectedActiveSession.Name);
+            UpdateBridgeSnapshot();
+            await PersistActiveSessionsAsync();
+        }
+    }
+
+    private async Task RemoveSelectedSessionAsync()
+    {
+        if (SelectedActiveSession is null)
+        {
+            return;
+        }
+
+        var session = SelectedActiveSession;
+        var sessionWindowIds = session.WindowIds.ToList();
+        var windowsToRemove = Windows.Where(x => sessionWindowIds.Contains(x.Id)).ToList();
+        foreach (var window in windowsToRemove)
+        {
+            try
+            {
+                await _browserInstanceHost.CloseAsync(window.Id, CancellationToken.None);
+            }
+            catch
+            {
+            }
+
+            Windows.Remove(window);
+        }
+
+        ActiveSessions.Remove(session);
+        SelectedActiveSession = ActiveSessions.FirstOrDefault();
+        StatusMessage = string.Format("Sessao '{0}' removida.", session.Name);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
     }
 
     private async Task UpdateSelectedTargetAsync()
@@ -773,6 +1420,20 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         var window = await _browserInstanceHost.CreateAsync(url, CancellationToken.None);
+        if (window.ActiveSessionId == Guid.Empty)
+        {
+            window.ActiveSessionId = Guid.NewGuid();
+        }
+
+        if (string.IsNullOrWhiteSpace(window.ActiveSessionName))
+        {
+            window.ActiveSessionName = string.IsNullOrWhiteSpace(ProfileName) ? "Sessao ativa" : ProfileName.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(window.ProfileName))
+        {
+            window.ProfileName = string.IsNullOrWhiteSpace(ProfileName) ? "default" : ProfileName.Trim();
+        }
 
         Windows.Add(window);
         SelectedWindow = window;
@@ -785,6 +1446,7 @@ public sealed class MainViewModel : ViewModelBase
     private async Task RefreshTargetsAsync()
     {
         var targets = await _displayDiscoveryService.DiscoverAsync(CancellationToken.None);
+        await _displayIdentityResolverService.ReconcileKnownDisplaysAsync(targets, CancellationToken.None);
 
         Targets.Clear();
         foreach (var target in targets)
@@ -849,7 +1511,7 @@ public sealed class MainViewModel : ViewModelBase
 
     private bool CanAssignSelectedWindow() => SelectedWindow is not null && SelectedTarget is not null;
     private bool CanNavigateSelectedWindow() => SelectedWindow is not null && !string.IsNullOrWhiteSpace(BrowserUrlInput);
-    private bool CanUseProfileName() => !string.IsNullOrWhiteSpace(ProfileName);
+    private bool CanUseProfileName() => !string.IsNullOrWhiteSpace(ProfileName) && !_isInitializingStartup && !_isApplyingProfile;
     private bool CanDeleteSelectedWindow() => SelectedWindow is not null;
     private bool CanPublishSelectedWindowWebRtc() => SelectedWindow is not null;
     private bool CanManageSelectedTarget() => SelectedTarget is not null;
@@ -916,6 +1578,45 @@ public sealed class MainViewModel : ViewModelBase
             }
         }
 
+        if (SelectedActiveSession is not null)
+        {
+            SelectedWindow.ActiveSessionId = SelectedActiveSession.Id;
+            SelectedWindow.ActiveSessionName = SelectedActiveSession.Name;
+            SelectedWindow.ProfileName = SelectedActiveSession.ProfileName;
+            if (!SelectedActiveSession.WindowIds.Contains(SelectedWindow.Id))
+            {
+                foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+                {
+                    session.WindowIds.Remove(SelectedWindow.Id);
+                    session.WindowCount = session.WindowIds.Count;
+                }
+
+                SelectedActiveSession.WindowIds.Add(SelectedWindow.Id);
+                SelectedActiveSession.WindowCount = SelectedActiveSession.WindowIds.Count;
+            }
+
+            foreach (var session in ActiveSessions.Where(x => x.Id != SelectedActiveSession.Id))
+            {
+                var existing = session.BoundDisplays.FirstOrDefault(x => x.DisplayTargetId == SelectedTarget.Id);
+                if (existing is not null)
+                {
+                    session.BoundDisplays.Remove(existing);
+                    session.TvCount = session.BoundDisplays.Count;
+                }
+            }
+
+            if (!SelectedActiveSession.BoundDisplays.Any(x => x.DisplayTargetId == SelectedTarget.Id))
+            {
+                SelectedActiveSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                {
+                    DisplayTargetId = SelectedTarget.Id,
+                    DisplayName = SelectedTarget.Name,
+                    NetworkAddress = SelectedTarget.NetworkAddress
+                });
+                SelectedActiveSession.TvCount = SelectedActiveSession.BoundDisplays.Count;
+            }
+        }
+
         await _routingService.AssignWindowToTargetAsync(SelectedWindow, SelectedTarget, CancellationToken.None);
         StatusMessage = SelectedTarget.TransportKind == DisplayTransportKind.Miracast
             ? string.Format("Janela '{0}' pronta para conexao com '{1}'. Conclua a transmissao no painel Cast do Windows.", SelectedWindow.Title, SelectedTarget.Name)
@@ -954,12 +1655,19 @@ public sealed class MainViewModel : ViewModelBase
 
         Windows.Clear();
         Targets.Clear();
+        ActiveSessions.Clear();
+        TvProfiles.Clear();
+        WindowProfiles.Clear();
         StaticPanels.Clear();
         AvailableProfiles.Clear();
         SelectedWindow = null;
         SelectedTarget = null;
+        SelectedActiveSession = null;
+        SelectedTvProfile = null;
+        SelectedWindowProfile = null;
         SelectedStaticPanel = null;
         CurrentBrowserAddress = "about:blank";
+        await PersistActiveSessionsAsync();
     }
 
     private async Task DeleteSelectedWindowAsync()
@@ -976,11 +1684,21 @@ public sealed class MainViewModel : ViewModelBase
         await _browserInstanceHost.CloseAsync(windowToDelete.Id, CancellationToken.None);
 
         Windows.Remove(windowToDelete);
+        foreach (var session in ActiveSessions)
+        {
+            if (session.WindowIds.Remove(windowToDelete.Id))
+            {
+                session.WindowCount = session.WindowIds.Count;
+            }
+        }
+
+        RebuildActiveSessionsFromWindows();
         SelectedWindow = Windows.FirstOrDefault();
         CurrentBrowserAddress = SelectedWindow?.InitialUri?.ToString() ?? "about:blank";
         StatusMessage = string.Format("Painel '{0}' removido.", deletedTitle);
         await SaveProfileInternalAsync(updateStatus: false);
         UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
     }
 
     private async Task PublishSelectedWindowWebRtcAsync()
@@ -1177,9 +1895,11 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task LoadProfileAsync()
     {
+        await _profileLoadSemaphore.WaitAsync();
         if (string.IsNullOrWhiteSpace(ProfileName))
         {
             StatusMessage = "Informe um nome de perfil valido para carregar.";
+            _profileLoadSemaphore.Release();
             return;
         }
 
@@ -1188,24 +1908,22 @@ public sealed class MainViewModel : ViewModelBase
         {
             StatusMessage = string.Format("Perfil '{0}' ainda nao existe. Um novo sera criado quando voce salvar.", ProfileName);
             await SyncDefaultProfileSelectionAsync();
+            _profileLoadSemaphore.Release();
             return;
         }
 
         _isApplyingProfile = true;
+        _suppressActiveSessionPersistence = true;
         try
         {
+            await UnloadCurrentProfileStateAsync();
+
+            var restoredSessionId = Guid.NewGuid();
+            var restoredSessionName = profile.Name;
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
             WebRtcSpecificIp = profile.WebRtcSpecificIp ?? string.Empty;
             ApplyProfileTargets(profile);
-
-            foreach (var window in Windows)
-            {
-                window.PropertyChanged -= OnWindowPropertyChanged;
-            }
-
-            Windows.Clear();
-            StaticPanels.Clear();
 
             foreach (var persistedWindow in profile.Windows)
             {
@@ -1229,7 +1947,10 @@ public sealed class MainViewModel : ViewModelBase
                     TargetResolutionMode = persistedWindow.TargetResolutionMode,
                     TargetManualWidth = persistedWindow.TargetManualWidth,
                     TargetManualHeight = persistedWindow.TargetManualHeight,
-                    IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled
+                    IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
+                    ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
+                    ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
+                    ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
                 };
 
                 Windows.Add(window);
@@ -1256,16 +1977,221 @@ public sealed class MainViewModel : ViewModelBase
                 ?? Targets.FirstOrDefault();
             SelectedStaticPanel = StaticPanels.FirstOrDefault();
             CurrentBrowserAddress = SelectedWindow?.InitialUri?.ToString() ?? "about:blank";
+
+            RestoreProfileDisplayBindings(profile);
+            RestoreTvProfiles(profile);
+            RestoreWindowProfiles(profile);
+            NormalizeWindowProfilesInMemory();
+            if (profile.ActiveSessions.Count > 0)
+            {
+                await RestoreActiveSessionsAsync(profile.ActiveSessions);
+            }
+            await RefreshProfileNamesAsync();
+            await SyncDefaultProfileSelectionAsync();
+            if (profile.ActiveSessions.Count == 0)
+            {
+                foreach (var windowProfile in WindowProfiles.ToList())
+                {
+                    await SyncWindowProfileRuntimeAsync(windowProfile);
+                }
+
+                RebuildActiveSessionsFromWindows();
+            }
+            StatusMessage = string.Format("Perfil '{0}' restaurado com sucesso. As rotas WebRTC podem ser atualizadas manualmente apos a abertura.", ProfileName);
+            UpdateBridgeSnapshot();
         }
         finally
         {
             _isApplyingProfile = false;
+            _suppressActiveSessionPersistence = false;
+            _profileLoadSemaphore.Release();
+        }
+    }
+
+    private async Task UnloadCurrentProfileStateAsync()
+    {
+        foreach (var window in Windows)
+        {
+            window.PropertyChanged -= OnWindowPropertyChanged;
         }
 
-        await RefreshProfileNamesAsync();
-        await SyncDefaultProfileSelectionAsync();
-        StatusMessage = string.Format("Perfil '{0}' restaurado com sucesso. As rotas WebRTC podem ser atualizadas manualmente apos a abertura.", ProfileName);
-        UpdateBridgeSnapshot();
+        await ClearRuntimeWindowsAsync();
+        StaticPanels.Clear();
+        ProfileDisplayBindings.Clear();
+        TvProfiles.Clear();
+        WindowProfiles.Clear();
+        ActiveSessions.Clear();
+        Targets.Clear();
+        SelectedTarget = null;
+        SelectedStaticPanel = null;
+    }
+
+    private async Task RestoreActiveSessionsAsync(IReadOnlyList<ActiveSessionRecord> records)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        _isRestoringActiveSessions = true;
+        _suppressActiveSessionPersistence = true;
+        try
+        {
+            await ClearRuntimeWindowsAsync();
+
+            foreach (var record in records)
+            {
+                var session = new ActiveSessionViewModel
+                {
+                    Id = record.Id == Guid.Empty ? Guid.NewGuid() : record.Id,
+                    Name = string.IsNullOrWhiteSpace(record.Name) ? BuildSessionName(record.ProfileName) : record.Name,
+                    ProfileName = record.ProfileName,
+                    StartedAtUtc = record.StartedAtUtc
+                };
+
+                foreach (var bindingRecord in record.BoundDisplays)
+                {
+                    var target = Targets.FirstOrDefault(x =>
+                        x.Id == bindingRecord.DisplayTargetId ||
+                        (!string.IsNullOrWhiteSpace(bindingRecord.DeviceUniqueId) &&
+                         string.Equals(x.DeviceUniqueId, bindingRecord.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrWhiteSpace(bindingRecord.NetworkAddress) &&
+                         string.Equals(x.NetworkAddress, bindingRecord.NetworkAddress, StringComparison.OrdinalIgnoreCase)));
+
+                    session.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = target?.Id ?? bindingRecord.DisplayTargetId,
+                        DisplayName = target?.Name ?? bindingRecord.DisplayName,
+                        NetworkAddress = target?.NetworkAddress ?? bindingRecord.NetworkAddress,
+                        DeviceUniqueId = target?.DeviceUniqueId ?? bindingRecord.DeviceUniqueId,
+                        BindingName = string.IsNullOrWhiteSpace(bindingRecord.BindingName)
+                            ? (target?.Name ?? bindingRecord.DisplayName)
+                            : bindingRecord.BindingName
+                    });
+                }
+
+                ActiveSessions.Add(session);
+
+                foreach (var windowRecord in record.Windows)
+                {
+                    Uri? initialUri = null;
+                    if (!string.IsNullOrWhiteSpace(windowRecord.InitialUrl))
+                    {
+                        Uri.TryCreate(windowRecord.InitialUrl, UriKind.Absolute, out initialUri);
+                    }
+
+                    var browserWindow = await _browserInstanceHost.CreateAsync(
+                        initialUri ?? new Uri("about:blank"),
+                        CancellationToken.None,
+                        windowRecord.Id == Guid.Empty ? null : windowRecord.Id,
+                        string.IsNullOrWhiteSpace(windowRecord.Title) ? null : windowRecord.Title);
+                    var assignedTarget = Targets.FirstOrDefault(x => x.Id == windowRecord.AssignedTargetId);
+                    browserWindow.Title = string.IsNullOrWhiteSpace(windowRecord.Title) ? browserWindow.Title : windowRecord.Title;
+                    browserWindow.InitialUri = initialUri;
+                    browserWindow.State = windowRecord.State;
+                    browserWindow.AssignedTarget = assignedTarget;
+                    browserWindow.BrowserResolutionMode = windowRecord.BrowserResolutionMode;
+                    browserWindow.BrowserManualWidth = windowRecord.BrowserManualWidth;
+                    browserWindow.BrowserManualHeight = windowRecord.BrowserManualHeight;
+                    browserWindow.TargetResolutionMode = windowRecord.TargetResolutionMode;
+                    browserWindow.TargetManualWidth = windowRecord.TargetManualWidth;
+                    browserWindow.TargetManualHeight = windowRecord.TargetManualHeight;
+                    browserWindow.IsWebRtcPublishingEnabled = windowRecord.IsWebRtcPublishingEnabled;
+                    browserWindow.ProfileName = record.ProfileName;
+                    browserWindow.ActiveSessionId = session.Id;
+                    browserWindow.ActiveSessionName = session.Name;
+                    Windows.Add(browserWindow);
+                }
+            }
+
+            RebuildActiveSessionsFromWindows();
+            SelectedActiveSession = ActiveSessions.FirstOrDefault();
+            SelectedWindow = Windows.FirstOrDefault();
+            CurrentBrowserAddress = SelectedWindow?.InitialUri?.ToString() ?? "about:blank";
+            StatusMessage = string.Format("{0} sessoes ativas foram restauradas.", ActiveSessions.Count);
+            UpdateBridgeSnapshot();
+        }
+        finally
+        {
+            _isRestoringActiveSessions = false;
+            _suppressActiveSessionPersistence = false;
+        }
+    }
+
+    private async Task PersistActiveSessionsAsync()
+    {
+        if (_isApplyingProfile || _isRestoringActiveSessions || _suppressActiveSessionPersistence)
+        {
+            return;
+        }
+
+        var records = BuildActiveSessionRecords();
+
+        await _activeSessionStore.SaveAsync(records, CancellationToken.None);
+    }
+
+    private List<ActiveSessionRecord> BuildActiveSessionRecords()
+    {
+        return ActiveSessions.Select(session => new ActiveSessionRecord
+        {
+            Id = session.Id,
+            Name = session.Name,
+            ProfileName = session.ProfileName,
+            StartedAtUtc = string.IsNullOrWhiteSpace(session.StartedAtUtc) ? DateTime.UtcNow.ToString("o") : session.StartedAtUtc,
+            Windows = Windows
+                .Where(window => window.ActiveSessionId == session.Id)
+                .Select(window => new ActiveSessionWindowRecord
+                {
+                    Id = window.Id,
+                    Title = window.Title,
+                    InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
+                    State = window.State,
+                    AssignedTargetId = window.AssignedTarget?.Id,
+                    BrowserResolutionMode = window.BrowserResolutionMode,
+                    BrowserManualWidth = window.BrowserManualWidth,
+                    BrowserManualHeight = window.BrowserManualHeight,
+                    TargetResolutionMode = window.TargetResolutionMode,
+                    TargetManualWidth = window.TargetManualWidth,
+                    TargetManualHeight = window.TargetManualHeight,
+                    IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled
+                }).ToList(),
+            BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
+            {
+                DisplayTargetId = binding.DisplayTargetId,
+                DisplayName = binding.DisplayName,
+                NetworkAddress = binding.NetworkAddress,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                BindingName = binding.BindingName
+            }).ToList()
+        }).ToList();
+    }
+
+    private async Task ClearRuntimeWindowsAsync()
+    {
+        foreach (var window in Windows.ToList())
+        {
+            try
+            {
+                await _webRtcPublisherService.UnpublishAsync(window, CancellationToken.None);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await _browserInstanceHost.CloseAsync(window.Id, CancellationToken.None);
+            }
+            catch
+            {
+            }
+        }
+
+        Windows.Clear();
+        ActiveSessions.Clear();
+        SelectedWindow = null;
+        SelectedActiveSession = null;
+        CurrentBrowserAddress = "about:blank";
     }
 
     private async Task SaveProfileInternalAsync(bool updateStatus)
@@ -1290,6 +2216,7 @@ public sealed class MainViewModel : ViewModelBase
                 NetworkAddress = x.NetworkAddress,
                 LastKnownNetworkAddress = x.LastKnownNetworkAddress,
                 MacAddress = x.MacAddress,
+                AlternateMacAddresses = x.AlternateMacAddresses.ToList(),
                 DeviceUniqueId = x.DeviceUniqueId,
                 DiscoverySource = x.DiscoverySource,
                 TransportKind = x.TransportKind,
@@ -1299,7 +2226,9 @@ public sealed class MainViewModel : ViewModelBase
                 NativeWidth = x.NativeWidth,
                 NativeHeight = x.NativeHeight
             }).ToList(),
-            Windows = Windows.Select(x => new WindowSessionProfile
+            Windows = Windows
+                .Where(x => string.Equals(x.ProfileName, ProfileName.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(x => new WindowSessionProfile
             {
                 Id = x.Id,
                 Title = x.Title,
@@ -1312,8 +2241,15 @@ public sealed class MainViewModel : ViewModelBase
                 TargetResolutionMode = x.TargetResolutionMode,
                 TargetManualWidth = x.TargetManualWidth,
                 TargetManualHeight = x.TargetManualHeight,
-                IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled
+                IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
+                ProfileName = x.ProfileName,
+                ActiveSessionId = x.ActiveSessionId,
+                ActiveSessionName = x.ActiveSessionName
             }).ToList(),
+            DisplayBindings = BuildProfileDisplayBindings(),
+            TvProfiles = BuildTvProfiles(),
+            WindowProfiles = BuildWindowProfiles(),
+            ActiveSessions = BuildActiveSessionRecords(),
             StaticPanels = StaticPanels.Select(x => new StaticPanelProfile
             {
                 Id = x.Id,
@@ -1394,6 +2330,7 @@ public sealed class MainViewModel : ViewModelBase
                     NetworkAddress = targetProfile.NetworkAddress,
                     LastKnownNetworkAddress = targetProfile.LastKnownNetworkAddress,
                     MacAddress = targetProfile.MacAddress,
+                    AlternateMacAddresses = targetProfile.AlternateMacAddresses.ToList(),
                     DeviceUniqueId = targetProfile.DeviceUniqueId,
                     DiscoverySource = targetProfile.DiscoverySource,
                     TransportKind = targetProfile.TransportKind,
@@ -1411,6 +2348,7 @@ public sealed class MainViewModel : ViewModelBase
             target.NetworkAddress = targetProfile.NetworkAddress;
             target.LastKnownNetworkAddress = targetProfile.LastKnownNetworkAddress;
             target.MacAddress = targetProfile.MacAddress;
+            target.AlternateMacAddresses = targetProfile.AlternateMacAddresses.ToList();
             target.DeviceUniqueId = targetProfile.DeviceUniqueId;
             target.DiscoverySource = targetProfile.DiscoverySource;
             target.TransportKind = targetProfile.TransportKind;
@@ -1433,6 +2371,7 @@ public sealed class MainViewModel : ViewModelBase
             NetworkAddress = x.NetworkAddress,
             LastKnownNetworkAddress = x.LastKnownNetworkAddress,
             MacAddress = x.MacAddress,
+            AlternateMacAddresses = x.AlternateMacAddresses.ToList(),
             DeviceUniqueId = x.DeviceUniqueId,
             DiscoverySource = x.DiscoverySource,
             TransportKind = x.TransportKind,
@@ -1453,6 +2392,623 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private List<DisplayBindingProfile> BuildProfileDisplayBindings()
+    {
+        var bindingMap = new Dictionary<Guid, DisplayBindingProfile>();
+
+        foreach (var window in Windows.Where(x =>
+                     string.Equals(x.ProfileName, ProfileName?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                     x.AssignedTarget is not null))
+        {
+            var target = window.AssignedTarget!;
+            if (!bindingMap.ContainsKey(target.Id))
+            {
+                bindingMap[target.Id] = new DisplayBindingProfile
+                {
+                    Id = Guid.NewGuid(),
+                    Name = target.Name,
+                    DisplayTargetId = target.Id,
+                    DisplayTargetName = target.Name,
+                    DeviceUniqueId = target.DeviceUniqueId,
+                    NetworkAddress = target.NetworkAddress
+                };
+            }
+        }
+
+        foreach (var panel in StaticPanels)
+        {
+            var target = Targets.FirstOrDefault(x => x.Id == panel.DisplayTargetId);
+            if (target is null || bindingMap.ContainsKey(target.Id))
+            {
+                continue;
+            }
+
+            bindingMap[target.Id] = new DisplayBindingProfile
+            {
+                Id = Guid.NewGuid(),
+                Name = string.IsNullOrWhiteSpace(panel.Name) ? target.Name : panel.Name,
+                DisplayTargetId = target.Id,
+                DisplayTargetName = target.Name,
+                DeviceUniqueId = target.DeviceUniqueId,
+                NetworkAddress = target.NetworkAddress
+            };
+        }
+
+        return bindingMap.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private List<TvProfileDefinition> BuildTvProfiles()
+    {
+        return TvProfiles.Select(profile => new TvProfileDefinition
+        {
+            Id = profile.Id,
+            Name = profile.Name,
+            Targets = profile.Targets.Select(target => new TvProfileTargetDefinition
+            {
+                DisplayTargetId = target.DisplayTargetId,
+                DisplayName = target.DisplayName,
+                NetworkAddress = target.NetworkAddress,
+                DeviceUniqueId = target.DeviceUniqueId,
+                MacAddress = target.MacAddress,
+                AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
+                DiscoverySource = target.DiscoverySource,
+                NativeWidth = target.NativeWidth,
+                NativeHeight = target.NativeHeight
+            }).ToList()
+        }).ToList();
+    }
+
+    private List<WindowGroupProfile> BuildWindowProfiles()
+    {
+        var emittedIds = new HashSet<Guid>();
+        var emittedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        return WindowProfiles
+            .Where(profile =>
+            {
+                if (profile.Id != Guid.Empty)
+                {
+                    return emittedIds.Add(profile.Id);
+                }
+
+                var name = profile.Name?.Trim() ?? string.Empty;
+                return emittedNames.Add(name);
+            })
+            .Select(profile => new WindowGroupProfile
+            {
+                Id = profile.Id,
+                Name = profile.Name,
+                AssignedTvProfileId = profile.AssignedTvProfileId,
+                AssignedTvProfileName = profile.AssignedTvProfileName,
+                Windows = profile.Windows.Select(window => new WindowLinkProfile
+                {
+                    Id = window.Id,
+                    Nickname = window.Nickname,
+                    Url = window.Url,
+                    IsEnabled = window.IsEnabled
+                }).ToList()
+            }).ToList();
+    }
+
+    private void RestoreTvProfiles(AppProfile profile)
+    {
+        TvProfiles.Clear();
+
+        foreach (var tvProfile in profile.TvProfiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var viewModel = new TvProfileViewModel
+            {
+                Id = tvProfile.Id == Guid.Empty ? Guid.NewGuid() : tvProfile.Id,
+                Name = tvProfile.Name
+            };
+
+            foreach (var target in tvProfile.Targets)
+            {
+                viewModel.Targets.Add(new TvProfileTargetViewModel
+                {
+                    DisplayTargetId = target.DisplayTargetId,
+                    DisplayName = target.DisplayName,
+                    NetworkAddress = target.NetworkAddress,
+                    DeviceUniqueId = target.DeviceUniqueId,
+                    MacAddress = target.MacAddress,
+                    AlternateMacAddresses = target.AlternateMacAddresses.ToList(),
+                    DiscoverySource = target.DiscoverySource,
+                    NativeWidth = target.NativeWidth,
+                    NativeHeight = target.NativeHeight
+                });
+            }
+
+            viewModel.NotifyTargetSummaryChanged();
+
+            TvProfiles.Add(viewModel);
+        }
+
+        SelectedTvProfile = TvProfiles.FirstOrDefault();
+    }
+
+    private void RestoreWindowProfiles(AppProfile profile)
+    {
+        WindowProfiles.Clear();
+        var restoredIds = new HashSet<Guid>();
+        var restoredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var windowProfile in profile.WindowProfiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var normalizedName = windowProfile.Name?.Trim() ?? string.Empty;
+            if (windowProfile.Id != Guid.Empty)
+            {
+                if (!restoredIds.Add(windowProfile.Id))
+                {
+                    continue;
+                }
+            }
+            else if (!restoredNames.Add(normalizedName))
+            {
+                continue;
+            }
+
+            var viewModel = new WindowProfileViewModel
+            {
+                Id = windowProfile.Id == Guid.Empty ? Guid.NewGuid() : windowProfile.Id,
+                Name = windowProfile.Name,
+                AssignedTvProfileId = windowProfile.AssignedTvProfileId,
+                AssignedTvProfileName = windowProfile.AssignedTvProfileName
+            };
+
+            foreach (var window in windowProfile.Windows)
+            {
+                viewModel.Windows.Add(new WindowProfileItemViewModel
+                {
+                    Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
+                    Nickname = window.Nickname,
+                    Url = window.Url,
+                    IsEnabled = window.IsEnabled
+                });
+            }
+
+            WindowProfiles.Add(viewModel);
+        }
+
+        SelectedWindowProfile = WindowProfiles.FirstOrDefault();
+    }
+
+    private void NormalizeWindowProfilesInMemory()
+    {
+        if (_isNormalizingWindowProfiles)
+        {
+            return;
+        }
+
+        _isNormalizingWindowProfiles = true;
+        try
+        {
+        if (WindowProfiles.Count <= 1)
+        {
+            return;
+        }
+
+        var normalized = new List<WindowProfileViewModel>();
+        var byId = new Dictionary<Guid, WindowProfileViewModel>();
+        var byName = new Dictionary<string, WindowProfileViewModel>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var profile in WindowProfiles.ToList())
+        {
+            var normalizedName = profile.Name?.Trim() ?? string.Empty;
+            WindowProfileViewModel? existing = null;
+
+            if (profile.Id != Guid.Empty && byId.TryGetValue(profile.Id, out var existingById))
+            {
+                existing = existingById;
+            }
+            else if (!string.IsNullOrWhiteSpace(normalizedName) && byName.TryGetValue(normalizedName, out var existingByName))
+            {
+                existing = existingByName;
+            }
+
+            if (existing is null)
+            {
+                normalized.Add(profile);
+                if (profile.Id != Guid.Empty)
+                {
+                    byId[profile.Id] = profile;
+                }
+
+                if (!string.IsNullOrWhiteSpace(normalizedName))
+                {
+                    byName[normalizedName] = profile;
+                }
+
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(existing.AssignedTvProfileName) && !string.IsNullOrWhiteSpace(profile.AssignedTvProfileName))
+            {
+                existing.AssignedTvProfileId = profile.AssignedTvProfileId;
+                existing.AssignedTvProfileName = profile.AssignedTvProfileName;
+            }
+
+            foreach (var window in profile.Windows.ToList())
+            {
+                var duplicateWindow = existing.Windows.FirstOrDefault(x =>
+                    (window.Id != Guid.Empty && x.Id == window.Id) ||
+                    (string.Equals(x.Nickname, window.Nickname, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(x.Url, window.Url, StringComparison.OrdinalIgnoreCase)));
+
+                if (duplicateWindow is null)
+                {
+                    existing.Windows.Add(window);
+                    continue;
+                }
+
+                duplicateWindow.Nickname = string.IsNullOrWhiteSpace(duplicateWindow.Nickname) ? window.Nickname : duplicateWindow.Nickname;
+                duplicateWindow.Url = string.IsNullOrWhiteSpace(duplicateWindow.Url) ? window.Url : duplicateWindow.Url;
+                duplicateWindow.IsEnabled = duplicateWindow.IsEnabled || window.IsEnabled;
+            }
+        }
+
+        if (normalized.Count == WindowProfiles.Count)
+        {
+            return;
+        }
+
+        var selectedProfileId = SelectedWindowProfile?.Id;
+        WindowProfiles.Clear();
+        foreach (var profile in normalized.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            WindowProfiles.Add(profile);
+        }
+
+        SelectedWindowProfile = selectedProfileId.HasValue
+            ? WindowProfiles.FirstOrDefault(x => x.Id == selectedProfileId.Value)
+            : WindowProfiles.FirstOrDefault();
+        }
+        finally
+        {
+            _isNormalizingWindowProfiles = false;
+        }
+    }
+
+    private void RefreshWindowProfilesCollection()
+    {
+        var snapshot = BuildWindowProfiles();
+        var rebuilt = snapshot
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(windowProfile =>
+            {
+                var viewModel = new WindowProfileViewModel
+                {
+                    Id = windowProfile.Id == Guid.Empty ? Guid.NewGuid() : windowProfile.Id,
+                    Name = windowProfile.Name,
+                    AssignedTvProfileId = windowProfile.AssignedTvProfileId,
+                    AssignedTvProfileName = windowProfile.AssignedTvProfileName
+                };
+
+                foreach (var window in windowProfile.Windows)
+                {
+                    viewModel.Windows.Add(new WindowProfileItemViewModel
+                    {
+                        Id = window.Id == Guid.Empty ? Guid.NewGuid() : window.Id,
+                        Nickname = window.Nickname,
+                        Url = window.Url,
+                        IsEnabled = window.IsEnabled
+                    });
+                }
+
+                return viewModel;
+            })
+            .ToList();
+
+        var selectedProfileId = SelectedWindowProfile?.Id;
+        WindowProfiles.Clear();
+        foreach (var profile in rebuilt)
+        {
+            WindowProfiles.Add(profile);
+        }
+
+        SelectedWindowProfile = selectedProfileId.HasValue
+            ? WindowProfiles.FirstOrDefault(x => x.Id == selectedProfileId.Value)
+            : WindowProfiles.FirstOrDefault();
+    }
+
+    private void OnWindowProfilesInternalCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_isNormalizingWindowProfiles || e.Action == NotifyCollectionChangedAction.Move)
+        {
+            return;
+        }
+
+        NormalizeWindowProfilesInMemory();
+    }
+
+    public async Task SetStreamWindowEnabledAsync(Guid itemId, bool isEnabled)
+    {
+        var stream = WindowProfiles.FirstOrDefault(x => x.Windows.Any(window => window.Id == itemId));
+        var item = stream?.Windows.FirstOrDefault(window => window.Id == itemId);
+        if (stream is null || item is null)
+        {
+            return;
+        }
+
+        item.IsEnabled = isEnabled;
+        await ApplyStreamWindowRuntimeStateAsync(stream, item);
+        await SaveProfileInternalAsync(updateStatus: false);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+    }
+
+    private async Task SyncWindowProfileRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        foreach (var item in windowProfile.Windows.ToList())
+        {
+            await ApplyStreamWindowRuntimeStateAsync(windowProfile, item);
+        }
+
+        var liveWindowsToRemove = Windows
+            .Where(x => x.ActiveSessionId == windowProfile.Id &&
+                        windowProfile.Windows.All(item => item.Id != x.Id || !item.IsEnabled))
+            .ToList();
+
+        foreach (var liveWindow in liveWindowsToRemove)
+        {
+            await _webRtcPublisherService.UnpublishAsync(liveWindow, CancellationToken.None);
+            await _browserInstanceHost.CloseAsync(liveWindow.Id, CancellationToken.None);
+            Windows.Remove(liveWindow);
+        }
+
+        RebuildActiveSessionsFromWindows();
+    }
+
+    private async Task ApplyStreamWindowRuntimeStateAsync(WindowProfileViewModel stream, WindowProfileItemViewModel item)
+    {
+        if (!item.IsEnabled)
+        {
+            var existingWindow = Windows.FirstOrDefault(x => x.Id == item.Id);
+            if (existingWindow is not null)
+            {
+                await _webRtcPublisherService.UnpublishAsync(existingWindow, CancellationToken.None);
+                await _browserInstanceHost.CloseAsync(existingWindow.Id, CancellationToken.None);
+                Windows.Remove(existingWindow);
+                RebuildActiveSessionsFromWindows();
+            }
+
+            return;
+        }
+
+        var tvProfile = TvProfiles.FirstOrDefault(x => x.Id == stream.AssignedTvProfileId);
+        if (tvProfile is null)
+        {
+            item.IsEnabled = false;
+            StatusMessage = string.Format("O stream '{0}' nao possui um perfil de TV valido vinculado.", stream.Name);
+            return;
+        }
+
+        var binding = tvProfile.Targets.FirstOrDefault();
+        if (binding is null)
+        {
+            item.IsEnabled = false;
+            StatusMessage = string.Format("O perfil de TV '{0}' nao possui uma TV base configurada.", tvProfile.Name);
+            return;
+        }
+
+        var resolvedTarget = await _displayIdentityResolverService.ResolveCurrentTargetAsync(
+            new DisplayTarget
+            {
+                Id = binding.DisplayTargetId,
+                Name = binding.DisplayName,
+                NetworkAddress = binding.NetworkAddress,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                MacAddress = binding.MacAddress,
+                AlternateMacAddresses = binding.AlternateMacAddresses.ToList(),
+                DiscoverySource = binding.DiscoverySource,
+                NativeWidth = binding.NativeWidth,
+                NativeHeight = binding.NativeHeight,
+                TransportKind = DisplayTransportKind.LanStreaming,
+                IsStaticTarget = true
+            },
+            Targets,
+            CancellationToken.None);
+
+        Uri? initialUri = null;
+        if (!string.IsNullOrWhiteSpace(item.Url))
+        {
+            Uri.TryCreate(item.Url, UriKind.Absolute, out initialUri);
+        }
+
+        var browserWindow = Windows.FirstOrDefault(x => x.Id == item.Id)
+            ?? await _browserInstanceHost.CreateAsync(
+                initialUri ?? new Uri("about:blank"),
+                CancellationToken.None,
+                item.Id,
+                item.Nickname);
+
+        browserWindow.Title = string.IsNullOrWhiteSpace(item.Nickname) ? browserWindow.Title : item.Nickname;
+        browserWindow.InitialUri = initialUri;
+        browserWindow.State = WindowSessionState.Created;
+        browserWindow.ProfileName = stream.Name;
+        browserWindow.ActiveSessionId = stream.Id;
+        browserWindow.ActiveSessionName = stream.Name;
+        browserWindow.AssignedTarget = resolvedTarget;
+
+        if (!Windows.Any(x => x.Id == browserWindow.Id))
+        {
+            Windows.Add(browserWindow);
+        }
+
+        await _routingService.AssignWindowToTargetAsync(browserWindow, resolvedTarget, CancellationToken.None);
+
+        RebuildActiveSessionsFromWindows();
+        var activeSession = ActiveSessions.FirstOrDefault(x => x.Id == stream.Id);
+        if (activeSession is not null)
+        {
+            activeSession.Name = stream.Name;
+            activeSession.ProfileName = stream.Name;
+            activeSession.BoundDisplays.Clear();
+            activeSession.BoundDisplays.Add(new ActiveSessionDisplayBindingViewModel
+            {
+                DisplayTargetId = resolvedTarget.Id,
+                DisplayName = resolvedTarget.Name,
+                NetworkAddress = resolvedTarget.NetworkAddress,
+                DeviceUniqueId = resolvedTarget.DeviceUniqueId,
+                BindingName = tvProfile.Name
+            });
+            activeSession.TvCount = activeSession.BoundDisplays.Count;
+            activeSession.BindingCount = activeSession.BoundDisplays.Count;
+        }
+    }
+
+    private async Task<DisplayTarget> EnsureTargetForTvProfileEntryAsync(TvProfileTargetEditorViewModel entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.NetworkAddress))
+        {
+            var probedTarget = await _manualDisplayProbeService.ProbeAsync(entry.NetworkAddress, CancellationToken.None);
+            if (probedTarget is not null)
+            {
+                entry.DisplayTargetId = probedTarget.Id;
+                entry.DisplayName = probedTarget.Name;
+                entry.DeviceUniqueId = probedTarget.DeviceUniqueId;
+                entry.MacAddress = probedTarget.MacAddress;
+                entry.AlternateMacAddresses = probedTarget.AlternateMacAddresses.ToList();
+                entry.DiscoverySource = probedTarget.DiscoverySource;
+                entry.NativeWidth = probedTarget.NativeWidth;
+                entry.NativeHeight = probedTarget.NativeHeight;
+            }
+        }
+
+        var existingTarget = Targets.FirstOrDefault(x =>
+            (entry.DisplayTargetId != Guid.Empty && x.Id == entry.DisplayTargetId) ||
+            (!string.IsNullOrWhiteSpace(entry.DeviceUniqueId) &&
+             string.Equals(x.DeviceUniqueId, entry.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
+            HasMatchingMacIdentity(x, entry) ||
+            (!string.IsNullOrWhiteSpace(entry.NetworkAddress) &&
+             string.Equals(x.NetworkAddress, entry.NetworkAddress, StringComparison.OrdinalIgnoreCase)));
+
+        if (existingTarget is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.DisplayName))
+            {
+                existingTarget.Name = entry.DisplayName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.NetworkAddress))
+            {
+                existingTarget.NetworkAddress = entry.NetworkAddress;
+                existingTarget.LastKnownNetworkAddress = entry.NetworkAddress;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.DeviceUniqueId))
+            {
+                existingTarget.DeviceUniqueId = entry.DeviceUniqueId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.MacAddress))
+            {
+                existingTarget.MacAddress = entry.MacAddress;
+            }
+
+            existingTarget.AlternateMacAddresses = MergeMacLists(existingTarget.AlternateMacAddresses, entry.AlternateMacAddresses);
+
+            if (!string.IsNullOrWhiteSpace(entry.DiscoverySource))
+            {
+                existingTarget.DiscoverySource = entry.DiscoverySource;
+            }
+
+            if (entry.NativeWidth > 0)
+            {
+                existingTarget.NativeWidth = entry.NativeWidth;
+            }
+
+            if (entry.NativeHeight > 0)
+            {
+                existingTarget.NativeHeight = entry.NativeHeight;
+            }
+
+            return existingTarget;
+        }
+
+        var target = new DisplayTarget
+        {
+            Id = entry.DisplayTargetId == Guid.Empty ? Guid.NewGuid() : entry.DisplayTargetId,
+            Name = string.IsNullOrWhiteSpace(entry.DisplayName) ? string.Format("TV {0}", entry.NetworkAddress) : entry.DisplayName,
+            NetworkAddress = entry.NetworkAddress,
+            LastKnownNetworkAddress = entry.NetworkAddress,
+            MacAddress = entry.MacAddress,
+            AlternateMacAddresses = entry.AlternateMacAddresses.ToList(),
+            DeviceUniqueId = entry.DeviceUniqueId,
+            DiscoverySource = string.IsNullOrWhiteSpace(entry.DiscoverySource) ? "Manual" : entry.DiscoverySource,
+            TransportKind = DisplayTransportKind.LanStreaming,
+            IsOnline = false,
+            WasPreviouslyKnown = true,
+            IsStaticTarget = true,
+            NativeWidth = entry.NativeWidth <= 0 ? 1920 : entry.NativeWidth,
+            NativeHeight = entry.NativeHeight <= 0 ? 1080 : entry.NativeHeight
+        };
+
+        Targets.Add(target);
+        return target;
+    }
+
+    private static bool HasMatchingMacIdentity(DisplayTarget target, TvProfileTargetEditorViewModel entry)
+    {
+        var targetMacs = MacAddressFormatter.NormalizeMany(new[] { target.MacAddress }.Concat(target.AlternateMacAddresses ?? Enumerable.Empty<string>()));
+        var entryMacs = MacAddressFormatter.NormalizeMany(new[] { entry.MacAddress }.Concat(entry.AlternateMacAddresses ?? Enumerable.Empty<string>()));
+        return targetMacs.Intersect(entryMacs, StringComparer.OrdinalIgnoreCase).Any();
+    }
+
+    private void RestoreProfileDisplayBindings(AppProfile profile)
+    {
+        ProfileDisplayBindings.Clear();
+
+        var bindings = profile.DisplayBindings;
+        if (bindings is null || bindings.Count == 0)
+        {
+            bindings = BuildProfileDisplayBindingsFromProfile(profile);
+        }
+
+        foreach (var binding in bindings)
+        {
+            ProfileDisplayBindings.Add(new ProfileDisplayBindingViewModel
+            {
+                Id = binding.Id == Guid.Empty ? Guid.NewGuid() : binding.Id,
+                Name = binding.Name,
+                DisplayTargetId = binding.DisplayTargetId,
+                DisplayTargetName = binding.DisplayTargetName,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                NetworkAddress = binding.NetworkAddress
+            });
+        }
+    }
+
+    private static List<DisplayBindingProfile> BuildProfileDisplayBindingsFromProfile(AppProfile profile)
+    {
+        var bindings = new Dictionary<Guid, DisplayBindingProfile>();
+        foreach (var persistedWindow in profile.Windows)
+        {
+            if (!persistedWindow.AssignedTargetId.HasValue)
+            {
+                continue;
+            }
+
+            var assignedTargetId = persistedWindow.AssignedTargetId.Value;
+            var target = profile.DisplayTargets.FirstOrDefault(x => x.Id == assignedTargetId);
+            if (target is null || bindings.ContainsKey(target.Id))
+            {
+                continue;
+            }
+
+            bindings[target.Id] = new DisplayBindingProfile
+            {
+                Id = Guid.NewGuid(),
+                Name = target.Name,
+                DisplayTargetId = target.Id,
+                DisplayTargetName = target.Name,
+                DeviceUniqueId = target.DeviceUniqueId,
+                NetworkAddress = target.NetworkAddress
+            };
+        }
+
+        return bindings.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private void OnWindowsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (e.NewItems is not null)
@@ -1471,6 +3027,7 @@ public sealed class MainViewModel : ViewModelBase
             }
         }
 
+        RebuildActiveSessionsFromWindows();
         QueueAutoSave();
         UpdateBridgeSnapshot();
     }
@@ -1536,11 +3093,116 @@ public sealed class MainViewModel : ViewModelBase
     {
         try
         {
-            _webRtcPublisherService.UpdateWindowSnapshots(Windows, WebRtcServerPort, WebRtcBindMode, WebRtcSpecificIp);
+            _webRtcPublisherService.UpdateWindowSnapshots(Windows, BuildBridgeSessions(), WebRtcServerPort, WebRtcBindMode, WebRtcSpecificIp);
         }
         catch
         {
         }
+    }
+
+    private List<BridgeActiveSessionSnapshot> BuildBridgeSessions()
+    {
+        return ActiveSessions.Select(session => new BridgeActiveSessionSnapshot
+        {
+            Id = session.Id.ToString("N"),
+            Name = session.Name,
+            ProfileName = session.ProfileName,
+            WindowIds = session.WindowIds.Select(x => x.ToString("N")).ToList(),
+            DisplayAddresses = session.BoundDisplays
+                .Select(x => x.NetworkAddress)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        }).ToList();
+    }
+
+    private void RebuildActiveSessionsFromWindows()
+    {
+        var existingSessions = ActiveSessions
+            .ToDictionary(
+                x => x.Id,
+                x => new
+                {
+                    x.Name,
+                    x.ProfileName,
+                    x.StartedAtUtc,
+                    BoundDisplays = x.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingViewModel
+                    {
+                        DisplayTargetId = binding.DisplayTargetId,
+                        DisplayName = binding.DisplayName,
+                        NetworkAddress = binding.NetworkAddress,
+                        DeviceUniqueId = binding.DeviceUniqueId,
+                        BindingName = binding.BindingName
+                    }).ToList()
+                });
+
+        var windowGroups = Windows
+            .Where(x => x.ActiveSessionId != Guid.Empty)
+            .GroupBy(x => x.ActiveSessionId)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var orderedSessionIds = existingSessions.Keys
+            .Concat(windowGroups.Keys)
+            .Distinct()
+            .ToList();
+
+        var selectedSessionId = SelectedActiveSession?.Id;
+
+        ActiveSessions.Clear();
+
+        foreach (var sessionId in orderedSessionIds)
+        {
+            windowGroups.TryGetValue(sessionId, out var groupedWindows);
+            var first = groupedWindows?.FirstOrDefault();
+            existingSessions.TryGetValue(sessionId, out var existingSession);
+            var session = new ActiveSessionViewModel
+            {
+                Id = sessionId,
+                Name = existingSession?.Name
+                    ?? (string.IsNullOrWhiteSpace(first?.ActiveSessionName) ? first?.ProfileName ?? "Sessao" : first?.ActiveSessionName ?? "Sessao"),
+                ProfileName = existingSession?.ProfileName ?? first?.ProfileName ?? string.Empty,
+                StartedAtUtc = existingSession?.StartedAtUtc ?? DateTime.UtcNow.ToString("o"),
+                WindowCount = groupedWindows?.Count ?? 0,
+                TvCount = 0
+            };
+
+            foreach (var window in groupedWindows ?? Enumerable.Empty<WindowSession>())
+            {
+                session.WindowIds.Add(window.Id);
+            }
+
+            foreach (var binding in existingSession?.BoundDisplays ?? Enumerable.Empty<ActiveSessionDisplayBindingViewModel>())
+            {
+                session.BoundDisplays.Add(binding);
+            }
+
+            session.TvCount = session.BoundDisplays.Count;
+            session.BindingCount = session.BoundDisplays.Count;
+
+            ActiveSessions.Add(session);
+        }
+
+        if (selectedSessionId.HasValue)
+        {
+            SelectedActiveSession = ActiveSessions.FirstOrDefault(x => x.Id == selectedSessionId.Value);
+        }
+
+        if (SelectedActiveSession is null)
+        {
+            SelectedActiveSession = ActiveSessions.FirstOrDefault();
+        }
+    }
+
+    private string BuildSessionName(string profileName)
+    {
+        var baseName = string.IsNullOrWhiteSpace(profileName) ? "Sessao" : profileName.Trim();
+        var nextNumber = ActiveSessions.Count(x => string.Equals(x.ProfileName, profileName, StringComparison.OrdinalIgnoreCase)) + 1;
+        return string.Format("{0} #{1}", baseName, nextNumber);
+    }
+
+    private static List<string> MergeMacLists(IEnumerable<string>? existing, IEnumerable<string>? incoming)
+    {
+        return MacAddressFormatter.NormalizeMany((existing ?? Enumerable.Empty<string>()).Concat(incoming ?? Enumerable.Empty<string>()));
     }
 
     private static bool TryCreateUri(string input, out Uri uri)
@@ -1563,12 +3225,317 @@ public sealed class MainViewModel : ViewModelBase
                string.Equals(targetProfile.DeviceUniqueId, "DONGLE-MIRACAST-DD-EE-FF-44-55-66", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsLegacyFakeDisplayTarget(DisplayTarget target)
+private static bool IsLegacyFakeDisplayTarget(DisplayTarget target)
     {
         return target.Id == LegacyTvSalaId ||
                target.Id == LegacyDongleMiracastId ||
                string.Equals(target.DeviceUniqueId, "TV-SALA-AA-BB-CC-11-22-33", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(target.DeviceUniqueId, "DONGLE-MIRACAST-DD-EE-FF-44-55-66", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+public sealed class ActiveSessionViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _name = string.Empty;
+    private string _profileName = string.Empty;
+    private string _startedAtUtc = string.Empty;
+    private int _windowCount;
+    private int _tvCount;
+    private int _bindingCount;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    public string ProfileName
+    {
+        get => _profileName;
+        set => SetProperty(ref _profileName, value);
+    }
+
+    public string StartedAtUtc
+    {
+        get => _startedAtUtc;
+        set => SetProperty(ref _startedAtUtc, value);
+    }
+
+    public int WindowCount
+    {
+        get => _windowCount;
+        set => SetProperty(ref _windowCount, value);
+    }
+
+    public int TvCount
+    {
+        get => _tvCount;
+        set => SetProperty(ref _tvCount, value);
+    }
+
+    public int BindingCount
+    {
+        get => _bindingCount;
+        set => SetProperty(ref _bindingCount, value);
+    }
+
+    public ObservableCollection<Guid> WindowIds { get; } = new ObservableCollection<Guid>();
+
+    public ObservableCollection<ActiveSessionDisplayBindingViewModel> BoundDisplays { get; } = new ObservableCollection<ActiveSessionDisplayBindingViewModel>();
+}
+
+public sealed class ActiveSessionDisplayBindingViewModel : ViewModelBase
+{
+    private Guid _displayTargetId;
+    private string _displayName = string.Empty;
+    private string _networkAddress = string.Empty;
+    private string _deviceUniqueId = string.Empty;
+    private string _bindingName = string.Empty;
+
+    public Guid DisplayTargetId
+    {
+        get => _displayTargetId;
+        set => SetProperty(ref _displayTargetId, value);
+    }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        set => SetProperty(ref _displayName, value);
+    }
+
+    public string NetworkAddress
+    {
+        get => _networkAddress;
+        set => SetProperty(ref _networkAddress, value);
+    }
+
+    public string DeviceUniqueId
+    {
+        get => _deviceUniqueId;
+        set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string BindingName
+    {
+        get => _bindingName;
+        set => SetProperty(ref _bindingName, value);
+    }
+}
+
+public sealed class ProfileDisplayBindingViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _name = string.Empty;
+    private Guid _displayTargetId;
+    private string _displayTargetName = string.Empty;
+    private string _deviceUniqueId = string.Empty;
+    private string _networkAddress = string.Empty;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    public Guid DisplayTargetId
+    {
+        get => _displayTargetId;
+        set => SetProperty(ref _displayTargetId, value);
+    }
+
+    public string DisplayTargetName
+    {
+        get => _displayTargetName;
+        set => SetProperty(ref _displayTargetName, value);
+    }
+
+    public string DeviceUniqueId
+    {
+        get => _deviceUniqueId;
+        set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string NetworkAddress
+    {
+        get => _networkAddress;
+        set => SetProperty(ref _networkAddress, value);
+    }
+}
+
+public sealed class TvProfileViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _name = string.Empty;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    public ObservableCollection<TvProfileTargetViewModel> Targets { get; } = new ObservableCollection<TvProfileTargetViewModel>();
+
+    public string PrimaryDisplayName => Targets.FirstOrDefault()?.DisplayName ?? "TV nao configurada";
+
+    public string PrimaryNetworkAddress => Targets.FirstOrDefault()?.NetworkAddress ?? "IP nao configurado";
+
+    public void NotifyTargetSummaryChanged()
+    {
+        RaisePropertyChanged(nameof(PrimaryDisplayName));
+        RaisePropertyChanged(nameof(PrimaryNetworkAddress));
+    }
+}
+
+public sealed class TvProfileTargetViewModel : ViewModelBase
+{
+    private Guid _displayTargetId;
+    private string _displayName = string.Empty;
+    private string _networkAddress = string.Empty;
+    private string _deviceUniqueId = string.Empty;
+    private string _macAddress = string.Empty;
+    private List<string> _alternateMacAddresses = new List<string>();
+    private string _discoverySource = string.Empty;
+    private int _nativeWidth = 1920;
+    private int _nativeHeight = 1080;
+
+    public Guid DisplayTargetId
+    {
+        get => _displayTargetId;
+        set => SetProperty(ref _displayTargetId, value);
+    }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        set => SetProperty(ref _displayName, value);
+    }
+
+    public string NetworkAddress
+    {
+        get => _networkAddress;
+        set => SetProperty(ref _networkAddress, value);
+    }
+
+    public string DeviceUniqueId
+    {
+        get => _deviceUniqueId;
+        set => SetProperty(ref _deviceUniqueId, value);
+    }
+
+    public string MacAddress
+    {
+        get => _macAddress;
+        set => SetProperty(ref _macAddress, value);
+    }
+
+    public List<string> AlternateMacAddresses
+    {
+        get => _alternateMacAddresses;
+        set => SetProperty(ref _alternateMacAddresses, value ?? new List<string>());
+    }
+
+    public string DiscoverySource
+    {
+        get => _discoverySource;
+        set => SetProperty(ref _discoverySource, value);
+    }
+
+    public int NativeWidth
+    {
+        get => _nativeWidth;
+        set => SetProperty(ref _nativeWidth, value);
+    }
+
+    public int NativeHeight
+    {
+        get => _nativeHeight;
+        set => SetProperty(ref _nativeHeight, value);
+    }
+}
+
+public sealed class WindowProfileViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _name = string.Empty;
+    private Guid? _assignedTvProfileId;
+    private string _assignedTvProfileName = string.Empty;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    public Guid? AssignedTvProfileId
+    {
+        get => _assignedTvProfileId;
+        set => SetProperty(ref _assignedTvProfileId, value);
+    }
+
+    public string AssignedTvProfileName
+    {
+        get => _assignedTvProfileName;
+        set => SetProperty(ref _assignedTvProfileName, value);
+    }
+
+    public ObservableCollection<WindowProfileItemViewModel> Windows { get; } = new ObservableCollection<WindowProfileItemViewModel>();
+}
+
+public sealed class WindowProfileItemViewModel : ViewModelBase
+{
+    private Guid _id;
+    private string _nickname = string.Empty;
+    private string _url = string.Empty;
+    private bool _isEnabled;
+
+    public Guid Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    public string Nickname
+    {
+        get => _nickname;
+        set => SetProperty(ref _nickname, value);
+    }
+
+    public string Url
+    {
+        get => _url;
+        set => SetProperty(ref _url, value);
+    }
+
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        set => SetProperty(ref _isEnabled, value);
     }
 }
 

@@ -7,7 +7,7 @@ namespace WindowManager.Core.Abstractions;
 
 public interface IBrowserInstanceHost
 {
-    Task<WindowSession> CreateAsync(Uri initialUri, CancellationToken cancellationToken);
+    Task<WindowSession> CreateAsync(Uri initialUri, CancellationToken cancellationToken, Guid? preferredId = null, string? preferredTitle = null);
 
     Task CloseAsync(Guid windowSessionId, CancellationToken cancellationToken);
 

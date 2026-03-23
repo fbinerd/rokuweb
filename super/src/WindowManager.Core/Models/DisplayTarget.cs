@@ -1,5 +1,8 @@
 ﻿using System;
 
+using System.Collections.Generic;
+using System.Linq;
+
 namespace WindowManager.Core.Models;
 
 public sealed class DisplayTarget
@@ -13,6 +16,8 @@ public sealed class DisplayTarget
     public string LastKnownNetworkAddress { get; set; } = string.Empty;
 
     public string MacAddress { get; set; } = string.Empty;
+
+    public List<string> AlternateMacAddresses { get; set; } = new List<string>();
 
     public string DeviceUniqueId { get; set; } = string.Empty;
 
@@ -56,7 +61,8 @@ public sealed class DisplayTarget
             var source = DiscoverySource;
             var transport = GetTransportLabel();
             var staticLabel = IsStaticTarget ? "Estatica" : string.Empty;
-            var macLabel = string.IsNullOrWhiteSpace(MacAddress) ? string.Empty : string.Format("MAC {0}", MacAddress);
+            var macs = MacAddressFormatter.NormalizeMany(new[] { MacAddress }.Concat(AlternateMacAddresses ?? Enumerable.Empty<string>())).ToArray();
+            var macLabel = macs.Length == 0 ? string.Empty : string.Format("MAC {0}", string.Join(", ", macs));
 
             if (!string.IsNullOrWhiteSpace(staticLabel) && !string.IsNullOrWhiteSpace(macLabel))
             {

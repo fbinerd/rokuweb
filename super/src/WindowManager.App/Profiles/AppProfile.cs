@@ -35,6 +35,18 @@ public sealed class AppProfile
 
     [DataMember(Order = 9)]
     public List<DisplayTargetProfile> DisplayTargets { get; set; } = new List<DisplayTargetProfile>();
+
+    [DataMember(Order = 10)]
+    public List<DisplayBindingProfile> DisplayBindings { get; set; } = new List<DisplayBindingProfile>();
+
+    [DataMember(Order = 11)]
+    public List<TvProfileDefinition> TvProfiles { get; set; } = new List<TvProfileDefinition>();
+
+    [DataMember(Order = 12)]
+    public List<WindowGroupProfile> WindowProfiles { get; set; } = new List<WindowGroupProfile>();
+
+    [DataMember(Order = 13)]
+    public List<ActiveSessionRecord> ActiveSessions { get; set; } = new List<ActiveSessionRecord>();
 }
 
 [DataContract]
@@ -75,6 +87,15 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 12)]
     public bool IsWebRtcPublishingEnabled { get; set; }
+
+    [DataMember(Order = 13)]
+    public string ProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 14)]
+    public Guid ActiveSessionId { get; set; }
+
+    [DataMember(Order = 15)]
+    public string ActiveSessionName { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -121,26 +142,130 @@ public sealed class DisplayTargetProfile
     public string MacAddress { get; set; } = string.Empty;
 
     [DataMember(Order = 6)]
+    public List<string> AlternateMacAddresses { get; set; } = new List<string>();
+
+    [DataMember(Order = 7)]
     public string DeviceUniqueId { get; set; } = string.Empty;
+
+    [DataMember(Order = 8)]
+    public string DiscoverySource { get; set; } = string.Empty;
+
+    [DataMember(Order = 9)]
+    public DisplayTransportKind TransportKind { get; set; }
+
+    [DataMember(Order = 10)]
+    public bool IsOnline { get; set; }
+
+    [DataMember(Order = 11)]
+    public bool WasPreviouslyKnown { get; set; }
+
+    [DataMember(Order = 12)]
+    public bool IsStaticTarget { get; set; }
+
+    [DataMember(Order = 13)]
+    public int NativeWidth { get; set; } = 1920;
+
+    [DataMember(Order = 14)]
+    public int NativeHeight { get; set; } = 1080;
+}
+
+[DataContract]
+public sealed class DisplayBindingProfile
+{
+    [DataMember(Order = 1)]
+    public Guid Id { get; set; }
+
+    [DataMember(Order = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public Guid DisplayTargetId { get; set; }
+
+    [DataMember(Order = 4)]
+    public string DisplayTargetName { get; set; } = string.Empty;
+
+    [DataMember(Order = 5)]
+    public string DeviceUniqueId { get; set; } = string.Empty;
+
+    [DataMember(Order = 6)]
+    public string NetworkAddress { get; set; } = string.Empty;
+}
+
+[DataContract]
+public sealed class TvProfileDefinition
+{
+    [DataMember(Order = 1)]
+    public Guid Id { get; set; }
+
+    [DataMember(Order = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public List<TvProfileTargetDefinition> Targets { get; set; } = new List<TvProfileTargetDefinition>();
+}
+
+[DataContract]
+public sealed class TvProfileTargetDefinition
+{
+    [DataMember(Order = 1)]
+    public Guid DisplayTargetId { get; set; }
+
+    [DataMember(Order = 2)]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public string NetworkAddress { get; set; } = string.Empty;
+
+    [DataMember(Order = 4)]
+    public string DeviceUniqueId { get; set; } = string.Empty;
+
+    [DataMember(Order = 5)]
+    public string MacAddress { get; set; } = string.Empty;
+
+    [DataMember(Order = 6)]
+    public List<string> AlternateMacAddresses { get; set; } = new List<string>();
 
     [DataMember(Order = 7)]
     public string DiscoverySource { get; set; } = string.Empty;
 
     [DataMember(Order = 8)]
-    public DisplayTransportKind TransportKind { get; set; }
-
-    [DataMember(Order = 9)]
-    public bool IsOnline { get; set; }
-
-    [DataMember(Order = 10)]
-    public bool WasPreviouslyKnown { get; set; }
-
-    [DataMember(Order = 11)]
-    public bool IsStaticTarget { get; set; }
-
-    [DataMember(Order = 12)]
     public int NativeWidth { get; set; } = 1920;
 
-    [DataMember(Order = 13)]
+    [DataMember(Order = 9)]
     public int NativeHeight { get; set; } = 1080;
+}
+
+[DataContract]
+public sealed class WindowGroupProfile
+{
+    [DataMember(Order = 1)]
+    public Guid Id { get; set; }
+
+    [DataMember(Order = 2)]
+    public string Name { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public Guid? AssignedTvProfileId { get; set; }
+
+    [DataMember(Order = 4)]
+    public string AssignedTvProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 5)]
+    public List<WindowLinkProfile> Windows { get; set; } = new List<WindowLinkProfile>();
+}
+
+[DataContract]
+public sealed class WindowLinkProfile
+{
+    [DataMember(Order = 1)]
+    public Guid Id { get; set; }
+
+    [DataMember(Order = 2)]
+    public string Nickname { get; set; } = string.Empty;
+
+    [DataMember(Order = 3)]
+    public string Url { get; set; } = string.Empty;
+
+    [DataMember(Order = 4)]
+    public bool IsEnabled { get; set; }
 }

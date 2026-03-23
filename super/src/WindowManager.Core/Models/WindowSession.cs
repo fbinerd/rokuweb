@@ -19,6 +19,9 @@ public sealed class WindowSession : INotifyPropertyChanged
     private int _targetManualHeight = 1080;
     private bool _isWebRtcPublishingEnabled;
     private string _publishedWebRtcUrl = string.Empty;
+    private string _profileName = string.Empty;
+    private Guid _activeSessionId = Guid.Empty;
+    private string _activeSessionName = string.Empty;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -98,6 +101,24 @@ public sealed class WindowSession : INotifyPropertyChanged
     {
         get => _publishedWebRtcUrl;
         set => SetProperty(ref _publishedWebRtcUrl, value);
+    }
+
+    public string ProfileName
+    {
+        get => _profileName;
+        set => SetProperty(ref _profileName, value);
+    }
+
+    public Guid ActiveSessionId
+    {
+        get => _activeSessionId;
+        set => SetProperty(ref _activeSessionId, value);
+    }
+
+    public string ActiveSessionName
+    {
+        get => _activeSessionName;
+        set => SetProperty(ref _activeSessionName, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

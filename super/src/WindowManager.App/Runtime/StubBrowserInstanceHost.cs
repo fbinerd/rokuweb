@@ -12,13 +12,14 @@ public sealed class StubBrowserInstanceHost : IBrowserInstanceHost
     private readonly Dictionary<Guid, WindowSession> _sessions = new Dictionary<Guid, WindowSession>();
     private int _counter;
 
-    public Task<WindowSession> CreateAsync(Uri initialUri, CancellationToken cancellationToken)
+    public Task<WindowSession> CreateAsync(Uri initialUri, CancellationToken cancellationToken, Guid? preferredId = null, string? preferredTitle = null)
     {
         _counter++;
 
         var session = new WindowSession
         {
-            Title = $"Janela {_counter}",
+            Id = preferredId ?? Guid.NewGuid(),
+            Title = string.IsNullOrWhiteSpace(preferredTitle) ? $"Janela {_counter}" : preferredTitle!,
             InitialUri = initialUri,
             NativeHandle = _counter,
             State = WindowSessionState.Running

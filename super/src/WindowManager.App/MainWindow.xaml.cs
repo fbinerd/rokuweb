@@ -11,6 +11,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Windows.Data;
 using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 using WindowManager.App.ViewModels;
@@ -27,11 +28,19 @@ public partial class MainWindow : Window
     private readonly Dictionary<Guid, Border> _previewCards = new Dictionary<Guid, Border>();
     private readonly Dictionary<Guid, Image> _previewImages = new Dictionary<Guid, Image>();
     private readonly Dictionary<Guid, BrowserCaptureWindow> _captureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
+    private readonly Dictionary<Guid, Border> _streamDefinitionPreviewCards = new Dictionary<Guid, Border>();
+    private readonly Dictionary<Guid, Image> _streamDefinitionPreviewImages = new Dictionary<Guid, Image>();
+    private readonly Dictionary<Guid, BrowserCaptureWindow> _streamDefinitionCaptureWindows = new Dictionary<Guid, BrowserCaptureWindow>();
+    private readonly Dictionary<Guid, string> _streamDefinitionSectionKeys = new Dictionary<Guid, string>();
+    private readonly Dictionary<string, GroupBox> _streamPreviewGroups = new Dictionary<string, GroupBox>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, WrapPanel> _streamPreviewPanels = new Dictionary<string, WrapPanel>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextBlock> _streamPreviewPlaceholders = new Dictionary<string, TextBlock>(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _previewRefreshTimer;
     private TransmissionLogWindow? _logWindow;
     private Guid? _expandedPreviewWindowId;
     private bool _isRefreshingPreviews;
     private Point? _lastExpandedPreviewMousePoint;
+    private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
@@ -43,7 +52,21 @@ public partial class MainWindow : Window
         DataContext = viewModel;
 
         _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
+        _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+
+        foreach (var stream in _viewModel.WindowProfiles)
+        {
+            stream.PropertyChanged += OnWindowProfilePropertyChanged;
+            stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
+            foreach (var item in stream.Windows)
+            {
+                item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                AddStreamDefinitionPreview(stream, item);
+            }
+        }
+
+        RefreshStreamPreviewSections();
 
         foreach (var window in _viewModel.Windows)
         {
@@ -67,6 +90,8 @@ public partial class MainWindow : Window
         try
         {
             await _viewModel.InitializeAfterStartupAsync();
+            RefreshStreamProfilesListView();
+            await Dispatcher.InvokeAsync(RefreshStreamProfilesListView, DispatcherPriority.Background);
             _previewRefreshTimer.Start();
             _ = RefreshPreviewImagesAsync();
         }
@@ -95,6 +120,133 @@ public partial class MainWindow : Window
         }
 
         UpdateSelectionVisuals();
+    }
+
+    private void OnWindowProfilesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (WindowProfileViewModel stream in e.NewItems)
+            {
+                stream.PropertyChanged += OnWindowProfilePropertyChanged;
+                stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
+                foreach (WindowProfileItemViewModel item in stream.Windows)
+                {
+                    item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                    AddStreamDefinitionPreview(stream, item);
+                }
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (WindowProfileViewModel stream in e.OldItems)
+            {
+                stream.PropertyChanged -= OnWindowProfilePropertyChanged;
+                stream.Windows.CollectionChanged -= OnWindowProfileWindowsCollectionChanged;
+                foreach (WindowProfileItemViewModel item in stream.Windows)
+                {
+                    item.PropertyChanged -= OnWindowProfileItemPropertyChanged;
+                    RemoveStreamDefinitionPreview(item.Id);
+                }
+            }
+        }
+
+        RefreshStreamPreviewSections();
+        RefreshStreamProfilesListView();
+    }
+
+    private void RefreshStreamProfilesListView()
+    {
+        StreamProfilesListBox.Items.Refresh();
+        CollectionViewSource.GetDefaultView(StreamProfilesListBox.ItemsSource)?.Refresh();
+    }
+
+    private void OnWindowProfilePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WindowProfileViewModel.Name) ||
+            e.PropertyName == nameof(WindowProfileViewModel.AssignedTvProfileName))
+        {
+            RefreshStreamDefinitionPreviewSection(sender as WindowProfileViewModel);
+            RefreshStreamPreviewSections();
+        }
+    }
+
+    private void OnWindowProfileWindowsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        var stream = _viewModel.WindowProfiles.FirstOrDefault(x => ReferenceEquals(x.Windows, sender));
+        if (stream is null)
+        {
+            return;
+        }
+
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            var streamKey = GetStreamKey(stream);
+            var existingIds = _streamDefinitionSectionKeys
+                .Where(x => string.Equals(x.Value, streamKey, StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Key)
+                .ToList();
+
+            foreach (var itemId in existingIds)
+            {
+                RemoveStreamDefinitionPreview(itemId);
+            }
+
+            foreach (var item in stream.Windows)
+            {
+                item.PropertyChanged -= OnWindowProfileItemPropertyChanged;
+                item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                AddStreamDefinitionPreview(stream, item);
+            }
+
+            RefreshStreamPreviewSections();
+            return;
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (WindowProfileItemViewModel item in e.NewItems)
+            {
+                item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                AddStreamDefinitionPreview(stream, item);
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (WindowProfileItemViewModel item in e.OldItems)
+            {
+                item.PropertyChanged -= OnWindowProfileItemPropertyChanged;
+                RemoveStreamDefinitionPreview(item.Id);
+            }
+        }
+
+        RefreshStreamPreviewSections();
+    }
+
+    private void OnWindowProfileItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not WindowProfileItemViewModel item)
+        {
+            return;
+        }
+
+        if (e.PropertyName == nameof(WindowProfileItemViewModel.Url))
+        {
+            if (_streamDefinitionCaptureWindows.TryGetValue(item.Id, out var captureWindow))
+            {
+                captureWindow.UpdateAddress(TryCreateUri(item.Url));
+                _browserSnapshotService.InvalidateCapture(item.Id);
+                _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
+            }
+        }
+
+        if (e.PropertyName == nameof(WindowProfileItemViewModel.Url) ||
+            e.PropertyName == nameof(WindowProfileItemViewModel.Nickname))
+        {
+            RefreshStreamDefinitionPreviewCardHeader(item);
+        }
     }
 
     private void AddPreview(WindowSession session)
@@ -141,13 +293,26 @@ public partial class MainWindow : Window
         };
         deleteButton.Click += OnDeleteWindowButtonClick;
 
+        var streamToggle = new CheckBox
+        {
+            Content = "Transmitir",
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = true,
+            Tag = session.Id
+        };
+        streamToggle.Click += OnStreamWindowEnabledToggleClick;
+
         var headerTopRow = new Grid();
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         Grid.SetColumn(headerTitle, 0);
-        Grid.SetColumn(deleteButton, 1);
+        Grid.SetColumn(streamToggle, 1);
+        Grid.SetColumn(deleteButton, 2);
         headerTopRow.Children.Add(headerTitle);
+        headerTopRow.Children.Add(streamToggle);
         headerTopRow.Children.Add(deleteButton);
 
         var header = new StackPanel
@@ -215,7 +380,7 @@ public partial class MainWindow : Window
         card.MouseLeftButtonDown += OnPreviewCardMouseLeftButtonDown;
 
         _previewCards[session.Id] = card;
-        PreviewPanel.Children.Add(card);
+        AttachPreviewCardToSection(session, card);
     }
 
     private UIElement CreatePreviewContent(WindowSession session)
@@ -283,6 +448,10 @@ public partial class MainWindow : Window
                     {
                         deleteButton.Click -= OnDeleteWindowButtonClick;
                     }
+                    else if (child is CheckBox checkBox)
+                    {
+                        checkBox.Click -= OnStreamWindowEnabledToggleClick;
+                    }
                 }
             }
 
@@ -300,7 +469,10 @@ public partial class MainWindow : Window
             }
 
             card.MouseLeftButtonDown -= OnPreviewCardMouseLeftButtonDown;
-            PreviewPanel.Children.Remove(card);
+            if (card.Parent is Panel parentPanel)
+            {
+                parentPanel.Children.Remove(card);
+            }
             _previewCards.Remove(session.Id);
         }
 
@@ -318,6 +490,205 @@ public partial class MainWindow : Window
         {
             CloseExpandedPreview();
         }
+
+        RestoreStreamDefinitionPreviewIfNeeded(session.Id);
+
+        RefreshStreamPreviewSections();
+    }
+
+    private void AddStreamDefinitionPreview(WindowProfileViewModel stream, WindowProfileItemViewModel item)
+    {
+        item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
+        RemoveStreamDefinitionPreviewCardOnly(item.Id);
+        EnsureStreamDefinitionCaptureWindow(item);
+
+        var headerTitle = new TextBlock
+        {
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 8, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+            Text = item.Nickname
+        };
+
+        var headerUrl = new TextBlock
+        {
+            Foreground = Brushes.DimGray,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Text = item.Url
+        };
+
+        var headerState = new TextBlock
+        {
+            Foreground = Brushes.DarkSlateGray,
+            Margin = new Thickness(0, 4, 0, 0),
+            FontSize = 11,
+            Text = "Previa do stream"
+        };
+
+        var streamToggle = new CheckBox
+        {
+            Content = "Transmitir",
+            Margin = new Thickness(0, 0, 0, 6),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = item.IsEnabled,
+            Tag = item.Id
+        };
+        streamToggle.Click += OnStreamWindowEnabledToggleClick;
+
+        var header = new StackPanel
+        {
+            Margin = new Thickness(12, 10, 12, 8),
+            Tag = item.Id
+        };
+        header.Children.Add(streamToggle);
+        header.Children.Add(headerTitle);
+        header.Children.Add(headerUrl);
+        header.Children.Add(headerState);
+
+        var image = new Image
+        {
+            Stretch = Stretch.Uniform,
+            SnapsToDevicePixels = true,
+            UseLayoutRounding = true
+        };
+        _streamDefinitionPreviewImages[item.Id] = image;
+
+        var previewHost = new Border
+        {
+            Margin = new Thickness(12, 0, 12, 12),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+            Child = image
+        };
+
+        var contentGrid = new Grid();
+        contentGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Grid.SetRow(header, 0);
+        Grid.SetRow(previewHost, 1);
+        contentGrid.Children.Add(header);
+        contentGrid.Children.Add(previewHost);
+
+        var card = new Border
+        {
+            Width = 340,
+            Height = 250,
+            Margin = new Thickness(0, 0, 12, 12),
+            CornerRadius = new CornerRadius(12),
+            BorderThickness = new Thickness(2),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+            Background = Brushes.White,
+            Child = contentGrid,
+            Tag = item,
+            SnapsToDevicePixels = true
+        };
+        card.MouseLeftButtonDown += OnStreamDefinitionPreviewMouseLeftButtonDown;
+
+        _streamDefinitionPreviewCards[item.Id] = card;
+        _streamDefinitionSectionKeys[item.Id] = GetStreamKey(stream);
+        AttachStreamDefinitionPreviewCard(item.Id, card);
+        RefreshStreamDefinitionPreviewCardHeader(item);
+    }
+
+    private void RemoveStreamDefinitionPreview(Guid itemId)
+    {
+        RemoveStreamDefinitionPreviewCardOnly(itemId);
+        _streamDefinitionSectionKeys.Remove(itemId);
+
+        if (_streamDefinitionCaptureWindows.TryGetValue(itemId, out var captureWindow))
+        {
+            _browserSnapshotService.Unregister(itemId);
+            _browserAudioCaptureService.Unregister(itemId);
+            captureWindow.Close();
+            _streamDefinitionCaptureWindows.Remove(itemId);
+        }
+    }
+
+    private void RemoveStreamDefinitionPreviewCardOnly(Guid itemId)
+    {
+        if (_streamDefinitionPreviewCards.TryGetValue(itemId, out var card))
+        {
+            card.MouseLeftButtonDown -= OnStreamDefinitionPreviewMouseLeftButtonDown;
+            if (card.Child is Grid contentGrid &&
+                contentGrid.Children.Count > 0 &&
+                contentGrid.Children[0] is StackPanel header)
+            {
+                foreach (var child in header.Children)
+                {
+                    if (child is CheckBox checkBox)
+                    {
+                        checkBox.Click -= OnStreamWindowEnabledToggleClick;
+                    }
+                }
+            }
+
+            if (card.Parent is Panel parentPanel)
+            {
+                parentPanel.Children.Remove(card);
+            }
+
+            _streamDefinitionPreviewCards.Remove(itemId);
+        }
+
+        _streamDefinitionPreviewImages.Remove(itemId);
+    }
+
+    private void EnsureStreamDefinitionCaptureWindow(WindowProfileItemViewModel item)
+    {
+        if (!AppRuntimeState.BrowserEngineAvailable || _streamDefinitionCaptureWindows.ContainsKey(item.Id))
+        {
+            return;
+        }
+
+        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService);
+        _streamDefinitionCaptureWindows[item.Id] = captureWindow;
+        _browserSnapshotService.Register(item.Id, captureWindow.Browser);
+        captureWindow.Show();
+    }
+
+    private void OnStreamDefinitionPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border border || border.Tag is not WindowProfileItemViewModel item)
+        {
+            return;
+        }
+
+        if (e.ClickCount >= 2)
+        {
+            ToggleExpandedPreview(item.Id, item.Nickname);
+        }
+    }
+
+    private void RestoreStreamDefinitionPreviewIfNeeded(Guid itemId)
+    {
+        if (_streamDefinitionPreviewCards.ContainsKey(itemId))
+        {
+            return;
+        }
+
+        WindowProfileViewModel? ownerStream = null;
+        WindowProfileItemViewModel? ownerItem = null;
+
+        foreach (var stream in _viewModel.WindowProfiles)
+        {
+            var match = stream.Windows.FirstOrDefault(x => x.Id == itemId);
+            if (match is not null)
+            {
+                ownerStream = stream;
+                ownerItem = match;
+                break;
+            }
+        }
+
+        if (ownerStream is null || ownerItem is null)
+        {
+            return;
+        }
+
+        AddStreamDefinitionPreview(ownerStream, ownerItem);
     }
 
     private void OnPreviewCardMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -475,6 +846,130 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnOpenTvProfileSetupClick(object sender, RoutedEventArgs e)
+    {
+        var dialogViewModel = new TvProfileSetupViewModel(
+            _viewModel.Targets,
+            refreshTargetsAsync: _viewModel.RefreshTargetsForSetupAsync,
+            resolveCurrentTargetAsync: _viewModel.ResolveCurrentTargetForSetupAsync);
+        var dialog = new TvProfileSetupDialog(dialogViewModel)
+        {
+            Owner = this,
+            Title = "Novo Perfil de TV"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyTvProfileSetupAsync(dialogViewModel);
+    }
+
+    private async void OnEditSelectedTvProfileDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        var tvProfile = ResolveItemFromEvent<TvProfileViewModel>(e.OriginalSource as DependencyObject) ?? _viewModel.SelectedTvProfile;
+        if (tvProfile is null)
+        {
+            return;
+        }
+
+        _viewModel.SelectedTvProfile = tvProfile;
+
+        var dialogViewModel = new TvProfileSetupViewModel(
+            _viewModel.Targets,
+            tvProfile,
+            _viewModel.RefreshTargetsForSetupAsync,
+            _viewModel.ResolveCurrentTargetForSetupAsync);
+        var dialog = new TvProfileSetupDialog(dialogViewModel)
+        {
+            Owner = this,
+            Title = string.Format("Editar Perfil de TV - {0}", tvProfile.Name)
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyTvProfileSetupAsync(dialogViewModel);
+    }
+
+    private static T? ResolveItemFromEvent<T>(DependencyObject? originalSource)
+        where T : class
+    {
+        var current = originalSource;
+        while (current is not null)
+        {
+            if (current is FrameworkElement element && element.DataContext is T typed)
+            {
+                return typed;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
+
+    private async void OnOpenWindowProfileSetupClick(object sender, RoutedEventArgs e)
+    {
+        var dialogViewModel = new WindowProfileSetupViewModel(GetAvailableTvProfilesForStream());
+        var dialog = new WindowProfileSetupDialog(dialogViewModel, _browserSnapshotService, _browserAudioCaptureService)
+        {
+            Owner = this,
+            Title = "Novo Stream"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyWindowProfileSetupAsync(dialogViewModel);
+    }
+
+    private async void OnEditSelectedWindowProfileDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        var streamProfile = ResolveItemFromEvent<WindowProfileViewModel>(e.OriginalSource as DependencyObject) ?? _viewModel.SelectedWindowProfile;
+        if (streamProfile is null)
+        {
+            return;
+        }
+
+        _viewModel.SelectedWindowProfile = streamProfile;
+
+        var dialogViewModel = new WindowProfileSetupViewModel(GetAvailableTvProfilesForStream(streamProfile), streamProfile);
+        var dialog = new WindowProfileSetupDialog(dialogViewModel, _browserSnapshotService, _browserAudioCaptureService)
+        {
+            Owner = this,
+            Title = string.Format("Editar Stream - {0}", streamProfile.Name)
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _viewModel.ApplyWindowProfileSetupAsync(dialogViewModel);
+    }
+
+    private IReadOnlyList<TvProfileViewModel> GetAvailableTvProfilesForStream(WindowProfileViewModel? editingStream = null)
+    {
+        var occupiedTvProfileIds = _viewModel.WindowProfiles
+            .Where(x => editingStream is null || x.Id != editingStream.Id)
+            .Select(x => x.AssignedTvProfileId)
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .ToHashSet();
+
+        return _viewModel.TvProfiles
+            .Where(x => !occupiedTvProfileIds.Contains(x.Id) ||
+                        (editingStream?.AssignedTvProfileId.HasValue == true && editingStream.AssignedTvProfileId.Value == x.Id))
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private void OnDeleteWindowClick(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem menuItem || menuItem.Tag is not WindowSession session)
@@ -500,7 +995,12 @@ public partial class MainWindow : Window
 
     private void ToggleExpandedPreview(WindowSession session)
     {
-        if (_expandedPreviewWindowId == session.Id)
+        ToggleExpandedPreview(session.Id, session.Title);
+    }
+
+    private void ToggleExpandedPreview(Guid previewId, string title)
+    {
+        if (_expandedPreviewWindowId == previewId)
         {
             CloseExpandedPreview();
             return;
@@ -512,9 +1012,9 @@ public partial class MainWindow : Window
         }
 
         CloseExpandedPreview();
-        ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", session.Title);
+        ExpandedPreviewTitle.Text = string.Format("Visualizacao ampliada - {0}", title);
         ExpandedPreviewOverlay.Visibility = Visibility.Visible;
-        _expandedPreviewWindowId = session.Id;
+        _expandedPreviewWindowId = previewId;
         ExpandedPreviewHost.Focus();
         _ = RefreshPreviewImagesAsync();
     }
@@ -551,6 +1051,15 @@ public partial class MainWindow : Window
 
             _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
         }
+        else if (e.PropertyName == nameof(WindowSession.ProfileName))
+        {
+            if (_previewCards.TryGetValue(session.Id, out var card))
+            {
+                AttachPreviewCardToSection(session, card);
+            }
+
+            RefreshStreamPreviewSections();
+        }
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -579,6 +1088,7 @@ public partial class MainWindow : Window
     {
         Loaded -= OnLoaded;
         _viewModel.Windows.CollectionChanged -= OnWindowsCollectionChanged;
+        _viewModel.WindowProfiles.CollectionChanged -= OnWindowProfilesCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         _previewRefreshTimer.Stop();
         _previewRefreshTimer.Tick -= OnPreviewRefreshTimerTick;
@@ -586,6 +1096,16 @@ public partial class MainWindow : Window
         foreach (var window in _viewModel.Windows)
         {
             window.PropertyChanged -= OnWindowSessionPropertyChanged;
+        }
+
+        foreach (var stream in _viewModel.WindowProfiles)
+        {
+            stream.PropertyChanged -= OnWindowProfilePropertyChanged;
+            stream.Windows.CollectionChanged -= OnWindowProfileWindowsCollectionChanged;
+            foreach (var item in stream.Windows)
+            {
+                item.PropertyChanged -= OnWindowProfileItemPropertyChanged;
+            }
         }
 
         _logWindow?.Close();
@@ -597,6 +1117,12 @@ public partial class MainWindow : Window
         }
         _captureWindows.Clear();
 
+        foreach (var captureWindow in _streamDefinitionCaptureWindows.Values)
+        {
+            captureWindow.Close();
+        }
+        _streamDefinitionCaptureWindows.Clear();
+
         base.OnClosed(e);
     }
 
@@ -607,10 +1133,286 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_streamDefinitionCaptureWindows.TryGetValue(session.Id, out var existingDefinitionCapture))
+        {
+            _streamDefinitionCaptureWindows.Remove(session.Id);
+            _captureWindows[session.Id] = existingDefinitionCapture;
+            RemoveStreamDefinitionPreviewCardOnly(session.Id);
+            return;
+        }
+
         var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService);
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
         captureWindow.Show();
+    }
+
+    private void RefreshStreamPreviewSections()
+    {
+        var liveWindowIds = _viewModel.Windows.Select(x => x.Id).ToHashSet();
+        foreach (var liveWindowId in liveWindowIds)
+        {
+            RemoveStreamDefinitionPreviewCardOnly(liveWindowId);
+        }
+
+        var orderedKeys = _viewModel.WindowProfiles
+            .Select(GetStreamKey)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var liveKeys = _viewModel.Windows
+            .Select(GetStreamSectionKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var key in liveKeys)
+        {
+            if (!orderedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            {
+                orderedKeys.Add(key);
+            }
+        }
+
+        if (!orderedKeys.Any())
+        {
+            orderedKeys.Add(UnassignedStreamSection);
+        }
+
+        var obsoleteKeys = _streamPreviewGroups.Keys
+            .Where(existingKey => !orderedKeys.Contains(existingKey, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var key in obsoleteKeys)
+        {
+            var group = _streamPreviewGroups[key];
+            StreamPreviewSectionsHost.Children.Remove(group);
+            _streamPreviewGroups.Remove(key);
+            _streamPreviewPanels.Remove(key);
+            _streamPreviewPlaceholders.Remove(key);
+        }
+
+        foreach (var key in orderedKeys)
+        {
+            EnsureStreamSection(key);
+        }
+
+        StreamPreviewSectionsHost.Children.Clear();
+        foreach (var key in orderedKeys)
+        {
+            StreamPreviewSectionsHost.Children.Add(_streamPreviewGroups[key]);
+        }
+
+        foreach (var pair in _previewCards.ToArray())
+        {
+            var session = _viewModel.Windows.FirstOrDefault(x => x.Id == pair.Key);
+            if (session is not null)
+            {
+                AttachPreviewCardToSection(session, pair.Value);
+            }
+        }
+
+        foreach (var pair in _streamDefinitionPreviewCards.ToArray())
+        {
+            if (liveWindowIds.Contains(pair.Key))
+            {
+                continue;
+            }
+
+            AttachStreamDefinitionPreviewCard(pair.Key, pair.Value);
+        }
+
+        UpdateStreamSectionPlaceholders();
+    }
+
+    private void EnsureStreamSection(string key)
+    {
+        if (_streamPreviewGroups.ContainsKey(key))
+        {
+            UpdateStreamSectionHeader(key);
+            return;
+        }
+
+        var panel = new WrapPanel
+        {
+            ItemWidth = 360,
+            ItemHeight = 260
+        };
+
+        var placeholder = new TextBlock
+        {
+            Margin = new Thickness(8),
+            Foreground = Brushes.DimGray,
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Nenhuma janela ativa neste stream ainda."
+        };
+
+        var container = new Grid();
+        container.Children.Add(placeholder);
+        container.Children.Add(panel);
+
+        var group = new GroupBox
+        {
+            Margin = new Thickness(0, 0, 0, 12),
+            Content = container
+        };
+
+        _streamPreviewGroups[key] = group;
+        _streamPreviewPanels[key] = panel;
+        _streamPreviewPlaceholders[key] = placeholder;
+        UpdateStreamSectionHeader(key);
+    }
+
+    private void UpdateStreamSectionHeader(string key)
+    {
+        if (!_streamPreviewGroups.TryGetValue(key, out var group))
+        {
+            return;
+        }
+
+        if (string.Equals(key, UnassignedStreamSection, StringComparison.OrdinalIgnoreCase))
+        {
+            group.Header = "Janelas Avulsas";
+            return;
+        }
+
+        var stream = _viewModel.WindowProfiles.FirstOrDefault(x => string.Equals(GetStreamKey(x), key, StringComparison.OrdinalIgnoreCase));
+        group.Header = stream is null || string.IsNullOrWhiteSpace(stream.AssignedTvProfileName)
+            ? key
+            : string.Format("{0}  |  TV: {1}", key, stream.AssignedTvProfileName);
+    }
+
+    private void AttachPreviewCardToSection(WindowSession session, Border card)
+    {
+        var key = GetStreamSectionKey(session);
+        EnsureStreamSection(key);
+
+        if (card.Parent is Panel parentPanel && !ReferenceEquals(parentPanel, _streamPreviewPanels[key]))
+        {
+            parentPanel.Children.Remove(card);
+        }
+
+        if (!_streamPreviewPanels[key].Children.Contains(card))
+        {
+            _streamPreviewPanels[key].Children.Add(card);
+        }
+
+        UpdateStreamSectionPlaceholders();
+    }
+
+    private void AttachStreamDefinitionPreviewCard(Guid itemId, Border card)
+    {
+        if (_viewModel.Windows.Any(x => x.Id == itemId))
+        {
+            if (card.Parent is Panel attachedPanel)
+            {
+                attachedPanel.Children.Remove(card);
+            }
+
+            return;
+        }
+
+        var key = _streamDefinitionSectionKeys.TryGetValue(itemId, out var storedKey) && !string.IsNullOrWhiteSpace(storedKey)
+            ? storedKey
+            : UnassignedStreamSection;
+
+        EnsureStreamSection(key);
+
+        if (card.Parent is Panel parentPanel && !ReferenceEquals(parentPanel, _streamPreviewPanels[key]))
+        {
+            parentPanel.Children.Remove(card);
+        }
+
+        if (!_streamPreviewPanels[key].Children.Contains(card))
+        {
+            _streamPreviewPanels[key].Children.Add(card);
+        }
+
+        UpdateStreamSectionPlaceholders();
+    }
+
+    private void RefreshStreamDefinitionPreviewSection(WindowProfileViewModel? stream)
+    {
+        if (stream is null)
+        {
+            return;
+        }
+
+        var key = GetStreamKey(stream);
+        foreach (var item in stream.Windows)
+        {
+            _streamDefinitionSectionKeys[item.Id] = key;
+            if (_streamDefinitionPreviewCards.TryGetValue(item.Id, out var card))
+            {
+                AttachStreamDefinitionPreviewCard(item.Id, card);
+            }
+        }
+    }
+
+    private void RefreshStreamDefinitionPreviewCardHeader(WindowProfileItemViewModel item)
+    {
+        if (!_streamDefinitionPreviewCards.TryGetValue(item.Id, out var card) ||
+            card.Child is not Grid contentGrid ||
+            contentGrid.Children.Count == 0 ||
+            contentGrid.Children[0] is not StackPanel header ||
+            header.Children.Count < 4)
+        {
+            return;
+        }
+
+        if (header.Children[0] is CheckBox toggle)
+        {
+            toggle.IsChecked = item.IsEnabled;
+        }
+
+        if (header.Children[1] is TextBlock titleText)
+        {
+            titleText.Text = item.Nickname;
+        }
+
+        if (header.Children[2] is TextBlock urlText)
+        {
+            urlText.Text = item.Url;
+        }
+    }
+
+    private async void OnStreamWindowEnabledToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox checkBox || checkBox.Tag is not Guid itemId)
+        {
+            return;
+        }
+
+        await _viewModel.SetStreamWindowEnabledAsync(itemId, checkBox.IsChecked == true);
+
+        var item = _viewModel.WindowProfiles
+            .SelectMany(x => x.Windows)
+            .FirstOrDefault(x => x.Id == itemId);
+
+        if (item is not null)
+        {
+            checkBox.IsChecked = item.IsEnabled;
+        }
+    }
+
+    private void UpdateStreamSectionPlaceholders()
+    {
+        foreach (var key in _streamPreviewPanels.Keys.ToList())
+        {
+            var hasChildren = _streamPreviewPanels[key].Children.Count > 0;
+            _streamPreviewPlaceholders[key].Visibility = hasChildren ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    private static string GetStreamSectionKey(WindowSession session)
+    {
+        var profileName = session.ProfileName?.Trim();
+        return string.IsNullOrWhiteSpace(profileName) ? UnassignedStreamSection : profileName!;
+    }
+
+    private static string GetStreamKey(WindowProfileViewModel stream)
+    {
+        return stream.Name?.Trim() ?? string.Empty;
     }
 
     private void OnCloseExpandedPreviewClick(object sender, RoutedEventArgs e)
@@ -747,6 +1549,26 @@ public partial class MainWindow : Window
                     ExpandedPreviewImage.Source = imageSource;
                 }
             }
+
+            foreach (var itemId in _streamDefinitionPreviewImages.Keys.ToArray())
+            {
+                var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(itemId, default);
+                if (jpegBytes is null || jpegBytes.Length == 0)
+                {
+                    continue;
+                }
+
+                var imageSource = CreateImageSource(jpegBytes);
+                if (_streamDefinitionPreviewImages.TryGetValue(itemId, out var image))
+                {
+                    image.Source = imageSource;
+                }
+
+                if (_expandedPreviewWindowId == itemId)
+                {
+                    ExpandedPreviewImage.Source = imageSource;
+                }
+            }
         }
         finally
         {
@@ -852,6 +1674,22 @@ public partial class MainWindow : Window
         var normalizedY = (point.Y - offsetY) / renderHeight;
         mappedPoint = new Point(normalizedX * source.PixelWidth, normalizedY * source.PixelHeight);
         return true;
+    }
+
+    private static Uri? TryCreateUri(string? url)
+    {
+        var normalized = url?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        if (!normalized.Contains("://"))
+        {
+            normalized = "https://" + normalized;
+        }
+
+        return Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ? uri : null;
     }
 }
 

@@ -21,10 +21,13 @@ public sealed class Bootstrapper
 
         var browserHost = new StubBrowserInstanceHost();
         var knownDisplayStore = new KnownDisplayStore();
+        var manualDisplayProbeService = new ManualDisplayProbeService();
+        var displayIdentityResolverService = new DisplayIdentityResolverService(knownDisplayStore, manualDisplayProbeService);
         var captureSessionFactory = new InMemoryCaptureSessionFactory();
         var transportResolver = new DefaultDisplayTransportResolver(transports);
         var routingService = new RoutingService(captureSessionFactory, transportResolver);
         var profileStore = new ProfileStore();
+        var activeSessionStore = new ActiveSessionStore();
         var browserSnapshotService = new BrowserSnapshotService();
         var browserAudioCaptureService = new BrowserAudioCaptureService();
         var browserAudioHlsService = new BrowserAudioHlsService(browserAudioCaptureService);
@@ -35,7 +38,7 @@ public sealed class Bootstrapper
         var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();
-        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);
+        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, activeSessionStore, manualDisplayProbeService, displayIdentityResolverService, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);
 
         return new MainWindow(viewModel, browserSnapshotService, browserAudioCaptureService);
     }
