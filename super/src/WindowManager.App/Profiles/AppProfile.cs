@@ -251,6 +251,9 @@ public sealed class WindowGroupProfile
     public string AssignedTvProfileName { get; set; } = string.Empty;
 
     [DataMember(Order = 5)]
+    public bool KeepDisplayConnected { get; set; }
+
+    [DataMember(Order = 6)]
     public List<WindowLinkProfile> Windows { get; set; } = new List<WindowLinkProfile>();
 }
 

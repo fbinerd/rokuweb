@@ -70,6 +70,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _suppressActiveSessionPersistence;
     private bool _isInitializingStartup;
     private bool _isNormalizingWindowProfiles;
+    private readonly Dictionary<Guid, DateTime> _streamKeepAliveAttemptUtc = new Dictionary<Guid, DateTime>();
 
     public MainViewModel(
         IBrowserInstanceHost browserInstanceHost,
@@ -827,8 +828,8 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task PowerOnConnectedRokusAsync()
     {
-        UpdateStatusMessage = "Enviando comando para ligar TVs Roku compativeis...";
-        UpdateStatusMessage = await SendPowerCommandToKnownRokusAsync(powerOn: true);
+        UpdateStatusMessage = "Ligando TVs Roku compativeis e abrindo o app...";
+        UpdateStatusMessage = await SendPowerAndLaunchCommandToKnownRokusAsync();
     }
 
     private async Task PowerOffConnectedRokusAsync()
@@ -1595,6 +1596,82 @@ public sealed class MainViewModel : ViewModelBase
         return string.Format(
             "Comando de {0} concluido via TVs descobertas. Alvo(s): {1}, sucesso(s): {2}, falha(s): {3}.",
             powerOn ? "ligar" : "desligar",
+            rokuTargets.Count,
+            successCount,
+            failureCount);
+    }
+
+    private async Task<string> SendPowerAndLaunchCommandToKnownRokusAsync()
+    {
+        var rokuTargets = Targets
+            .Where(IsRokuUpdatableTarget)
+            .GroupBy(x => !string.IsNullOrWhiteSpace(x.DeviceUniqueId) ? x.DeviceUniqueId : x.NetworkAddress ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+
+        foreach (var registered in _webRtcPublisherService.GetRegisteredDisplaysSnapshot())
+        {
+            var key = !string.IsNullOrWhiteSpace(registered.DeviceId) ? registered.DeviceId : registered.NetworkAddress;
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            if (rokuTargets.Any(x =>
+                    (!string.IsNullOrWhiteSpace(x.DeviceUniqueId) &&
+                     string.Equals(x.DeviceUniqueId, registered.DeviceId, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(x.NetworkAddress) &&
+                     string.Equals(x.NetworkAddress, registered.NetworkAddress, StringComparison.OrdinalIgnoreCase))))
+            {
+                continue;
+            }
+
+            rokuTargets.Add(new DisplayTarget
+            {
+                Id = Guid.NewGuid(),
+                Name = string.IsNullOrWhiteSpace(registered.DeviceModel) ? "Roku TV" : registered.DeviceModel,
+                NetworkAddress = registered.NetworkAddress,
+                DeviceUniqueId = registered.DeviceId,
+                TransportKind = DisplayTransportKind.LanStreaming,
+                IsOnline = true
+            });
+        }
+
+        if (rokuTargets.Count == 0)
+        {
+            return "Nenhuma TV Roku compativel foi encontrada para ligar e abrir o app.";
+        }
+
+        var successCount = 0;
+        var failureCount = 0;
+
+        foreach (var target in rokuTargets)
+        {
+            var appAlreadyConnected = _webRtcPublisherService.IsDisplayRegisteredRecently(target, TimeSpan.FromSeconds(8));
+            string result;
+
+            if (appAlreadyConnected)
+            {
+                result = await _webRtcPublisherService.SendPowerCommandToDisplayTargetAsync(target, true, CancellationToken.None);
+            }
+            else
+            {
+                result = await _webRtcPublisherService.EnsureDisplayAppRunningAsync(target, requirePowerOn: true, CancellationToken.None);
+            }
+
+            if (string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(result, "ok_fallback_Power", StringComparison.OrdinalIgnoreCase))
+            {
+                successCount++;
+            }
+            else
+            {
+                failureCount++;
+            }
+        }
+
+        return string.Format(
+            "Comando de ligar e abrir app concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}.",
             rokuTargets.Count,
             successCount,
             failureCount);
@@ -2573,6 +2650,7 @@ public sealed class MainViewModel : ViewModelBase
                 Name = profile.Name,
                 AssignedTvProfileId = profile.AssignedTvProfileId,
                 AssignedTvProfileName = profile.AssignedTvProfileName,
+                KeepDisplayConnected = profile.KeepDisplayConnected,
                 Windows = profile.Windows.Select(window => new WindowLinkProfile
                 {
                     Id = window.Id,
@@ -2646,7 +2724,8 @@ public sealed class MainViewModel : ViewModelBase
                 Id = windowProfile.Id == Guid.Empty ? Guid.NewGuid() : windowProfile.Id,
                 Name = windowProfile.Name,
                 AssignedTvProfileId = windowProfile.AssignedTvProfileId,
-                AssignedTvProfileName = windowProfile.AssignedTvProfileName
+                AssignedTvProfileName = windowProfile.AssignedTvProfileName,
+                KeepDisplayConnected = windowProfile.KeepDisplayConnected
             };
 
             foreach (var window in windowProfile.Windows)
@@ -2843,6 +2922,24 @@ public sealed class MainViewModel : ViewModelBase
         await PersistActiveSessionsAsync();
     }
 
+    public async Task SetStreamKeepDisplayConnectedAsync(Guid streamId, bool keepDisplayConnected)
+    {
+        var stream = WindowProfiles.FirstOrDefault(x => x.Id == streamId);
+        if (stream is null)
+        {
+            return;
+        }
+
+        stream.KeepDisplayConnected = keepDisplayConnected;
+        if (keepDisplayConnected)
+        {
+            _streamKeepAliveAttemptUtc.Remove(stream.Id);
+            await EnsureStreamDisplayConnectedAsync(stream, forceNow: true);
+        }
+
+        await SaveProfileInternalAsync(updateStatus: false);
+    }
+
     private TvProfileViewModel? ResolveTvProfileForStream(WindowProfileViewModel stream)
     {
         var byId = stream.AssignedTvProfileId.HasValue
@@ -2869,19 +2966,31 @@ public sealed class MainViewModel : ViewModelBase
         return null;
     }
 
-    private DisplayTarget PromoteRegisteredDisplayAsOnlineTarget(DisplayTarget resolvedTarget, TvProfileTargetViewModel binding)
+    private RegisteredDisplaySnapshot? FindRegisteredDisplayForBinding(DisplayTarget target, TvProfileTargetViewModel binding)
     {
-        var registeredDisplay = _webRtcPublisherService
+        return _webRtcPublisherService
             .GetRegisteredDisplaysSnapshot()
             .FirstOrDefault(x =>
                 (!string.IsNullOrWhiteSpace(binding.NetworkAddress) &&
                  string.Equals(x.NetworkAddress, binding.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrWhiteSpace(resolvedTarget.NetworkAddress) &&
-                 string.Equals(x.NetworkAddress, resolvedTarget.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(target.NetworkAddress) &&
+                 string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrWhiteSpace(binding.DeviceUniqueId) &&
                  string.Equals(x.DeviceId, binding.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrWhiteSpace(resolvedTarget.DeviceUniqueId) &&
-                 string.Equals(x.DeviceId, resolvedTarget.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)));
+                (!string.IsNullOrWhiteSpace(target.DeviceUniqueId) &&
+                 string.Equals(x.DeviceId, target.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private bool IsRegisteredDisplayFresh(RegisteredDisplaySnapshot? registeredDisplay, TimeSpan maxAge)
+    {
+        return registeredDisplay is not null &&
+               DateTime.TryParse(registeredDisplay.LastSeenUtc, out var lastSeenUtc) &&
+               DateTime.UtcNow - lastSeenUtc.ToUniversalTime() < maxAge;
+    }
+
+    private DisplayTarget PromoteRegisteredDisplayAsOnlineTarget(DisplayTarget resolvedTarget, TvProfileTargetViewModel binding)
+    {
+        var registeredDisplay = FindRegisteredDisplayForBinding(resolvedTarget, binding);
 
         if (registeredDisplay is null)
         {
@@ -2913,6 +3022,93 @@ public sealed class MainViewModel : ViewModelBase
             NativeWidth = resolvedTarget.NativeWidth > 0 ? resolvedTarget.NativeWidth : binding.NativeWidth,
             NativeHeight = resolvedTarget.NativeHeight > 0 ? resolvedTarget.NativeHeight : binding.NativeHeight
         };
+    }
+
+    public async Task EnsureKeepAliveStreamsAsync()
+    {
+        foreach (var stream in WindowProfiles.Where(x => x.KeepDisplayConnected).ToList())
+        {
+            await EnsureStreamDisplayConnectedAsync(stream, forceNow: false);
+        }
+    }
+
+    private async Task EnsureStreamDisplayConnectedAsync(WindowProfileViewModel stream, bool forceNow)
+    {
+        if (!stream.KeepDisplayConnected)
+        {
+            return;
+        }
+
+        if (!forceNow &&
+            _streamKeepAliveAttemptUtc.TryGetValue(stream.Id, out var previousAttempt) &&
+            DateTime.UtcNow - previousAttempt < TimeSpan.FromSeconds(5))
+        {
+            return;
+        }
+
+        var tvProfile = ResolveTvProfileForStream(stream);
+        var binding = tvProfile?.Targets.FirstOrDefault();
+        if (tvProfile is null || binding is null)
+        {
+            return;
+        }
+
+        var resolvedTarget = await _displayIdentityResolverService.ResolveCurrentTargetAsync(
+            new DisplayTarget
+            {
+                Id = binding.DisplayTargetId,
+                Name = binding.DisplayName,
+                NetworkAddress = binding.NetworkAddress,
+                DeviceUniqueId = binding.DeviceUniqueId,
+                MacAddress = binding.MacAddress,
+                AlternateMacAddresses = binding.AlternateMacAddresses.ToList(),
+                DiscoverySource = binding.DiscoverySource,
+                NativeWidth = binding.NativeWidth,
+                NativeHeight = binding.NativeHeight,
+                TransportKind = DisplayTransportKind.LanStreaming,
+                IsStaticTarget = true
+            },
+            Targets,
+            CancellationToken.None);
+        resolvedTarget = PromoteRegisteredDisplayAsOnlineTarget(resolvedTarget, binding);
+
+        var activeProbe = await _manualDisplayProbeService.ProbeAsync(resolvedTarget.NetworkAddress, CancellationToken.None);
+        var tvReachable = activeProbe is not null;
+        var registeredDisplay = FindRegisteredDisplayForBinding(resolvedTarget, binding);
+        var registrationFresh = IsRegisteredDisplayFresh(registeredDisplay, TimeSpan.FromSeconds(8));
+
+        if (tvReachable && registrationFresh)
+        {
+            return;
+        }
+
+        _streamKeepAliveAttemptUtc[stream.Id] = DateTime.UtcNow;
+        var requirePowerOn = !registrationFresh;
+        var result = await _webRtcPublisherService.EnsureDisplayAppRunningAsync(resolvedTarget, requirePowerOn, CancellationToken.None);
+        AppLog.Write(
+            "StreamKeepAlive",
+            string.Format(
+                "Keep-alive do stream '{0}' para TV '{1}': {2}",
+                stream.Name,
+                resolvedTarget.Name,
+                result));
+
+        if (requirePowerOn)
+        {
+            await Task.Delay(4000);
+            var freshAfterWake = IsRegisteredDisplayFresh(FindRegisteredDisplayForBinding(resolvedTarget, binding), TimeSpan.FromSeconds(6));
+            if (!freshAfterWake)
+            {
+                var fallbackResult = await _webRtcPublisherService.ForceWakeDisplayAsync(resolvedTarget, CancellationToken.None);
+                AppLog.Write(
+                    "StreamKeepAlive",
+                    string.Format(
+                        "Wake fallback do stream '{0}' para TV '{1}': {2}",
+                        stream.Name,
+                        resolvedTarget.Name,
+                        fallbackResult));
+            }
+        }
     }
 
     public async Task SetStreamWindowPrimaryExclusiveAsync(Guid itemId, bool isPrimaryExclusive)
@@ -3719,6 +3915,7 @@ public sealed class WindowProfileViewModel : ViewModelBase
     private string _name = string.Empty;
     private Guid? _assignedTvProfileId;
     private string _assignedTvProfileName = string.Empty;
+    private bool _keepDisplayConnected;
 
     public Guid Id
     {
@@ -3742,6 +3939,12 @@ public sealed class WindowProfileViewModel : ViewModelBase
     {
         get => _assignedTvProfileName;
         set => SetProperty(ref _assignedTvProfileName, value);
+    }
+
+    public bool KeepDisplayConnected
+    {
+        get => _keepDisplayConnected;
+        set => SetProperty(ref _keepDisplayConnected, value);
     }
 
     public ObservableCollection<WindowProfileItemViewModel> Windows { get; } = new ObservableCollection<WindowProfileItemViewModel>();

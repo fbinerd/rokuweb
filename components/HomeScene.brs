@@ -149,6 +149,13 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if key = "back" or key = "Back"
             if m.lockedFullscreen
+                autoFullscreenIndex = findAutoOpenFullscreenIndex()
+                if autoFullscreenIndex < 0
+                    m.lockedFullscreen = false
+                    m.lockedWindowId = ""
+                end if
+            end if
+            if m.lockedFullscreen
                 return true
             end if
             hideFullscreen()

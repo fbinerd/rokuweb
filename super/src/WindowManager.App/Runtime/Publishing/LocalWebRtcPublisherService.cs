@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
@@ -17,6 +18,11 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class LocalWebRtcPublisherService
 {
+    private static readonly HttpClient DeviceProbeHttpClient = new HttpClient
+    {
+        Timeout = TimeSpan.FromSeconds(2)
+    };
+
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly BrowserAudioHlsService _browserAudioHlsService;
@@ -249,9 +255,221 @@ public sealed class LocalWebRtcPublisherService
         return await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn).ConfigureAwait(false);
     }
 
+    public async Task<string> EnsureDisplayAppRunningAsync(DisplayTarget target, bool requirePowerOn, CancellationToken cancellationToken)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return "tv_sem_ip";
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var display = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(target.DeviceUniqueId) &&
+             string.Equals(x.DeviceId, target.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)))
+            ?? new RegisteredDisplaySnapshot
+            {
+                DeviceId = string.IsNullOrWhiteSpace(target.DeviceUniqueId)
+                    ? "roku-target-" + target.NetworkAddress.Replace(".", "-")
+                    : target.DeviceUniqueId,
+                DeviceType = "roku",
+                DeviceModel = target.Name,
+                ChannelVersion = string.Empty,
+                NetworkAddress = target.NetworkAddress,
+                LastSeenUtc = DateTime.UtcNow.ToString("O")
+            };
+
+        if (requirePowerOn)
+        {
+            var powerResult = await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn: true).ConfigureAwait(false);
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "PowerOn para TV '{0}' ({1}) => {2}",
+                    target.Name,
+                    target.NetworkAddress,
+                    powerResult));
+
+            var ready = await WaitForDisplayEcpReadyAsync(target.NetworkAddress, TimeSpan.FromSeconds(12), cancellationToken).ConfigureAwait(false);
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Espera de wake/ECP para TV '{0}' ({1}) => {2}",
+                    target.Name,
+                    target.NetworkAddress,
+                    ready ? "pronta" : "timeout"));
+
+            await Task.Delay(1500, cancellationToken).ConfigureAwait(false);
+        }
+
+        var expectedVersion = GetExpectedRokuChannelVersion();
+        if (!string.IsNullOrWhiteSpace(expectedVersion) &&
+            !string.IsNullOrWhiteSpace(display.ChannelVersion) &&
+            !string.Equals(display.ChannelVersion, expectedVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return await _rokuDevDeploymentService.DeployNowAsync(display, expectedVersion).ConfigureAwait(false);
+        }
+
+        return await LaunchDevChannelWithWakeRetryAsync(target, display, requirePowerOn, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<string> ForceWakeDisplayAsync(DisplayTarget target, CancellationToken cancellationToken)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return "tv_sem_ip";
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var display = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(target.DeviceUniqueId) &&
+             string.Equals(x.DeviceId, target.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)))
+            ?? new RegisteredDisplaySnapshot
+            {
+                DeviceId = string.IsNullOrWhiteSpace(target.DeviceUniqueId)
+                    ? "roku-target-" + target.NetworkAddress.Replace(".", "-")
+                    : target.DeviceUniqueId,
+                DeviceType = "roku",
+                DeviceModel = target.Name,
+                NetworkAddress = target.NetworkAddress,
+                LastSeenUtc = DateTime.UtcNow.ToString("O")
+            };
+
+        var powerResult = await _rokuDevDeploymentService.SendPowerToggleCommandAsync(display).ConfigureAwait(false);
+        AppLog.Write(
+            "StreamKeepAlive",
+            string.Format(
+                "Power fallback para TV '{0}' ({1}) => {2}",
+                target.Name,
+                target.NetworkAddress,
+                powerResult));
+
+        await Task.Delay(1500, cancellationToken).ConfigureAwait(false);
+        return await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+    }
+
     public IReadOnlyList<RegisteredDisplaySnapshot> GetRegisteredDisplaysSnapshot()
     {
         return _registeredDisplays.Values.ToList();
+    }
+
+    public bool IsDisplayRegisteredRecently(DisplayTarget target, TimeSpan maxAge)
+    {
+        if (target is null)
+        {
+            return false;
+        }
+
+        var display = _registeredDisplays.Values.FirstOrDefault(x =>
+            (!string.IsNullOrWhiteSpace(target.NetworkAddress) &&
+             string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(target.DeviceUniqueId) &&
+             string.Equals(x.DeviceId, target.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)));
+
+        if (display is null || !DateTime.TryParse(display.LastSeenUtc, out var lastSeenUtc))
+        {
+            return false;
+        }
+
+        return DateTime.UtcNow - lastSeenUtc.ToUniversalTime() < maxAge;
+    }
+
+    private async Task<string> LaunchDevChannelWithWakeRetryAsync(
+        DisplayTarget target,
+        RegisteredDisplaySnapshot display,
+        bool requirePowerOn,
+        CancellationToken cancellationToken)
+    {
+        var attempts = requirePowerOn ? 4 : 1;
+        var delayBetweenAttempts = requirePowerOn ? TimeSpan.FromSeconds(2) : TimeSpan.Zero;
+        var lastResult = "launch_nao_executado";
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            lastResult = await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Tentativa {0}/{1} de abrir app Roku para TV '{2}' ({3}) => {4}",
+                    attempt,
+                    attempts,
+                    target.Name,
+                    target.NetworkAddress,
+                    lastResult));
+
+            if (!requirePowerOn)
+            {
+                return lastResult;
+            }
+
+            if (string.Equals(lastResult, "ok", StringComparison.OrdinalIgnoreCase) &&
+                await WaitForRecentRegistrationAsync(target, TimeSpan.FromSeconds(6), cancellationToken).ConfigureAwait(false))
+            {
+                return lastResult;
+            }
+
+            if (attempt < attempts)
+            {
+                await Task.Delay(delayBetweenAttempts, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return lastResult;
+    }
+
+    private async Task<bool> WaitForRecentRegistrationAsync(DisplayTarget target, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var startedAt = DateTime.UtcNow;
+        while (DateTime.UtcNow - startedAt < timeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsDisplayRegisteredRecently(target, TimeSpan.FromSeconds(4)))
+            {
+                return true;
+            }
+
+            await Task.Delay(700, cancellationToken).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitForDisplayEcpReadyAsync(string networkAddress, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(networkAddress))
+        {
+            return false;
+        }
+
+        var startedAt = DateTime.UtcNow;
+        var probeUri = new Uri(string.Format("http://{0}:8060/query/device-info", networkAddress));
+        while (DateTime.UtcNow - startedAt < timeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                using (var response = await DeviceProbeHttpClient.GetAsync(probeUri, cancellationToken).ConfigureAwait(false))
+                {
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            await Task.Delay(800, cancellationToken).ConfigureAwait(false);
+        }
+
+        return false;
     }
 
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, IEnumerable<BridgeActiveSessionSnapshot> sessions, int serverPort, WebRtcBindMode bindMode, string specificIp)

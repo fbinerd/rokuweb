@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private bool _allowApplicationExit;
     private bool _hasShownTrayHint;
     private Point? _lastExpandedPreviewMousePoint;
+    private DateTime _nextKeepAliveCheckUtc = DateTime.MinValue;
     private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
@@ -292,16 +293,6 @@ public partial class MainWindow : Window
         contentGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var deleteButton = new Button
-        {
-            Content = "Excluir",
-            Width = 72,
-            Height = 28,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Tag = session
-        };
-        deleteButton.Click += OnDeleteWindowButtonClick;
-
         var streamToggle = new CheckBox
         {
             Content = "Transmitir",
@@ -326,16 +317,13 @@ public partial class MainWindow : Window
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         Grid.SetColumn(headerTitle, 0);
         Grid.SetColumn(streamToggle, 1);
         Grid.SetColumn(exclusiveToggle, 2);
-        Grid.SetColumn(deleteButton, 3);
         headerTopRow.Children.Add(headerTitle);
         headerTopRow.Children.Add(streamToggle);
         headerTopRow.Children.Add(exclusiveToggle);
-        headerTopRow.Children.Add(deleteButton);
 
         var header = new StackPanel
         {
@@ -389,14 +377,6 @@ public partial class MainWindow : Window
         };
         linkRtcItem.Click += OnOpenLinkRtcClick;
         contextMenu.Items.Add(linkRtcItem);
-
-        var deleteItem = new MenuItem
-        {
-            Header = "Excluir painel",
-            Tag = session
-        };
-        deleteItem.Click += OnDeleteWindowClick;
-        contextMenu.Items.Add(deleteItem);
 
         card.ContextMenu = contextMenu;
         card.MouseLeftButtonDown += OnPreviewCardMouseLeftButtonDown;
@@ -466,11 +446,7 @@ public partial class MainWindow : Window
             {
                 foreach (var child in headerTopRow.Children)
                 {
-                    if (child is Button deleteButton)
-                    {
-                        deleteButton.Click -= OnDeleteWindowButtonClick;
-                    }
-                    else if (child is CheckBox checkBox)
+                    if (child is CheckBox checkBox)
                     {
                         checkBox.Click -= OnStreamWindowEnabledToggleClick;
                         checkBox.Click -= OnStreamWindowPrimaryExclusiveToggleClick;
@@ -486,7 +462,6 @@ public partial class MainWindow : Window
                     {
                         menuItem.Click -= OnWindowSettingsClick;
                         menuItem.Click -= OnOpenLinkRtcClick;
-                        menuItem.Click -= OnDeleteWindowClick;
                     }
                 }
             }
@@ -1004,29 +979,6 @@ public partial class MainWindow : Window
             .ToList();
     }
 
-    private void OnDeleteWindowClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem menuItem || menuItem.Tag is not WindowSession session)
-        {
-            return;
-        }
-
-        _viewModel.SelectedWindow = session;
-        _viewModel.DeleteSelectedWindowCommand.Execute(null);
-    }
-
-    private void OnDeleteWindowButtonClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button button || button.Tag is not WindowSession session)
-        {
-            return;
-        }
-
-        _viewModel.SelectedWindow = session;
-        _viewModel.DeleteSelectedWindowCommand.Execute(null);
-        e.Handled = true;
-    }
-
     private void ToggleExpandedPreview(WindowSession session)
     {
         ToggleExpandedPreview(session.Id, session.Title);
@@ -1084,6 +1036,10 @@ public partial class MainWindow : Window
             }
 
             _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
+        }
+        else if (e.PropertyName == nameof(WindowSession.IsPrimaryExclusive))
+        {
+            RefreshRuntimePreviewCardHeader(session);
         }
         else if (e.PropertyName == nameof(WindowSession.ProfileName))
         {
@@ -1328,9 +1284,56 @@ public partial class MainWindow : Window
         }
 
         var stream = _viewModel.WindowProfiles.FirstOrDefault(x => string.Equals(GetStreamKey(x), key, StringComparison.OrdinalIgnoreCase));
-        group.Header = stream is null || string.IsNullOrWhiteSpace(stream.AssignedTvProfileName)
-            ? key
-            : string.Format("{0}  |  TV: {1}", key, stream.AssignedTvProfileName);
+        if (stream is null)
+        {
+            group.Header = key;
+            return;
+        }
+
+        var headerPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal
+        };
+
+        headerPanel.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(stream.AssignedTvProfileName)
+                ? key
+                : string.Format("{0}  |  TV: {1}", key, stream.AssignedTvProfileName),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+
+        headerPanel.Children.Add(new CheckBox
+        {
+            Content = "Manter TV ligada e conectada",
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = stream.KeepDisplayConnected,
+            Tag = stream.Id
+        });
+
+        if (headerPanel.Children[1] is CheckBox keepAliveToggle)
+        {
+            keepAliveToggle.Click += OnStreamKeepDisplayConnectedToggleClick;
+        }
+
+        group.Header = headerPanel;
+    }
+
+    private async void OnStreamKeepDisplayConnectedToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox checkBox || checkBox.Tag is not Guid streamId)
+        {
+            return;
+        }
+
+        await _viewModel.SetStreamKeepDisplayConnectedAsync(streamId, checkBox.IsChecked == true);
+
+        var stream = _viewModel.WindowProfiles.FirstOrDefault(x => x.Id == streamId);
+        if (stream is not null)
+        {
+            checkBox.IsChecked = stream.KeepDisplayConnected;
+        }
     }
 
     private void AttachPreviewCardToSection(WindowSession session, Border card)
@@ -1469,6 +1472,42 @@ public partial class MainWindow : Window
         foreach (var item in stream.Windows)
         {
             RefreshStreamDefinitionPreviewCardHeader(item);
+
+            var session = _viewModel.Windows.FirstOrDefault(x => x.Id == item.Id);
+            if (session is not null)
+            {
+                RefreshRuntimePreviewCardHeader(session);
+            }
+        }
+    }
+
+    private void RefreshRuntimePreviewCardHeader(WindowSession session)
+    {
+        if (!_previewCards.TryGetValue(session.Id, out var card) ||
+            card.Child is not Grid contentGrid ||
+            contentGrid.Children.Count == 0 ||
+            contentGrid.Children[0] is not StackPanel headerStack ||
+            headerStack.Children.Count == 0 ||
+            headerStack.Children[0] is not Grid headerTopRow)
+        {
+            return;
+        }
+
+        foreach (var child in headerTopRow.Children)
+        {
+            if (child is not CheckBox checkBox || checkBox.Tag is not Guid taggedId || taggedId != session.Id)
+            {
+                continue;
+            }
+
+            if (string.Equals(checkBox.Content?.ToString(), "Transmitir", StringComparison.OrdinalIgnoreCase))
+            {
+                checkBox.IsChecked = true;
+            }
+            else if (string.Equals(checkBox.Content?.ToString(), "So esta janela", StringComparison.OrdinalIgnoreCase))
+            {
+                checkBox.IsChecked = session.IsPrimaryExclusive;
+            }
         }
     }
 
@@ -1624,6 +1663,11 @@ public partial class MainWindow : Window
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
+        if (DateTime.UtcNow >= _nextKeepAliveCheckUtc)
+        {
+            _nextKeepAliveCheckUtc = DateTime.UtcNow.AddSeconds(3);
+            await _viewModel.EnsureKeepAliveStreamsAsync();
+        }
     }
 
     private void OnStateChanged(object? sender, EventArgs e)

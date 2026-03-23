@@ -158,6 +158,138 @@ public sealed class RokuDevDeploymentService
         }
     }
 
+    public async Task<string> SendPowerToggleCommandAsync(RegisteredDisplaySnapshot display)
+    {
+        if (display is null)
+        {
+            return "parametros_invalidos";
+        }
+
+        try
+        {
+            var configPath = Path.Combine(monorepoRoot, "super", "roku-devices.json");
+            var config = File.Exists(configPath) ? LoadConfig(configPath) : new RokuDevDeploymentConfig();
+            var deviceConfig = FindDeviceConfig(config, display) ?? BuildDefaultDeviceConfig(display);
+            if (!deviceConfig.Enabled)
+            {
+                return "tv_sem_credenciais_ou_desabilitada";
+            }
+
+            var host = ResolveHost(display, deviceConfig);
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                return "ip_da_tv_ausente";
+            }
+
+            using (var handler = new HttpClientHandler())
+            using (var client = new HttpClient(handler))
+            {
+                var username = string.IsNullOrWhiteSpace(deviceConfig.Username) ? "rokudev" : deviceConfig.Username;
+                var password = string.IsNullOrWhiteSpace(deviceConfig.Password) ? "1234" : deviceConfig.Password;
+
+                handler.Credentials = new NetworkCredential(username, password);
+                handler.PreAuthenticate = true;
+                client.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue(
+                        "Basic",
+                        Convert.ToBase64String(Encoding.ASCII.GetBytes(username + ":" + password)));
+
+                var commandUri = new Uri(string.Format("http://{0}:8060/keypress/Power", host));
+                var response = await client.PostAsync(commandUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                AppLog.Write(
+                    "RokuPower",
+                    string.Format(
+                        "Comando Power enviado para TV id={0}, host={1}, status={2}, body={3}",
+                        display.DeviceId,
+                        host,
+                        (int)response.StatusCode,
+                        SummarizeResponseBody(responseBody)));
+
+                if ((int)response.StatusCode == 403)
+                {
+                    return "ecp_bloqueado_403";
+                }
+
+                return response.IsSuccessStatusCode ? "ok" : "falha_power_" + (int)response.StatusCode;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("RokuPower", string.Format("Falha ao enviar Power toggle para TV id={0}: {1}", display.DeviceId, ex.Message));
+            return "erro_" + ex.GetType().Name;
+        }
+    }
+
+    public async Task<string> LaunchDevChannelAsync(RegisteredDisplaySnapshot display)
+    {
+        if (display is null)
+        {
+            return "parametros_invalidos";
+        }
+
+        try
+        {
+            var configPath = Path.Combine(monorepoRoot, "super", "roku-devices.json");
+            var config = File.Exists(configPath) ? LoadConfig(configPath) : new RokuDevDeploymentConfig();
+            var deviceConfig = FindDeviceConfig(config, display) ?? BuildDefaultDeviceConfig(display);
+            if (!deviceConfig.Enabled)
+            {
+                return "tv_sem_credenciais_ou_desabilitada";
+            }
+
+            var host = ResolveHost(display, deviceConfig);
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                return "ip_da_tv_ausente";
+            }
+
+            using (var handler = new HttpClientHandler())
+            using (var client = new HttpClient(handler))
+            {
+                var username = string.IsNullOrWhiteSpace(deviceConfig.Username) ? "rokudev" : deviceConfig.Username;
+                var password = string.IsNullOrWhiteSpace(deviceConfig.Password) ? "1234" : deviceConfig.Password;
+
+                handler.Credentials = new NetworkCredential(username, password);
+                handler.PreAuthenticate = true;
+                client.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue(
+                        "Basic",
+                        Convert.ToBase64String(Encoding.ASCII.GetBytes(username + ":" + password)));
+
+                try
+                {
+                    var homeUri = new Uri(string.Format("http://{0}:8060/keypress/Home", host));
+                    await client.PostAsync(homeUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                    await Task.Delay(600).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
+                var launchUri = new Uri(string.Format("http://{0}:8060/launch/dev", host));
+                var response = await client.PostAsync(launchUri, new StringContent(string.Empty)).ConfigureAwait(false);
+                var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Launch/dev solicitado para TV id={0}, host={1}, status={2}, body={3}",
+                        display.DeviceId,
+                        host,
+                        (int)response.StatusCode,
+                        SummarizeResponseBody(responseBody)));
+
+                return response.IsSuccessStatusCode ? "ok" : "launch_falhou_" + (int)response.StatusCode;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("RokuDeploy", string.Format("Falha ao relancar canal dev para TV id={0}: {1}", display.DeviceId, ex.Message));
+            return "erro_" + ex.GetType().Name;
+        }
+    }
+
     private async Task<string> DeployAsync(RegisteredDisplaySnapshot display, string expectedVersion)
     {
         try
