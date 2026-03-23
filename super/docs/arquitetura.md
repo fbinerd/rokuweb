@@ -175,3 +175,53 @@ WindowCoordinator
 ### Fase 3
 
 - suporte experimental a Miracast para casos compativeis
+
+## Direcao futura: separacao entre Core e UI
+
+Existe uma decisao arquitetural futura ja assumida para este projeto:
+
+- o runtime principal deve evoluir para um processo de `background`
+- a interface WPF deve evoluir para um processo separado, usado como painel de controle
+
+Objetivo dessa separacao:
+
+- manter streams, capturas, discovery e sideload rodando mesmo se a UI fechar
+- permitir restart da interface sem derrubar o motor principal
+- reduzir o risco de bugs visuais afetarem o runtime
+- preparar o sistema para IPC local e possivel automacao futura
+
+### Modelo alvo
+
+```text
+SuperPainel.UI
+   |
+   | comandos + observacao de estado
+   v
+SuperPainel.Core
+   |-- discovery de TVs
+   |-- persistencia de perfis/bases
+   |-- gerenciamento de streams e sessoes
+   |-- captura CEF e snapshots
+   |-- publicacao/transmissao
+   |-- sideload e atualizacao de Roku
+```
+
+### Regras de compatibilidade para mudancas futuras
+
+Enquanto a separacao completa nao for feita, novas implementacoes devem seguir estas regras:
+
+- evitar colocar regra de negocio importante diretamente em `MainWindow.xaml.cs`
+- preferir concentrar estado e comandos em servicos e `ViewModel`
+- tratar a UI como cliente do estado, nao como fonte unica da verdade
+- novas funcionalidades de runtime devem ser pensadas para poder virar servico reutilizavel depois
+- evitar dependencia de objetos visuais para persistencia, discovery, sideload ou transmissao
+- qualquer dado essencial de stream, TV, sessao ou perfil deve ser persistido fora da camada visual
+- quando for necessario integrar a UI com o runtime, preferir contratos claros e metodos orientados a comando/consulta
+
+### Etapas recomendadas antes da separacao em processos
+
+1. Consolidar um `CoreState` unico para perfis, TVs, streams e sessoes.
+2. Isolar servicos de runtime atras de interfaces estaveis.
+3. Reduzir acoplamento direto entre previews WPF e o motor de transmissao.
+4. Introduzir uma API local de comandos e consultas.
+5. So depois mover o core para outro processo.

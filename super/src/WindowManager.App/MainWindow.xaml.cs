@@ -17,6 +17,9 @@ using WindowManager.App.Runtime.Publishing;
 using WindowManager.App.ViewModels;
 using WindowManager.Core.Models;
 using Microsoft.Win32;
+using DrawingIcon = System.Drawing.Icon;
+using DrawingSystemIcons = System.Drawing.SystemIcons;
+using Forms = System.Windows.Forms;
 
 namespace WindowManager.App;
 
@@ -36,9 +39,12 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, WrapPanel> _streamPreviewPanels = new Dictionary<string, WrapPanel>(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBlock> _streamPreviewPlaceholders = new Dictionary<string, TextBlock>(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _previewRefreshTimer;
+    private readonly Forms.NotifyIcon _notifyIcon;
     private TransmissionLogWindow? _logWindow;
     private Guid? _expandedPreviewWindowId;
     private bool _isRefreshingPreviews;
+    private bool _allowApplicationExit;
+    private bool _hasShownTrayHint;
     private Point? _lastExpandedPreviewMousePoint;
     private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
@@ -79,7 +85,10 @@ public partial class MainWindow : Window
         };
         _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
 
+        _notifyIcon = CreateNotifyIcon();
+
         Loaded += OnLoaded;
+        StateChanged += OnStateChanged;
         UpdateSelectionVisuals();
     }
 
@@ -1112,6 +1121,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         Loaded -= OnLoaded;
+        StateChanged -= OnStateChanged;
         _viewModel.Windows.CollectionChanged -= OnWindowsCollectionChanged;
         _viewModel.WindowProfiles.CollectionChanged -= OnWindowProfilesCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
@@ -1148,7 +1158,23 @@ public partial class MainWindow : Window
         }
         _streamDefinitionCaptureWindows.Clear();
 
+        _notifyIcon.Visible = false;
+        _notifyIcon.DoubleClick -= OnNotifyIconDoubleClick;
+        _notifyIcon.Dispose();
+
         base.OnClosed(e);
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_allowApplicationExit)
+        {
+            e.Cancel = true;
+            HideToTray();
+            return;
+        }
+
+        base.OnClosing(e);
     }
 
     private void EnsureCaptureWindow(WindowSession session)
@@ -1501,6 +1527,7 @@ public partial class MainWindow : Window
             (int)Math.Round(mappedPoint.Y),
             null,
             default);
+        await RefreshExpandedPreviewNowAsync(_expandedPreviewWindowId.Value);
     }
 
     private async void OnExpandedPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1526,6 +1553,7 @@ public partial class MainWindow : Window
             (int)Math.Round(mappedPoint.Y),
             null,
             default);
+        await RefreshExpandedPreviewNowAsync(_expandedPreviewWindowId.Value);
     }
 
     private async void OnExpandedPreviewKeyDown(object sender, KeyEventArgs e)
@@ -1548,6 +1576,7 @@ public partial class MainWindow : Window
         var handled = await _browserSnapshotService.SendKeyInputAsync(_expandedPreviewWindowId.Value, e.Key, default);
         if (handled)
         {
+            await RefreshExpandedPreviewNowAsync(_expandedPreviewWindowId.Value);
             e.Handled = true;
         }
     }
@@ -1562,13 +1591,138 @@ public partial class MainWindow : Window
         var handled = await _browserSnapshotService.SendTextInputAsync(_expandedPreviewWindowId.Value, e.Text, default);
         if (handled)
         {
+            await RefreshExpandedPreviewNowAsync(_expandedPreviewWindowId.Value);
             e.Handled = true;
+        }
+    }
+
+    private async Task RefreshExpandedPreviewNowAsync(Guid windowId)
+    {
+        _browserSnapshotService.InvalidateCapture(windowId);
+        await Task.Delay(80);
+
+        var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default);
+        if (jpegBytes is null || jpegBytes.Length == 0)
+        {
+            return;
+        }
+
+        var imageSource = CreateImageSource(jpegBytes);
+        ExpandedPreviewImage.Source = imageSource;
+
+        if (_previewImages.TryGetValue(windowId, out var runtimeImage))
+        {
+            runtimeImage.Source = imageSource;
+        }
+
+        if (_streamDefinitionPreviewImages.TryGetValue(windowId, out var definitionImage))
+        {
+            definitionImage.Source = imageSource;
         }
     }
 
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            HideToTray();
+        }
+    }
+
+    private void OnNotifyIconDoubleClick(object? sender, EventArgs e)
+    {
+        RestoreFromTray();
+    }
+
+    private void OnOpenFromTrayClick(object? sender, EventArgs e)
+    {
+        RestoreFromTray();
+    }
+
+    private void OnExitFromTrayClick(object? sender, EventArgs e)
+    {
+        ExitApplication();
+    }
+
+    private void OnExitApplicationClick(object sender, RoutedEventArgs e)
+    {
+        ExitApplication();
+    }
+
+    private Forms.NotifyIcon CreateNotifyIcon()
+    {
+        var contextMenu = new Forms.ContextMenuStrip();
+        var openItem = new Forms.ToolStripMenuItem("Abrir SuperPainel");
+        openItem.Click += OnOpenFromTrayClick;
+        contextMenu.Items.Add(openItem);
+
+        var exitItem = new Forms.ToolStripMenuItem("Encerrar aplicacao");
+        exitItem.Click += OnExitFromTrayClick;
+        contextMenu.Items.Add(exitItem);
+
+        var icon = TryGetTrayIcon();
+        var notifyIcon = new Forms.NotifyIcon
+        {
+            Text = "SuperPainel",
+            Visible = true,
+            ContextMenuStrip = contextMenu,
+            Icon = icon
+        };
+        notifyIcon.DoubleClick += OnNotifyIconDoubleClick;
+        return notifyIcon;
+    }
+
+    private static DrawingIcon TryGetTrayIcon()
+    {
+        try
+        {
+            var icon = DrawingIcon.ExtractAssociatedIcon(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty);
+            if (icon is not null)
+            {
+                return icon;
+            }
+        }
+        catch
+        {
+        }
+
+        return DrawingSystemIcons.Application;
+    }
+
+    private void HideToTray()
+    {
+        Hide();
+        ShowInTaskbar = false;
+
+        if (!_hasShownTrayHint)
+        {
+            _notifyIcon.ShowBalloonTip(2500, "SuperPainel", "O aplicativo continua rodando na bandeja do sistema.", Forms.ToolTipIcon.Info);
+            _hasShownTrayHint = true;
+        }
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    private void ExitApplication()
+    {
+        _allowApplicationExit = true;
+        _notifyIcon.Visible = false;
+        Application.Current.Shutdown();
     }
 
     private async Task RefreshPreviewImagesAsync()

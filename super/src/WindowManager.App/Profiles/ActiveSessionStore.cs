@@ -109,6 +109,9 @@ public sealed class ActiveSessionWindowRecord
 
     [DataMember(Order = 12)]
     public bool IsWebRtcPublishingEnabled { get; set; }
+
+    [DataMember(Order = 13)]
+    public bool IsPrimaryExclusive { get; set; }
 }
 
 [DataContract]

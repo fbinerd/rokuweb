@@ -2188,6 +2188,7 @@ public sealed class MainViewModel : ViewModelBase
                     browserWindow.TargetManualWidth = windowRecord.TargetManualWidth;
                     browserWindow.TargetManualHeight = windowRecord.TargetManualHeight;
                     browserWindow.IsWebRtcPublishingEnabled = windowRecord.IsWebRtcPublishingEnabled;
+                    browserWindow.IsPrimaryExclusive = windowRecord.IsPrimaryExclusive;
                     browserWindow.ProfileName = record.ProfileName;
                     browserWindow.ActiveSessionId = session.Id;
                     browserWindow.ActiveSessionName = session.Name;
@@ -2244,7 +2245,8 @@ public sealed class MainViewModel : ViewModelBase
                     TargetResolutionMode = window.TargetResolutionMode,
                     TargetManualWidth = window.TargetManualWidth,
                     TargetManualHeight = window.TargetManualHeight,
-                    IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled
+                    IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled,
+                    IsPrimaryExclusive = window.IsPrimaryExclusive
                 }).ToList(),
             BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
             {

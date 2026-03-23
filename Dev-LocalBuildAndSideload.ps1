@@ -18,6 +18,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $superWatchdogScriptPath = Join-Path $repoRoot "Run-SuperPainelWatchdog.ps1"
+$superWatchdogHiddenLauncherPath = Join-Path $repoRoot "Run-SuperPainelWatchdogHidden.vbs"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
@@ -278,26 +279,21 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
 }
 
 Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
-    $shortcutArguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$superWatchdogScriptPath`" -ExePath `"$superExePath`""
     Update-SuperDesktopShortcut `
-        -TargetPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -TargetPath "$env:SystemRoot\System32\wscript.exe" `
         -ShortcutPath $desktopShortcutPath `
-        -Arguments $shortcutArguments `
+        -Arguments "`"$superWatchdogHiddenLauncherPath`"" `
         -WorkingDirectory $repoRoot
 }
 
 if ($LaunchSuper) {
     Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        if (-not (Test-Path $superWatchdogScriptPath)) {
-            throw "Script watchdog nao encontrado: $superWatchdogScriptPath"
+        if (-not (Test-Path $superWatchdogHiddenLauncherPath)) {
+            throw "Launcher watchdog oculto nao encontrado: $superWatchdogHiddenLauncherPath"
         }
 
-        Start-Process -FilePath "powershell.exe" -ArgumentList @(
-            "-NoLogo",
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $superWatchdogScriptPath,
-            "-ExePath", $superExePath
+        Start-Process -FilePath "$env:SystemRoot\System32\wscript.exe" -ArgumentList @(
+            $superWatchdogHiddenLauncherPath
         ) -WorkingDirectory $repoRoot
     }
 }

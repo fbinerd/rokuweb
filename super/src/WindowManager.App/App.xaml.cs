@@ -2,6 +2,7 @@ using CefSharp;
 using CefSharp.Wpf;
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Threading;
 using System.Windows;
 using WindowManager.App.Runtime;
@@ -20,6 +21,7 @@ public partial class App : Application
 
         try
         {
+            RegisterGlobalDiagnostics();
             _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Local\WindowManagerBroadcast.SingleInstance", createdNew: out var createdNew);
             if (!createdNew)
             {
@@ -58,6 +60,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             AppLog.Write("App", string.Format("Startup failure: {0}", ex.Message));
+            CrashDiagnostics.Report("Startup", ex);
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Startup failure: {ex}{Environment.NewLine}");
             MessageBox.Show(ex.ToString(), "Falha ao iniciar", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
@@ -179,5 +182,36 @@ public partial class App : Application
         AppRuntimeState.BrowserEngineStatusMessage = initialized == true
             ? string.Empty
             : "Falha ao inicializar o CEF nesta maquina.";
+    }
+
+    private void RegisterGlobalDiagnostics()
+    {
+        DispatcherUnhandledException -= OnDispatcherUnhandledException;
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+
+        AppDomain.CurrentDomain.UnhandledException -= OnCurrentDomainUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
+
+        TaskScheduler.UnobservedTaskException -= OnTaskSchedulerUnobservedTaskException;
+        TaskScheduler.UnobservedTaskException += OnTaskSchedulerUnobservedTaskException;
+    }
+
+    private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        AppLog.Write("Crash", string.Format("DispatcherUnhandledException: {0}", e.Exception.Message));
+        CrashDiagnostics.Report("DispatcherUnhandledException", e.Exception);
+    }
+
+    private void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        var exception = e.ExceptionObject as Exception;
+        AppLog.Write("Crash", string.Format("AppDomainUnhandledException: terminating={0}", e.IsTerminating));
+        CrashDiagnostics.Report("AppDomainUnhandledException", exception, string.Format("IsTerminating={0}", e.IsTerminating));
+    }
+
+    private void OnTaskSchedulerUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        AppLog.Write("Crash", string.Format("TaskSchedulerUnobservedTaskException: {0}", e.Exception.Message));
+        CrashDiagnostics.Report("TaskSchedulerUnobservedTaskException", e.Exception);
     }
 }
