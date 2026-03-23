@@ -11,4 +11,9 @@ public static class AppDataPaths
             "WindowManagerBroadcast");
 
     public static string CefRoot => Path.Combine(Root, "cef");
+
+    public static string WatchdogRoot => Path.Combine(Root, "watchdog");
+
+    public static string GetWatchdogExitMarkerPath(string token) =>
+        Path.Combine(WatchdogRoot, string.Format("exit-{0}.ok", token));
 }

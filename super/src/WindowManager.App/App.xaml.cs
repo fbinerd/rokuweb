@@ -11,6 +11,7 @@ namespace WindowManager.App;
 public partial class App : Application
 {
     private static Mutex? _singleInstanceMutex;
+    private string _watchdogToken = string.Empty;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -29,6 +30,17 @@ public partial class App : Application
 
             AppLog.Write("App", "Startup begin");
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Startup begin{Environment.NewLine}");
+            _watchdogToken = ParseWatchdogToken(e.Args);
+            if (!string.IsNullOrWhiteSpace(_watchdogToken))
+            {
+                Directory.CreateDirectory(AppDataPaths.WatchdogRoot);
+                var exitMarkerPath = AppDataPaths.GetWatchdogExitMarkerPath(_watchdogToken);
+                if (File.Exists(exitMarkerPath))
+                {
+                    File.Delete(exitMarkerPath);
+                }
+            }
+
             InitializeBrowserEngine(startupLogPath);
 
             base.OnStartup(e);
@@ -54,6 +66,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        TryWriteWatchdogExitMarker();
+
         try
         {
             if (Cef.IsInitialized == true)
@@ -76,6 +90,46 @@ public partial class App : Application
         }
 
         base.OnExit(e);
+    }
+
+    private void TryWriteWatchdogExitMarker()
+    {
+        if (string.IsNullOrWhiteSpace(_watchdogToken))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(AppDataPaths.WatchdogRoot);
+            File.WriteAllText(AppDataPaths.GetWatchdogExitMarkerPath(_watchdogToken), DateTime.UtcNow.ToString("O"));
+        }
+        catch
+        {
+        }
+    }
+
+    private static string ParseWatchdogToken(string[] args)
+    {
+        if (args is null || args.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!string.Equals(args[index], "--watchdog-token", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 < args.Length)
+            {
+                return args[index + 1]?.Trim() ?? string.Empty;
+            }
+        }
+
+        return string.Empty;
     }
 
     private static void InitializeBrowserEngine(string startupLogPath)

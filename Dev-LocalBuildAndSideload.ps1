@@ -17,6 +17,7 @@ Add-Type -AssemblyName System.Net.Http
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
+$superWatchdogScriptPath = Join-Path $repoRoot "Run-SuperPainelWatchdog.ps1"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
@@ -210,22 +211,27 @@ function Reset-SuperLocalData {
 function Update-SuperDesktopShortcut {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ExePath,
+        [string]$TargetPath,
         [Parameter(Mandatory = $true)]
-        [string]$ShortcutPath
+        [string]$ShortcutPath,
+        [Parameter(Mandatory = $false)]
+        [string]$Arguments = "",
+        [Parameter(Mandatory = $false)]
+        [string]$WorkingDirectory = ""
     )
 
-    if (-not (Test-Path $ExePath)) {
-        throw "Executavel nao encontrado para criar atalho: $ExePath"
+    if (-not (Test-Path $TargetPath)) {
+        throw "Destino nao encontrado para criar atalho: $TargetPath"
     }
 
     $shell = New-Object -ComObject WScript.Shell
     try {
         $shortcut = $shell.CreateShortcut($ShortcutPath)
-        $shortcut.TargetPath = $ExePath
-        $shortcut.WorkingDirectory = Split-Path -Parent $ExePath
-        $shortcut.IconLocation = "$ExePath,0"
-        $shortcut.Description = "SuperPainel local do repositorio rokuweb"
+        $shortcut.TargetPath = $TargetPath
+        $shortcut.Arguments = $Arguments
+        $shortcut.WorkingDirectory = $(if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { Split-Path -Parent $TargetPath } else { $WorkingDirectory })
+        $shortcut.IconLocation = "$superExePath,0"
+        $shortcut.Description = "SuperPainel local com watchdog automatico"
         $shortcut.Save()
     }
     finally {
@@ -272,16 +278,27 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
 }
 
 Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
-    Update-SuperDesktopShortcut -ExePath $superExePath -ShortcutPath $desktopShortcutPath
+    $shortcutArguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$superWatchdogScriptPath`" -ExePath `"$superExePath`""
+    Update-SuperDesktopShortcut `
+        -TargetPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -ShortcutPath $desktopShortcutPath `
+        -Arguments $shortcutArguments `
+        -WorkingDirectory $repoRoot
 }
 
 if ($LaunchSuper) {
     Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        if (-not (Test-Path $superExePath)) {
-            throw "Executavel nao encontrado: $superExePath"
+        if (-not (Test-Path $superWatchdogScriptPath)) {
+            throw "Script watchdog nao encontrado: $superWatchdogScriptPath"
         }
 
-        Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath)
+        Start-Process -FilePath "powershell.exe" -ArgumentList @(
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $superWatchdogScriptPath,
+            "-ExePath", $superExePath
+        ) -WorkingDirectory $repoRoot
     }
 }
 
