@@ -96,6 +96,9 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 15)]
     public string ActiveSessionName { get; set; } = string.Empty;
+
+    [DataMember(Order = 16)]
+    public bool IsNavigationBarEnabled { get; set; }
 }
 
 [DataContract]
@@ -274,4 +277,7 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 5)]
     public bool IsPrimaryExclusive { get; set; }
+
+    [DataMember(Order = 6)]
+    public bool IsNavigationBarEnabled { get; set; }
 }

@@ -106,8 +106,19 @@
                             <GridViewColumn Header="Janela"
                                             Width="180"
                                             DisplayMemberBinding="{Binding Nickname}" />
+                            <GridViewColumn Header="Barra"
+                                            Width="64">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  IsChecked="{Binding IsNavigationBarEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  Click="OnNavigationBarToggleClick" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                             <GridViewColumn Header="Link"
-                                            Width="240">
+                                            Width="176">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock TextTrimming="CharacterEllipsis">

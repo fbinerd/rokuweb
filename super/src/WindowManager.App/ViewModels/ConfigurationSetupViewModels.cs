@@ -288,7 +288,8 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
                     Nickname = x.Nickname,
                     Url = x.Url,
                     IsEnabled = x.IsEnabled,
-                    IsPrimaryExclusive = x.IsPrimaryExclusive
+                    IsPrimaryExclusive = x.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = x.IsNavigationBarEnabled
                 })))
             {
                 Windows.Add(new WindowLinkEditorViewModel
@@ -298,6 +299,7 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
                     Number = Windows.Count + 1
                 });
             }
@@ -557,6 +559,7 @@ public sealed class WindowLinkEditorViewModel : ViewModelBase
     private int _number;
     private bool _isEnabled;
     private bool _isPrimaryExclusive;
+    private bool _isNavigationBarEnabled;
 
     public Guid Id
     {
@@ -598,6 +601,12 @@ public sealed class WindowLinkEditorViewModel : ViewModelBase
     {
         get => _isPrimaryExclusive;
         set => SetProperty(ref _isPrimaryExclusive, value);
+    }
+
+    public bool IsNavigationBarEnabled
+    {
+        get => _isNavigationBarEnabled;
+        set => SetProperty(ref _isNavigationBarEnabled, value);
     }
 
     public string NumberLabel => Number <= 0 ? string.Empty : Number.ToString();

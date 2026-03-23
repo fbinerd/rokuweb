@@ -17,3 +17,8 @@ super/**/*.tmp
 super/**/*.cache
 super/.vs/
 super/src/WindowManager.App/Runtime/BuildVersionInfo.g.cs
+tmp/
+local-roku.zip
+.codex-publish-stable-*/
+tools/ffmpeg/_download/
+tools/ffmpeg/*.exe

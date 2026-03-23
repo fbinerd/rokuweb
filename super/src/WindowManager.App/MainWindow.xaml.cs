@@ -647,12 +647,19 @@ public partial class MainWindow : Window
 
     private void EnsureStreamDefinitionCaptureWindow(WindowProfileItemViewModel item)
     {
-        if (!AppRuntimeState.BrowserEngineAvailable || _streamDefinitionCaptureWindows.ContainsKey(item.Id))
+        if (!AppRuntimeState.BrowserEngineAvailable)
         {
             return;
         }
 
+        if (_streamDefinitionCaptureWindows.TryGetValue(item.Id, out var existingCaptureWindow))
+        {
+            existingCaptureWindow.SetNavigationBarEnabled(item.IsNavigationBarEnabled);
+            return;
+        }
+
         var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService);
+        captureWindow.SetNavigationBarEnabled(item.IsNavigationBarEnabled);
         _streamDefinitionCaptureWindows[item.Id] = captureWindow;
         _browserSnapshotService.Register(item.Id, captureWindow.Browser);
         captureWindow.Show();
@@ -1041,6 +1048,16 @@ public partial class MainWindow : Window
         {
             RefreshRuntimePreviewCardHeader(session);
         }
+        else if (e.PropertyName == nameof(WindowSession.IsNavigationBarEnabled))
+        {
+            if (_captureWindows.TryGetValue(session.Id, out var captureWindow))
+            {
+                captureWindow.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
+            }
+
+            _browserSnapshotService.InvalidateCapture(session.Id);
+            _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
+        }
         else if (e.PropertyName == nameof(WindowSession.ProfileName))
         {
             if (_previewCards.TryGetValue(session.Id, out var card))
@@ -1135,20 +1152,28 @@ public partial class MainWindow : Window
 
     private void EnsureCaptureWindow(WindowSession session)
     {
-        if (!AppRuntimeState.BrowserEngineAvailable || _captureWindows.ContainsKey(session.Id))
+        if (!AppRuntimeState.BrowserEngineAvailable)
         {
+            return;
+        }
+
+        if (_captureWindows.TryGetValue(session.Id, out var existingCaptureWindow))
+        {
+            existingCaptureWindow.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
             return;
         }
 
         if (_streamDefinitionCaptureWindows.TryGetValue(session.Id, out var existingDefinitionCapture))
         {
             _streamDefinitionCaptureWindows.Remove(session.Id);
+            existingDefinitionCapture.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
             _captureWindows[session.Id] = existingDefinitionCapture;
             RemoveStreamDefinitionPreviewCardOnly(session.Id);
             return;
         }
 
         var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService);
+        captureWindow.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
         captureWindow.Show();

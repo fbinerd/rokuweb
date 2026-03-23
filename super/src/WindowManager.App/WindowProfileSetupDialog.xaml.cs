@@ -19,6 +19,7 @@ public partial class WindowProfileSetupDialog : Window
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly Guid _temporaryPreviewWindowId = Guid.NewGuid();
     private readonly Dictionary<Guid, string> _originalWindowUrls = new Dictionary<Guid, string>();
+    private readonly Dictionary<Guid, bool> _originalWindowNavigationBars = new Dictionary<Guid, bool>();
     private readonly DispatcherTimer _previewRefreshTimer;
     private BrowserCaptureWindow? _temporaryPreviewCaptureWindow;
     private StreamPreviewWindow? _expandedPreviewWindow;
@@ -49,6 +50,7 @@ public partial class WindowProfileSetupDialog : Window
             if (window.Id != Guid.Empty)
             {
                 _originalWindowUrls[window.Id] = window.Url ?? string.Empty;
+                _originalWindowNavigationBars[window.Id] = window.IsNavigationBarEnabled;
             }
         }
     }
@@ -99,6 +101,18 @@ public partial class WindowProfileSetupDialog : Window
 
         ViewModel.SelectedWindow = window;
         NavigatePreview(window, useSharedInstance: true, navigateSharedInstance: false);
+    }
+
+    private void OnNavigationBarToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox checkBox || checkBox.DataContext is not WindowLinkEditorViewModel window)
+        {
+            return;
+        }
+
+        ViewModel.SelectedWindow = window;
+        ApplyNavigationBarPreference(window);
+        _ = RefreshPreviewImageAsync();
     }
 
     private void OnRemoveWindowClick(object sender, RoutedEventArgs e)
@@ -160,6 +174,7 @@ public partial class WindowProfileSetupDialog : Window
             return;
         }
 
+        ApplyNavigationBarPreference(window);
         var sharedWindowId = useSharedInstance &&
                              window.Id != Guid.Empty &&
                              _browserSnapshotService.IsRegistered(window.Id)
@@ -238,6 +253,7 @@ public partial class WindowProfileSetupDialog : Window
         if (!_saved)
         {
             RestoreSharedWindowAddresses();
+            RestoreSharedWindowNavigationBars();
         }
         _browserSnapshotService.Unregister(_temporaryPreviewWindowId);
         _browserAudioCaptureService.Unregister(_temporaryPreviewWindowId);
@@ -257,6 +273,21 @@ public partial class WindowProfileSetupDialog : Window
         _temporaryPreviewCaptureWindow = new BrowserCaptureWindow(_temporaryPreviewWindowId, new Uri("about:blank"), _browserAudioCaptureService);
         _temporaryPreviewCaptureWindow.Show();
         _browserSnapshotService.Register(_temporaryPreviewWindowId, _temporaryPreviewCaptureWindow.Browser);
+    }
+
+    private void ApplyNavigationBarPreference(WindowLinkEditorViewModel? window)
+    {
+        var enabled = window?.IsNavigationBarEnabled == true;
+
+        if (_activePreviewWindowId.HasValue && _activePreviewWindowId.Value != _temporaryPreviewWindowId)
+        {
+            _ = _browserSnapshotService.SetNavigationBarEnabledAsync(_activePreviewWindowId.Value, enabled);
+        }
+
+        if (_temporaryPreviewCaptureWindow is not null)
+        {
+            _temporaryPreviewCaptureWindow.SetNavigationBarEnabled(enabled);
+        }
     }
 
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
@@ -344,6 +375,20 @@ public partial class WindowProfileSetupDialog : Window
                 _browserSnapshotService.NavigateRegisteredBrowser(pair.Key, uri);
                 _browserSnapshotService.InvalidateCapture(pair.Key);
             }
+        }
+    }
+
+    private void RestoreSharedWindowNavigationBars()
+    {
+        foreach (var pair in _originalWindowNavigationBars)
+        {
+            if (!_browserSnapshotService.IsRegistered(pair.Key))
+            {
+                continue;
+            }
+
+            _ = _browserSnapshotService.SetNavigationBarEnabledAsync(pair.Key, pair.Value);
+            _browserSnapshotService.InvalidateCapture(pair.Key);
         }
     }
 

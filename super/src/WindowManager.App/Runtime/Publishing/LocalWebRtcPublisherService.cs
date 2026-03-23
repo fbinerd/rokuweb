@@ -1174,13 +1174,11 @@ public sealed class LocalWebRtcPublisherService
 
         if (display is null || string.IsNullOrWhiteSpace(display.NetworkAddress))
         {
-            return allWindows;
+            return string.IsNullOrWhiteSpace(deviceId) ? allWindows : new List<BridgeWindowSnapshot>();
         }
 
         var directlyAssignedWindows = allWindows
             .Where(x =>
-                (!string.IsNullOrWhiteSpace(display.DeviceId) &&
-                 string.Equals(x.AssignedDisplayId, display.DeviceId, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrWhiteSpace(display.NetworkAddress) &&
                  string.Equals(x.AssignedDisplayAddress, display.NetworkAddress, StringComparison.OrdinalIgnoreCase)))
             .ToList();
@@ -1192,9 +1190,9 @@ public sealed class LocalWebRtcPublisherService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (sessionIds.Count == 0)
+        if (sessionIds.Count == 0 && directlyAssignedWindows.Count == 0)
         {
-            return directlyAssignedWindows;
+            return new List<BridgeWindowSnapshot>();
         }
 
         return allWindows

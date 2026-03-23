@@ -112,6 +112,9 @@ public sealed class ActiveSessionWindowRecord
 
     [DataMember(Order = 13)]
     public bool IsPrimaryExclusive { get; set; }
+
+    [DataMember(Order = 14)]
+    public bool IsNavigationBarEnabled { get; set; }
 }
 
 [DataContract]

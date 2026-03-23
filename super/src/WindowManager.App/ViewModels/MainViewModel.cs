@@ -952,7 +952,8 @@ public sealed class MainViewModel : ViewModelBase
                 Nickname = window.Nickname,
                 Url = window.Url,
                 IsEnabled = window.IsEnabled,
-                IsPrimaryExclusive = window.IsPrimaryExclusive
+                IsPrimaryExclusive = window.IsPrimaryExclusive,
+                IsNavigationBarEnabled = window.IsNavigationBarEnabled
             })
             .ToList();
 
@@ -966,7 +967,8 @@ public sealed class MainViewModel : ViewModelBase
                     x.Nickname,
                     x.Url,
                     IsEnabled = x.Id == exclusiveWindow.Id,
-                    IsPrimaryExclusive = x.Id == exclusiveWindow.Id
+                    IsPrimaryExclusive = x.Id == exclusiveWindow.Id,
+                    x.IsNavigationBarEnabled
                 })
                 .ToList();
         }
@@ -992,7 +994,8 @@ public sealed class MainViewModel : ViewModelBase
                     Nickname = desiredWindow.Nickname,
                     Url = desiredWindow.Url,
                     IsEnabled = desiredWindow.IsEnabled,
-                    IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive
+                    IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled
                 });
                 continue;
             }
@@ -1001,6 +1004,7 @@ public sealed class MainViewModel : ViewModelBase
             existingWindow.Url = desiredWindow.Url;
             existingWindow.IsEnabled = desiredWindow.IsEnabled;
             existingWindow.IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive;
+            existingWindow.IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled;
         }
 
         SelectedWindowProfile = windowProfile;
@@ -1182,6 +1186,7 @@ public sealed class MainViewModel : ViewModelBase
             browserWindow.TargetManualWidth = persistedWindow.TargetManualWidth;
             browserWindow.TargetManualHeight = persistedWindow.TargetManualHeight;
             browserWindow.IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled;
+            browserWindow.IsNavigationBarEnabled = persistedWindow.IsNavigationBarEnabled;
             browserWindow.ProfileName = profile.Name;
             browserWindow.ActiveSessionId = sessionId;
             browserWindow.ActiveSessionName = sessionName;
@@ -2116,6 +2121,7 @@ public sealed class MainViewModel : ViewModelBase
                     TargetManualWidth = persistedWindow.TargetManualWidth,
                     TargetManualHeight = persistedWindow.TargetManualHeight,
                     IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
+                    IsNavigationBarEnabled = persistedWindow.IsNavigationBarEnabled,
                     ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
                     ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
                     ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
@@ -2266,6 +2272,7 @@ public sealed class MainViewModel : ViewModelBase
                     browserWindow.TargetManualHeight = windowRecord.TargetManualHeight;
                     browserWindow.IsWebRtcPublishingEnabled = windowRecord.IsWebRtcPublishingEnabled;
                     browserWindow.IsPrimaryExclusive = windowRecord.IsPrimaryExclusive;
+                    browserWindow.IsNavigationBarEnabled = windowRecord.IsNavigationBarEnabled;
                     browserWindow.ProfileName = record.ProfileName;
                     browserWindow.ActiveSessionId = session.Id;
                     browserWindow.ActiveSessionName = session.Name;
@@ -2323,7 +2330,8 @@ public sealed class MainViewModel : ViewModelBase
                     TargetManualWidth = window.TargetManualWidth,
                     TargetManualHeight = window.TargetManualHeight,
                     IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled,
-                    IsPrimaryExclusive = window.IsPrimaryExclusive
+                    IsPrimaryExclusive = window.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
                 }).ToList(),
             BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
             {
@@ -2412,6 +2420,7 @@ public sealed class MainViewModel : ViewModelBase
                 TargetManualWidth = x.TargetManualWidth,
                 TargetManualHeight = x.TargetManualHeight,
                 IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
+                IsNavigationBarEnabled = x.IsNavigationBarEnabled,
                 ProfileName = x.ProfileName,
                 ActiveSessionId = x.ActiveSessionId,
                 ActiveSessionName = x.ActiveSessionName
@@ -2657,7 +2666,8 @@ public sealed class MainViewModel : ViewModelBase
                     Nickname = window.Nickname,
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
-                    IsPrimaryExclusive = window.IsPrimaryExclusive
+                    IsPrimaryExclusive = window.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
                 }).ToList()
             }).ToList();
     }
@@ -2736,7 +2746,8 @@ public sealed class MainViewModel : ViewModelBase
                     Nickname = window.Nickname,
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
-                    IsPrimaryExclusive = window.IsPrimaryExclusive
+                    IsPrimaryExclusive = window.IsPrimaryExclusive,
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
                 });
             }
 
@@ -2824,6 +2835,7 @@ public sealed class MainViewModel : ViewModelBase
                 duplicateWindow.Url = string.IsNullOrWhiteSpace(duplicateWindow.Url) ? window.Url : duplicateWindow.Url;
                 duplicateWindow.IsEnabled = duplicateWindow.IsEnabled || window.IsEnabled;
                 duplicateWindow.IsPrimaryExclusive = duplicateWindow.IsPrimaryExclusive || window.IsPrimaryExclusive;
+                duplicateWindow.IsNavigationBarEnabled = duplicateWindow.IsNavigationBarEnabled || window.IsNavigationBarEnabled;
             }
         }
 
@@ -3240,6 +3252,7 @@ public sealed class MainViewModel : ViewModelBase
         browserWindow.ActiveSessionName = stream.Name;
         browserWindow.AssignedTarget = resolvedTarget;
         browserWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
+        browserWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
 
         if (!Windows.Any(x => x.Id == browserWindow.Id))
         {
@@ -3957,6 +3970,7 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     private string _url = string.Empty;
     private bool _isEnabled;
     private bool _isPrimaryExclusive;
+    private bool _isNavigationBarEnabled;
 
     public Guid Id
     {
@@ -3986,6 +4000,12 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     {
         get => _isPrimaryExclusive;
         set => SetProperty(ref _isPrimaryExclusive, value);
+    }
+
+    public bool IsNavigationBarEnabled
+    {
+        get => _isNavigationBarEnabled;
+        set => SetProperty(ref _isNavigationBarEnabled, value);
     }
 }
 
