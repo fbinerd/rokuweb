@@ -1177,6 +1177,14 @@ public sealed class LocalWebRtcPublisherService
             return allWindows;
         }
 
+        var directlyAssignedWindows = allWindows
+            .Where(x =>
+                (!string.IsNullOrWhiteSpace(display.DeviceId) &&
+                 string.Equals(x.AssignedDisplayId, display.DeviceId, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(display.NetworkAddress) &&
+                 string.Equals(x.AssignedDisplayAddress, display.NetworkAddress, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
         var sessionIds = _sessionSnapshots.Values
             .Where(x => x.DisplayAddresses.Any(address => string.Equals(address, display.NetworkAddress, StringComparison.OrdinalIgnoreCase)))
             .Select(x => x.Id)
@@ -1186,11 +1194,14 @@ public sealed class LocalWebRtcPublisherService
 
         if (sessionIds.Count == 0)
         {
-            return allWindows;
+            return directlyAssignedWindows;
         }
 
         return allWindows
             .Where(x => sessionIds.Contains(x.ActiveSessionId))
+            .Concat(directlyAssignedWindows)
+            .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
             .ToList();
     }
 
