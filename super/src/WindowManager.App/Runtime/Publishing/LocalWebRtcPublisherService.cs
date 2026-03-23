@@ -249,6 +249,11 @@ public sealed class LocalWebRtcPublisherService
         return await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn).ConfigureAwait(false);
     }
 
+    public IReadOnlyList<RegisteredDisplaySnapshot> GetRegisteredDisplaysSnapshot()
+    {
+        return _registeredDisplays.Values.ToList();
+    }
+
     public void UpdateWindowSnapshots(IEnumerable<WindowSession> windows, IEnumerable<BridgeActiveSessionSnapshot> sessions, int serverPort, WebRtcBindMode bindMode, string specificIp)
     {
         var port = serverPort <= 0 ? 8090 : serverPort;

@@ -194,15 +194,16 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
             {
                 try
                 {
-                    var receiveTask = client.ReceiveAsync();
-                    var completedTask = await Task.WhenAny(receiveTask, Task.Delay(350, cancellationToken));
-                    if (completedTask != receiveTask)
+                    if (client.Available <= 0)
                     {
+                        await Task.Delay(150, cancellationToken);
                         continue;
                     }
 
-                    var packet = receiveTask.Result;
-                    var parsed = ParseSsdpResponse(Encoding.UTF8.GetString(packet.Buffer), packet.RemoteEndPoint.Address);
+                    var remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+                    var buffer = client.Receive(ref remoteEndPoint);
+                    var packetText = Encoding.UTF8.GetString(buffer);
+                    var parsed = ParseSsdpResponse(packetText, remoteEndPoint.Address);
                     if (parsed is not null)
                     {
                         results.Add(parsed);
@@ -210,9 +211,16 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
                 }
                 catch (SocketException)
                 {
-                    break;
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
                 }
                 catch (ObjectDisposedException)
+                {
+                    break;
+                }
+                catch (OperationCanceledException)
                 {
                     break;
                 }

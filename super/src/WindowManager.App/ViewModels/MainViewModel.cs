@@ -2716,9 +2716,15 @@ public sealed class MainViewModel : ViewModelBase
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(existing.AssignedTvProfileName) && !string.IsNullOrWhiteSpace(profile.AssignedTvProfileName))
+            if ((!existing.AssignedTvProfileId.HasValue || existing.AssignedTvProfileId == Guid.Empty) &&
+                profile.AssignedTvProfileId.HasValue &&
+                profile.AssignedTvProfileId != Guid.Empty)
             {
                 existing.AssignedTvProfileId = profile.AssignedTvProfileId;
+            }
+
+            if (string.IsNullOrWhiteSpace(existing.AssignedTvProfileName) && !string.IsNullOrWhiteSpace(profile.AssignedTvProfileName))
+            {
                 existing.AssignedTvProfileName = profile.AssignedTvProfileName;
             }
 
@@ -2837,6 +2843,78 @@ public sealed class MainViewModel : ViewModelBase
         await PersistActiveSessionsAsync();
     }
 
+    private TvProfileViewModel? ResolveTvProfileForStream(WindowProfileViewModel stream)
+    {
+        var byId = stream.AssignedTvProfileId.HasValue
+            ? TvProfiles.FirstOrDefault(x => x.Id == stream.AssignedTvProfileId.Value)
+            : null;
+
+        if (byId is not null)
+        {
+            return byId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(stream.AssignedTvProfileName))
+        {
+            var byName = TvProfiles.FirstOrDefault(x =>
+                string.Equals(x.Name, stream.AssignedTvProfileName, StringComparison.OrdinalIgnoreCase));
+            if (byName is not null)
+            {
+                stream.AssignedTvProfileId = byName.Id;
+                stream.AssignedTvProfileName = byName.Name;
+                return byName;
+            }
+        }
+
+        return null;
+    }
+
+    private DisplayTarget PromoteRegisteredDisplayAsOnlineTarget(DisplayTarget resolvedTarget, TvProfileTargetViewModel binding)
+    {
+        var registeredDisplay = _webRtcPublisherService
+            .GetRegisteredDisplaysSnapshot()
+            .FirstOrDefault(x =>
+                (!string.IsNullOrWhiteSpace(binding.NetworkAddress) &&
+                 string.Equals(x.NetworkAddress, binding.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(resolvedTarget.NetworkAddress) &&
+                 string.Equals(x.NetworkAddress, resolvedTarget.NetworkAddress, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(binding.DeviceUniqueId) &&
+                 string.Equals(x.DeviceId, binding.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(resolvedTarget.DeviceUniqueId) &&
+                 string.Equals(x.DeviceId, resolvedTarget.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)));
+
+        if (registeredDisplay is null)
+        {
+            return resolvedTarget;
+        }
+
+        return new DisplayTarget
+        {
+            Id = resolvedTarget.Id != Guid.Empty ? resolvedTarget.Id : binding.DisplayTargetId,
+            Name = string.IsNullOrWhiteSpace(resolvedTarget.Name) ? binding.DisplayName : resolvedTarget.Name,
+            NetworkAddress = string.IsNullOrWhiteSpace(registeredDisplay.NetworkAddress)
+                ? resolvedTarget.NetworkAddress
+                : registeredDisplay.NetworkAddress,
+            LastKnownNetworkAddress = string.IsNullOrWhiteSpace(resolvedTarget.NetworkAddress)
+                ? binding.NetworkAddress
+                : resolvedTarget.NetworkAddress,
+            DeviceUniqueId = string.IsNullOrWhiteSpace(resolvedTarget.DeviceUniqueId)
+                ? binding.DeviceUniqueId
+                : resolvedTarget.DeviceUniqueId,
+            MacAddress = resolvedTarget.MacAddress,
+            AlternateMacAddresses = resolvedTarget.AlternateMacAddresses.ToList(),
+            DiscoverySource = string.IsNullOrWhiteSpace(resolvedTarget.DiscoverySource)
+                ? "TV online via registro Roku"
+                : resolvedTarget.DiscoverySource,
+            TransportKind = resolvedTarget.TransportKind,
+            IsOnline = true,
+            WasPreviouslyKnown = true,
+            IsStaticTarget = resolvedTarget.IsStaticTarget,
+            NativeWidth = resolvedTarget.NativeWidth > 0 ? resolvedTarget.NativeWidth : binding.NativeWidth,
+            NativeHeight = resolvedTarget.NativeHeight > 0 ? resolvedTarget.NativeHeight : binding.NativeHeight
+        };
+    }
+
     public async Task SetStreamWindowPrimaryExclusiveAsync(Guid itemId, bool isPrimaryExclusive)
     {
         var stream = WindowProfiles.FirstOrDefault(x => x.Windows.Any(window => window.Id == itemId));
@@ -2910,7 +2988,7 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
-        var tvProfile = TvProfiles.FirstOrDefault(x => x.Id == stream.AssignedTvProfileId);
+        var tvProfile = ResolveTvProfileForStream(stream);
         if (tvProfile is null)
         {
             item.IsEnabled = false;
@@ -2943,6 +3021,7 @@ public sealed class MainViewModel : ViewModelBase
             },
             Targets,
             CancellationToken.None);
+        resolvedTarget = PromoteRegisteredDisplayAsOnlineTarget(resolvedTarget, binding);
 
         Uri? initialUri = null;
         if (!string.IsNullOrWhiteSpace(item.Url))
@@ -2971,7 +3050,31 @@ public sealed class MainViewModel : ViewModelBase
             Windows.Add(browserWindow);
         }
 
-        await _routingService.AssignWindowToTargetAsync(browserWindow, resolvedTarget, CancellationToken.None);
+        try
+        {
+            await _routingService.AssignWindowToTargetAsync(browserWindow, resolvedTarget, CancellationToken.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            browserWindow.State = WindowSessionState.Created;
+            browserWindow.AssignedTarget = null;
+
+            if (Windows.Contains(browserWindow))
+            {
+                await _webRtcPublisherService.UnpublishAsync(browserWindow, CancellationToken.None);
+                await _browserInstanceHost.CloseAsync(browserWindow.Id, CancellationToken.None);
+                Windows.Remove(browserWindow);
+            }
+
+            RebuildActiveSessionsFromWindows();
+            StatusMessage = string.Format(
+                "A janela '{0}' do stream '{1}' ficou marcada, mas a TV esta offline: {2}",
+                string.IsNullOrWhiteSpace(item.Nickname) ? item.Url : item.Nickname,
+                stream.Name,
+                ex.Message);
+            AppLog.Write("Streams", StatusMessage);
+            return;
+        }
 
         RebuildActiveSessionsFromWindows();
         var activeSession = ActiveSessions.FirstOrDefault(x => x.Id == stream.Id);
