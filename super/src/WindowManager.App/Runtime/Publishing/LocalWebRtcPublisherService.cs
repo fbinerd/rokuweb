@@ -545,10 +545,22 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
-                    "TV desatualizada detectada: id={0}, atual={1}, esperado={2}. Atualizacao automatica desabilitada; use o comando manual.",
+                    "TV desatualizada detectada: id={0}, atual={1}, esperado={2}.",
                     snapshot.DeviceId,
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
+
+            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Agendando sideload automatico para TV id={0}, atual={1}, esperado={2}.",
+                        snapshot.DeviceId,
+                        snapshot.ChannelVersion,
+                        snapshot.ExpectedChannelVersion));
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+            }
         }
     }
 
@@ -643,10 +655,22 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
-                    "TV desatualizada detectada via input-log: id={0}, atual={1}, esperado={2}. Atualizacao automatica desabilitada; use o comando manual.",
+                    "TV desatualizada detectada via input-log: id={0}, atual={1}, esperado={2}.",
                     snapshot.DeviceId,
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
+
+            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Agendando sideload automatico via input-log para TV id={0}, atual={1}, esperado={2}.",
+                        snapshot.DeviceId,
+                        snapshot.ChannelVersion,
+                        snapshot.ExpectedChannelVersion));
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+            }
         }
     }
 
@@ -1116,6 +1140,17 @@ public sealed class LocalWebRtcPublisherService
         }
 
         return string.Empty;
+    }
+
+    private static bool ShouldAutoSideloadOnRegistration(string expectedVersion)
+    {
+        if (string.IsNullOrWhiteSpace(expectedVersion))
+        {
+            return false;
+        }
+
+        var currentChannel = UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel);
+        return !string.Equals(currentChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string TryReadLocalRokuPackageReleaseId()
