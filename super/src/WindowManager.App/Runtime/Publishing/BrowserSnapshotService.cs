@@ -180,6 +180,17 @@ public sealed class BrowserSnapshotService
                     InvalidateCapture(windowId);
                     AppLog.Write("RokuControl", "Escape enviado ao CEF.");
                     return RemoteCommandResult.Success();
+                case "history-back":
+                    if (cefBrowser.CanGoBack)
+                    {
+                        cefBrowser.GoBack();
+                        InvalidateCapture(windowId);
+                        AppLog.Write("RokuControl", "Historico voltar enviado ao CEF.");
+                        return RemoteCommandResult.Success();
+                    }
+
+                    AppLog.Write("RokuControl", "Historico voltar ignorado; navegador sem pagina anterior.");
+                    return RemoteCommandResult.Success();
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);

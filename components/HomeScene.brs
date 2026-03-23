@@ -16,6 +16,8 @@ sub init()
     m.cursorY = 360
     m.lockedFullscreen = false
     m.lockedWindowId = ""
+    m.backHoldTimespan = invalid
+    m.backLongPressThresholdMs = 650
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
     m.keyboardPurpose = ""
@@ -137,6 +139,33 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
     if m.isFullscreen
         if not press
+            if key = "back" or key = "Back"
+                heldMs = 0
+                if m.backHoldTimespan <> invalid
+                    heldMs = m.backHoldTimespan.TotalMilliseconds()
+                end if
+                m.backHoldTimespan = invalid
+
+                if heldMs >= m.backLongPressThresholdMs
+                    if m.lockedFullscreen
+                        autoFullscreenIndex = findAutoOpenFullscreenIndex()
+                        if autoFullscreenIndex < 0
+                            m.lockedFullscreen = false
+                            m.lockedWindowId = ""
+                        end if
+                    end if
+                    if m.lockedFullscreen
+                        return true
+                    end if
+                    hideFullscreen()
+                    return true
+                end if
+
+                sendRemoteCommand("history-back")
+                scheduleFullscreenRefresh()
+                return true
+            end if
+
             if key = m.heldDirectionKey
                 stopHeldDirection()
                 return true
@@ -148,17 +177,8 @@ function onKeyEvent(key as string, press as boolean) as boolean
         reportInputKey(key)
 
         if key = "back" or key = "Back"
-            if m.lockedFullscreen
-                autoFullscreenIndex = findAutoOpenFullscreenIndex()
-                if autoFullscreenIndex < 0
-                    m.lockedFullscreen = false
-                    m.lockedWindowId = ""
-                end if
-            end if
-            if m.lockedFullscreen
-                return true
-            end if
-            hideFullscreen()
+            m.backHoldTimespan = CreateObject("roTimespan")
+            m.backHoldTimespan.Mark()
             return true
         end if
 
