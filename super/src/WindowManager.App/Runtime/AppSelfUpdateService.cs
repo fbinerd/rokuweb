@@ -118,13 +118,68 @@ public sealed class AppSelfUpdateService
             scriptPath);
     }
 
+    public Task<AppSelfUpdateResult> PrepareLocalPackageAsync(string packageZipPath, string? restoreBackupZipPath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(packageZipPath) || !File.Exists(packageZipPath))
+        {
+            return Task.FromResult(AppSelfUpdateResult.Failure("Nao foi possivel localizar o pacote local para rollback."));
+        }
+
+        var tempRoot = Path.Combine(
+            Path.GetTempPath(),
+            "WindowManagerBroadcast",
+            "rollback",
+            DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"));
+
+        var extractRoot = Path.Combine(tempRoot, "extracted");
+        var scriptPath = Path.Combine(tempRoot, "apply-rollback.ps1");
+        var targetDirectory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var exePath = Path.Combine(targetDirectory, "SuperPainel.exe");
+
+        Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(extractRoot);
+        ZipFile.ExtractToDirectory(packageZipPath, extractRoot);
+
+        var expectedExecutableHash = string.Empty;
+        var extractedExecutablePath = Path.Combine(extractRoot, "SuperPainel.exe");
+        if (File.Exists(extractedExecutablePath))
+        {
+            expectedExecutableHash = ComputeSha256(extractedExecutablePath);
+        }
+
+        var currentProcess = Process.GetCurrentProcess();
+        var scriptContent = BuildUpdateScript(
+            currentProcess.Id,
+            new[] { extractRoot },
+            targetDirectory,
+            exePath,
+            expectedExecutableHash,
+            Path.Combine(tempRoot, "apply-rollback.log"),
+            BuildRestartArguments(restoreBackupZipPath));
+
+        File.WriteAllText(scriptPath, scriptContent, Encoding.ASCII);
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = string.Format("-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{0}\"", scriptPath),
+            WorkingDirectory = tempRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+
+        return Task.FromResult(AppSelfUpdateResult.Success(packageZipPath, packageZipPath, extractRoot, scriptPath));
+    }
+
     private static string BuildUpdateScript(
         int processId,
         string[] sourceDirectories,
         string targetDirectory,
         string executablePath,
         string expectedExecutableHash,
-        string logPath)
+        string logPath,
+        string restartArguments = "")
     {
         string EscapePowerShell(string value) => value.Replace("'", "''");
         string ToLiteralArray(IEnumerable<string> values) => string.Join(", ", values.Select(x => "'" + EscapePowerShell(x) + "'"));
@@ -175,8 +230,13 @@ public sealed class AppSelfUpdateService
             "    throw 'O executavel reiniciado nao corresponde ao pacote atualizado.'",
             "  }",
             "}",
+            string.Format("$restartArguments = '{0}'", EscapePowerShell(restartArguments ?? string.Empty)),
             "Write-UpdateLog 'Atualizacao aplicada. Reiniciando SuperPainel.'",
-            "Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)",
+            "if ([string]::IsNullOrWhiteSpace($restartArguments)) {",
+            "  Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)",
+            "} else {",
+            "  Start-Process -FilePath $exe -ArgumentList $restartArguments -WorkingDirectory (Split-Path -Parent $exe)",
+            "}",
             "Write-UpdateLog 'Reinicio solicitado com sucesso.'"
         };
 
@@ -189,6 +249,16 @@ public sealed class AppSelfUpdateService
         using var sha256 = System.Security.Cryptography.SHA256.Create();
         var hash = sha256.ComputeHash(stream);
         return BitConverter.ToString(hash).Replace("-", string.Empty);
+    }
+
+    private static string BuildRestartArguments(string? restoreBackupZipPath)
+    {
+        if (string.IsNullOrWhiteSpace(restoreBackupZipPath))
+        {
+            return string.Empty;
+        }
+
+        return string.Format("--restore-backup \"{0}\"", restoreBackupZipPath.Replace("\"", "\"\""));
     }
 }
 

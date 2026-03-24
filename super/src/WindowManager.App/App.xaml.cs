@@ -43,6 +43,14 @@ public partial class App : Application
                 }
             }
 
+            var restoreBackupPath = ParseRestoreBackupPath(e.Args);
+            if (!string.IsNullOrWhiteSpace(restoreBackupPath) && File.Exists(restoreBackupPath))
+            {
+                AppLog.Write("Updater", string.Format("Restaurando backup solicitado na linha de comando: {0}", restoreBackupPath));
+                var maintenanceService = new AppDataMaintenanceService();
+                maintenanceService.ImportAsync(restoreBackupPath, CancellationToken.None).GetAwaiter().GetResult();
+            }
+
             InitializeBrowserEngine(startupLogPath);
 
             base.OnStartup(e);
@@ -122,6 +130,29 @@ public partial class App : Application
         for (var index = 0; index < args.Length; index++)
         {
             if (!string.Equals(args[index], "--watchdog-token", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 < args.Length)
+            {
+                return args[index + 1]?.Trim() ?? string.Empty;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string ParseRestoreBackupPath(string[] args)
+    {
+        if (args is null || args.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!string.Equals(args[index], "--restore-backup", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

@@ -13,42 +13,45 @@ public sealed class AppProfile
     public string Name { get; set; } = "default";
 
     [DataMember(Order = 2)]
-    public Guid? SelectedWindowId { get; set; }
+    public int SchemaVersion { get; set; } = AppProfileSchema.CurrentVersion;
 
     [DataMember(Order = 3)]
-    public Guid? SelectedTargetId { get; set; }
+    public Guid? SelectedWindowId { get; set; }
 
     [DataMember(Order = 4)]
-    public List<WindowSessionProfile> Windows { get; set; } = new List<WindowSessionProfile>();
+    public Guid? SelectedTargetId { get; set; }
 
     [DataMember(Order = 5)]
-    public List<StaticPanelProfile> StaticPanels { get; set; } = new List<StaticPanelProfile>();
+    public List<WindowSessionProfile> Windows { get; set; } = new List<WindowSessionProfile>();
 
     [DataMember(Order = 6)]
-    public int WebRtcServerPort { get; set; } = 8090;
+    public List<StaticPanelProfile> StaticPanels { get; set; } = new List<StaticPanelProfile>();
 
     [DataMember(Order = 7)]
-    public WebRtcBindMode WebRtcBindMode { get; set; } = WebRtcBindMode.Lan;
+    public int WebRtcServerPort { get; set; } = 8090;
 
     [DataMember(Order = 8)]
-    public string WebRtcSpecificIp { get; set; } = string.Empty;
+    public WebRtcBindMode WebRtcBindMode { get; set; } = WebRtcBindMode.Lan;
 
     [DataMember(Order = 9)]
-    public List<DisplayTargetProfile> DisplayTargets { get; set; } = new List<DisplayTargetProfile>();
+    public string WebRtcSpecificIp { get; set; } = string.Empty;
 
     [DataMember(Order = 10)]
-    public List<DisplayBindingProfile> DisplayBindings { get; set; } = new List<DisplayBindingProfile>();
+    public List<DisplayTargetProfile> DisplayTargets { get; set; } = new List<DisplayTargetProfile>();
 
     [DataMember(Order = 11)]
-    public List<TvProfileDefinition> TvProfiles { get; set; } = new List<TvProfileDefinition>();
+    public List<DisplayBindingProfile> DisplayBindings { get; set; } = new List<DisplayBindingProfile>();
 
     [DataMember(Order = 12)]
-    public List<WindowGroupProfile> WindowProfiles { get; set; } = new List<WindowGroupProfile>();
+    public List<TvProfileDefinition> TvProfiles { get; set; } = new List<TvProfileDefinition>();
 
     [DataMember(Order = 13)]
-    public List<ActiveSessionRecord> ActiveSessions { get; set; } = new List<ActiveSessionRecord>();
+    public List<WindowGroupProfile> WindowProfiles { get; set; } = new List<WindowGroupProfile>();
 
     [DataMember(Order = 14)]
+    public List<ActiveSessionRecord> ActiveSessions { get; set; } = new List<ActiveSessionRecord>();
+
+    [DataMember(Order = 15)]
     public List<BrowserProfileDefinition> BrowserProfiles { get; set; } = new List<BrowserProfileDefinition>();
 }
 

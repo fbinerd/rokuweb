@@ -34,7 +34,7 @@ public sealed class AppDataMaintenanceService
         if (Directory.Exists(DataRoot))
         {
             foreach (var file in Directory.GetFiles(DataRoot, "*", SearchOption.AllDirectories)
-                .Where(x => !IsInsideCefDirectory(x)))
+                .Where(ShouldIncludeInBackup))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var relativePath = GetRelativePath(DataRoot, file);
@@ -61,6 +61,11 @@ public sealed class AppDataMaintenanceService
             cancellationToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrWhiteSpace(entry.FullName))
+            {
+                continue;
+            }
+
+            if (ShouldSkipImportEntry(entry.FullName))
             {
                 continue;
             }
@@ -113,6 +118,7 @@ public sealed class AppDataMaintenanceService
             File.Delete(file);
         }
 
+        ResetBrowserProfileData();
     }
 
     private static string GetRelativePath(string root, string path)
@@ -126,9 +132,37 @@ public sealed class AppDataMaintenanceService
         return path.Substring(normalizedRoot.Length).Replace("\\", "/");
     }
 
+    private static bool ShouldIncludeInBackup(string path) => !IsInsideCefDirectory(path);
+
     private static bool IsInsideCefDirectory(string path)
     {
         var cefRoot = AppDataPaths.CefRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         return path.StartsWith(cefRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInsideBrowserProfilesDirectory(string path)
+    {
+        var browserProfilesRoot = AppDataPaths.CefBrowserProfilesRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return path.StartsWith(browserProfilesRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldSkipImportEntry(string entryName)
+    {
+        if (string.IsNullOrWhiteSpace(entryName))
+        {
+            return false;
+        }
+
+        var normalized = entryName.Replace('\\', '/').TrimStart('/');
+        return normalized.StartsWith("cef/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ResetBrowserProfileData()
+    {
+        var profilesRoot = AppDataPaths.CefBrowserProfilesRoot;
+        if (Directory.Exists(profilesRoot))
+        {
+            Directory.Delete(profilesRoot, recursive: true);
+        }
     }
 }

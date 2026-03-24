@@ -61,6 +61,14 @@ public sealed class ProfileStore
         return Task.FromResult<string?>(string.IsNullOrWhiteSpace(defaultProfileName) ? null : defaultProfileName);
     }
 
+    public Task SetLastProfileNameAsync(string profileName, CancellationToken cancellationToken)
+    {
+        var normalized = string.IsNullOrWhiteSpace(profileName) ? "default" : profileName.Trim();
+        Directory.CreateDirectory(Path.GetDirectoryName(_lastProfileFilePath)!);
+        File.WriteAllText(_lastProfileFilePath, normalized, Encoding.UTF8);
+        return Task.CompletedTask;
+    }
+
     public Task SetDefaultProfileNameAsync(string profileName, CancellationToken cancellationToken)
     {
         var normalized = string.IsNullOrWhiteSpace(profileName) ? "default" : profileName.Trim();
@@ -88,21 +96,24 @@ public sealed class ProfileStore
         }
 
         var serializer = new DataContractJsonSerializer(typeof(AppProfile));
-        using (var stream = File.OpenRead(path))
+        using (var stream = OpenReadWithRetry(path, cancellationToken))
         {
-            return Task.FromResult(serializer.ReadObject(stream) as AppProfile);
+            var profile = serializer.ReadObject(stream) as AppProfile;
+            if (profile is not null && AppProfileMigrator.Migrate(profile))
+            {
+                WriteProfile(path, profile);
+            }
+
+            return Task.FromResult(profile);
         }
     }
 
     public Task SaveAsync(AppProfile profile, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_profilesDirectory);
+        AppProfileMigrator.Migrate(profile);
 
-        var serializer = new DataContractJsonSerializer(typeof(AppProfile));
-        using (var stream = File.Create(GetProfilePath(profile.Name)))
-        {
-            serializer.WriteObject(stream, profile);
-        }
+        WriteProfile(GetProfilePath(profile.Name), profile);
 
         File.WriteAllText(_lastProfileFilePath, profile.Name, Encoding.UTF8);
         return Task.CompletedTask;
@@ -148,6 +159,35 @@ public sealed class ProfileStore
         }
 
         return Path.Combine(_profilesDirectory, safeName + ".json");
+    }
+
+    private static void WriteProfile(string path, AppProfile profile)
+    {
+        var serializer = new DataContractJsonSerializer(typeof(AppProfile));
+        using (var stream = File.Create(path))
+        {
+            serializer.WriteObject(stream, profile);
+        }
+    }
+
+    private static FileStream OpenReadWithRetry(string path, CancellationToken cancellationToken)
+    {
+        const int attempts = 6;
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (IOException) when (attempt < attempts)
+            {
+                Thread.Sleep(200 * attempt);
+            }
+        }
+
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
     }
 }
 

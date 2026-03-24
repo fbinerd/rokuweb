@@ -38,7 +38,10 @@ public sealed class Bootstrapper
         var discoveryService = new StubDisplayDiscoveryService(knownDisplayStore, appUpdatePreferenceStore);
         var appSelfUpdateService = new AppSelfUpdateService();
         var appDataMaintenanceService = new AppDataMaintenanceService();
-        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, activeSessionStore, manualDisplayProbeService, displayIdentityResolverService, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService);
+        var appInstallationSnapshotService = new AppInstallationSnapshotService();
+        var updateRollbackStore = new UpdateRollbackStore();
+        var updateRecoveryService = new UpdateRecoveryService();
+        var viewModel = new MainViewModel(browserHost, discoveryService, routingService, profileStore, activeSessionStore, manualDisplayProbeService, displayIdentityResolverService, webRtcPublisherService, knownDisplayStore, appUpdateManifestService, appUpdatePreferenceStore, appSelfUpdateService, appDataMaintenanceService, appInstallationSnapshotService, updateRollbackStore, updateRecoveryService);
 
         return new MainWindow(viewModel, browserSnapshotService, browserAudioCaptureService);
     }

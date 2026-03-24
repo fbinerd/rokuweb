@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -875,7 +876,11 @@ public partial class MainWindow : Window
 
         try
         {
+            PrepareForApplicationDataReplace();
             await _viewModel.ImportApplicationDataAsync(dialog.FileName);
+            RefreshStreamPreviewSections();
+            RefreshStreamProfilesListView();
+            _ = RefreshPreviewImagesAsync();
         }
         catch (Exception ex)
         {
@@ -899,12 +904,127 @@ public partial class MainWindow : Window
 
         try
         {
+            PrepareForApplicationDataReplace();
             await _viewModel.ResetApplicationDataAsync();
+            RefreshStreamPreviewSections();
+            RefreshStreamProfilesListView();
+            _ = RefreshPreviewImagesAsync();
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Falha ao resetar base", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void PrepareForApplicationDataReplace()
+    {
+        CloseExpandedPreview();
+
+        foreach (var captureWindow in _captureWindows.Values.ToList())
+        {
+            try
+            {
+                captureWindow.Close();
+            }
+            catch
+            {
+            }
+        }
+
+        foreach (var captureWindow in _streamDefinitionCaptureWindows.Values.ToList())
+        {
+            try
+            {
+                captureWindow.Close();
+            }
+            catch
+            {
+            }
+        }
+
+        _captureWindows.Clear();
+        _streamDefinitionCaptureWindows.Clear();
+        _previewCards.Clear();
+        _previewImages.Clear();
+        _streamDefinitionPreviewCards.Clear();
+        _streamDefinitionPreviewImages.Clear();
+        _streamDefinitionSectionKeys.Clear();
+        _streamPreviewGroups.Clear();
+        _streamPreviewPanels.Clear();
+        _streamPreviewPlaceholders.Clear();
+        StreamPreviewSectionsHost.Children.Clear();
+    }
+
+    private void RestartApplicationAfterDataReplace()
+    {
+        var executablePath = Path.Combine(AppContext.BaseDirectory, "SuperPainel.exe");
+        if (File.Exists(executablePath))
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = executablePath,
+                WorkingDirectory = AppContext.BaseDirectory,
+                UseShellExecute = true
+            });
+        }
+
+        ExitApplication();
+    }
+
+    private void StartBackupRestoreAndRestart(string sourceZipPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceZipPath) || !File.Exists(sourceZipPath))
+        {
+            throw new FileNotFoundException("Nao foi possivel localizar o backup informado.", sourceZipPath);
+        }
+
+        var appDataRoot = AppDataPaths.Root;
+        var executablePath = Path.Combine(AppContext.BaseDirectory, "SuperPainel.exe");
+        var processId = Process.GetCurrentProcess().Id;
+        var tempRoot = Path.Combine(Path.GetTempPath(), "super-restore");
+        Directory.CreateDirectory(tempRoot);
+        var scriptPath = Path.Combine(tempRoot, string.Format("restore-backup-{0:yyyyMMdd-HHmmssfff}.ps1", DateTime.Now));
+        var logPath = Path.Combine(tempRoot, "restore-backup.log");
+
+        string EscapePowerShell(string value) => value.Replace("'", "''");
+
+        var scriptContent = string.Join(Environment.NewLine, new[]
+        {
+            "$ErrorActionPreference = 'Stop'",
+            string.Format("$sourceZip = '{0}'", EscapePowerShell(sourceZipPath)),
+            string.Format("$exePath = '{0}'", EscapePowerShell(executablePath)),
+            string.Format("$logPath = '{0}'", EscapePowerShell(logPath)),
+            string.Format("$processId = {0}", processId),
+            "function Write-RestoreLog([string]$message) {",
+            "  $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'",
+            "  Add-Content -Path $logPath -Value (\"[$timestamp] \" + $message)",
+            "}",
+            "Write-RestoreLog 'Aguardando encerramento do SuperPainel atual.'",
+            "while (Get-Process -Id $processId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }",
+            "Write-RestoreLog 'Encerrando subprocessos remanescentes do CEF.'",
+            "try {",
+            "  Get-CimInstance Win32_Process -Filter \"Name = 'SuperPainel.exe'\" |",
+            "    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith((Split-Path -Parent $exePath), [System.StringComparison]::OrdinalIgnoreCase) } |",
+            "    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            "} catch { Write-RestoreLog ('Falha ao encerrar subprocessos: ' + $_.Exception.Message) }",
+            "Write-RestoreLog 'Reiniciando SuperPainel em modo de restauracao.'",
+            "Start-Process -FilePath $exePath -ArgumentList @('--restore-backup', $sourceZip) -WorkingDirectory (Split-Path -Parent $exePath)",
+            "Write-RestoreLog 'Reinicio solicitado com sucesso.'"
+        });
+
+        File.WriteAllText(scriptPath, scriptContent);
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = string.Format("-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{0}\"", scriptPath),
+            WorkingDirectory = tempRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+
+        ExitApplication();
     }
 
     private async void OnOpenTvProfileSetupClick(object sender, RoutedEventArgs e)

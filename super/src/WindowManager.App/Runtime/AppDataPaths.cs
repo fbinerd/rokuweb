@@ -18,6 +18,10 @@ public static class AppDataPaths
 
     public static string CrashesRoot => Path.Combine(Root, "crashes");
 
+    public static string BackupsRoot => Path.Combine(Root, "backups");
+
+    public static string PendingUpdateRecoveryPath => Path.Combine(Root, "pending-update-recovery.json");
+
     public static string AppLogPath => Path.Combine(LogsRoot, "super.log");
 
     public static string WatchdogRoot => Path.Combine(Root, "watchdog");

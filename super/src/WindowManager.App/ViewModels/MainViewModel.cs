@@ -4,8 +4,11 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Serialization.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -37,6 +40,9 @@ public sealed class MainViewModel : ViewModelBase
     private readonly AppUpdatePreferenceStore _appUpdatePreferenceStore;
     private readonly AppSelfUpdateService _appSelfUpdateService;
     private readonly AppDataMaintenanceService _appDataMaintenanceService;
+    private readonly AppInstallationSnapshotService _appInstallationSnapshotService;
+    private readonly UpdateRollbackStore _updateRollbackStore;
+    private readonly UpdateRecoveryService _updateRecoveryService;
     private readonly SemaphoreSlim _profileLoadSemaphore = new SemaphoreSlim(1, 1);
 
     private bool _isApplyingProfile;
@@ -85,7 +91,10 @@ public sealed class MainViewModel : ViewModelBase
         AppUpdateManifestService appUpdateManifestService,
         AppUpdatePreferenceStore appUpdatePreferenceStore,
         AppSelfUpdateService appSelfUpdateService,
-        AppDataMaintenanceService appDataMaintenanceService)
+        AppDataMaintenanceService appDataMaintenanceService,
+        AppInstallationSnapshotService appInstallationSnapshotService,
+        UpdateRollbackStore updateRollbackStore,
+        UpdateRecoveryService updateRecoveryService)
     {
         _browserInstanceHost = browserInstanceHost;
         _displayDiscoveryService = displayDiscoveryService;
@@ -100,6 +109,9 @@ public sealed class MainViewModel : ViewModelBase
         _appUpdatePreferenceStore = appUpdatePreferenceStore;
         _appSelfUpdateService = appSelfUpdateService;
         _appDataMaintenanceService = appDataMaintenanceService;
+        _appInstallationSnapshotService = appInstallationSnapshotService;
+        _updateRollbackStore = updateRollbackStore;
+        _updateRecoveryService = updateRecoveryService;
 
         ResolutionModes = Enum.GetValues(typeof(RenderResolutionMode)).Cast<RenderResolutionMode>().ToArray();
         WebRtcBindModes = Enum.GetValues(typeof(WebRtcBindMode)).Cast<WebRtcBindMode>().ToArray();
@@ -124,6 +136,7 @@ public sealed class MainViewModel : ViewModelBase
         SearchUpdatesCommand = new AsyncRelayCommand(SearchUpdatesAsync, CanSearchUpdates);
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, CanInstallUpdate);
         MigrateToRemoteBuildCommand = new AsyncRelayCommand(MigrateToRemoteBuildAsync, CanMigrateToRemoteBuild);
+        RollbackToPreviousVersionCommand = new AsyncRelayCommand(RollbackToPreviousVersionAsync);
         UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
         PowerOnConnectedRokusCommand = new AsyncRelayCommand(PowerOnConnectedRokusAsync);
@@ -186,6 +199,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand SearchUpdatesCommand { get; }
     public AsyncRelayCommand InstallUpdateCommand { get; }
     public AsyncRelayCommand MigrateToRemoteBuildCommand { get; }
+    public AsyncRelayCommand RollbackToPreviousVersionCommand { get; }
     public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
     public AsyncRelayCommand PowerOnConnectedRokusCommand { get; }
@@ -616,8 +630,7 @@ public sealed class MainViewModel : ViewModelBase
         LoadProfileCommand.RaiseCanExecuteChanged();
         try
         {
-            await LoadPreferencesAsync();
-            await ReloadPersistedStateAsync();
+            await InitializePersistedStateWithRecoveryAsync();
             await Task.Delay(350);
             NormalizeWindowProfilesInMemory();
             RefreshWindowProfilesCollection();
@@ -650,11 +663,68 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task ImportApplicationDataAsync(string sourceZipPath)
     {
+        if (string.IsNullOrWhiteSpace(sourceZipPath) || !File.Exists(sourceZipPath))
+        {
+            throw new FileNotFoundException("Nao foi possivel localizar o backup informado.", sourceZipPath);
+        }
+
+        var imported = LoadProfilesFromBackup(sourceZipPath);
+        if (imported.Profiles.Count == 0)
+        {
+            throw new InvalidOperationException("O backup nao contem nenhum perfil valido para restauracao.");
+        }
+
         await ResetRuntimeStateAsync();
-        await _appDataMaintenanceService.ImportAsync(sourceZipPath, CancellationToken.None);
+        await _appDataMaintenanceService.ResetAsync(CancellationToken.None);
+
+        foreach (var profile in imported.Profiles)
+        {
+            AppProfileMigrator.Migrate(profile);
+            await _profileStore.SaveAsync(profile, CancellationToken.None);
+        }
+
+        if (!string.IsNullOrWhiteSpace(imported.DefaultProfileName))
+        {
+            await _profileStore.SetDefaultProfileNameAsync(imported.DefaultProfileName, CancellationToken.None);
+        }
+        else
+        {
+            await _profileStore.ClearDefaultProfileNameAsync(CancellationToken.None);
+        }
+
+        if (!string.IsNullOrWhiteSpace(imported.StartupProfileName))
+        {
+            await _profileStore.SetLastProfileNameAsync(imported.StartupProfileName, CancellationToken.None);
+            ProfileName = imported.StartupProfileName;
+        }
+        else
+        {
+            ProfileName = imported.Profiles[0].Name;
+        }
+
         await LoadPreferencesAsync();
-        await ReloadPersistedStateAsync();
-        StatusMessage = string.Format("Backup restaurado de '{0}'.", sourceZipPath);
+        await ReloadPersistedStateAsync(refreshTargets: false);
+
+        try
+        {
+            await RefreshTargetsAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Backup", string.Format("Falha ao atualizar destinos apos restaurar backup: {0}", ex));
+            StatusMessage = string.Format(
+                "Backup restaurado de '{0}'. A base foi carregada, mas a atualizacao de destinos falhou: {1}",
+                sourceZipPath,
+                ex.Message);
+            return;
+        }
+
+        StatusMessage = string.Format(
+            "Backup restaurado de '{0}'. Perfil carregado: {1}. TVs: {2}. Streams: {3}.",
+            sourceZipPath,
+            ProfileName,
+            TvProfiles.Count,
+            WindowProfiles.Count);
     }
 
     public async Task ResetApplicationDataAsync()
@@ -662,8 +732,20 @@ public sealed class MainViewModel : ViewModelBase
         await ResetRuntimeStateAsync();
         await _appDataMaintenanceService.ResetAsync(CancellationToken.None);
         await LoadPreferencesAsync();
-        await ReloadPersistedStateAsync();
-        StatusMessage = "Base local do aplicativo resetada com sucesso.";
+        await ReloadPersistedStateAsync(refreshTargets: false);
+
+        try
+        {
+            await RefreshTargetsAsync();
+            StatusMessage = "Base local do aplicativo resetada com sucesso.";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Reset", string.Format("Falha ao atualizar destinos apos reset: {0}", ex));
+            StatusMessage = string.Format(
+                "Base local do aplicativo resetada com sucesso. A atualizacao de destinos falhou: {0}",
+                ex.Message);
+        }
     }
 
     private async Task LoadPreferencesAsync()
@@ -674,7 +756,7 @@ public sealed class MainViewModel : ViewModelBase
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
 
-    private async Task ReloadPersistedStateAsync()
+    private async Task ReloadPersistedStateAsync(bool refreshTargets = true)
     {
         await RefreshProfileNamesAsync();
 
@@ -682,7 +764,11 @@ public sealed class MainViewModel : ViewModelBase
         ProfileName = startupProfileName;
         await LoadProfileAsync();
         SelectedSessionProfileName = ProfileName;
-        await RefreshTargetsAsync();
+        if (refreshTargets)
+        {
+            await RefreshTargetsAsync();
+        }
+
         NormalizeWindowProfilesInMemory();
     }
 
@@ -1085,6 +1171,47 @@ public sealed class MainViewModel : ViewModelBase
         SelectedWindowProfile = WindowProfiles.FirstOrDefault();
         await SaveProfileInternalAsync(updateStatus: false);
         StatusMessage = string.Format("Stream '{0}' removido.", removedName);
+    }
+
+    private async Task RollbackToPreviousVersionAsync()
+    {
+        UpdateStatusMessage = "Preparando rollback para a versao anterior...";
+        var latestRollback = await _updateRollbackStore.GetLatestAsync(CancellationToken.None);
+        if (latestRollback is null)
+        {
+            UpdateStatusMessage = "Nenhum rollback disponivel nesta maquina.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(latestRollback.AppSnapshotZipPath) || !File.Exists(latestRollback.AppSnapshotZipPath))
+        {
+            UpdateStatusMessage = "O snapshot da versao anterior nao foi encontrado para rollback.";
+            await _updateRollbackStore.RemoveAsync(latestRollback, CancellationToken.None);
+            return;
+        }
+
+        var rollbackResult = await _appSelfUpdateService.PrepareLocalPackageAsync(
+            latestRollback.AppSnapshotZipPath,
+            latestRollback.BaseBackupZipPath,
+            CancellationToken.None);
+
+        if (!rollbackResult.Succeeded)
+        {
+            UpdateStatusMessage = rollbackResult.Message;
+            AppLog.Write("Updater", rollbackResult.Message);
+            return;
+        }
+
+        await _updateRollbackStore.RemoveAsync(latestRollback, CancellationToken.None);
+        UpdateStatusMessage = string.Format(
+            "Rollback preparado para a release {0}. Reiniciando aplicativo...",
+            latestRollback.PreviousReleaseId);
+        AppLog.Write("Updater", UpdateStatusMessage);
+
+        Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            Application.Current.Shutdown();
+        }));
     }
 
     public async Task<BrowserProfileMutationResult> CreateBrowserProfileAsync(string profileName, Guid? editingStreamId)
@@ -1578,6 +1705,42 @@ public sealed class MainViewModel : ViewModelBase
         UpdateStatusMessage = string.Format("{0}: baixando pacote {1}...", actionLabel, result.RecommendedPackageUrl);
         AppLog.Write("Updater", UpdateStatusMessage);
 
+        string? automaticBackupPath = null;
+        string? appSnapshotPath = null;
+        try
+        {
+            automaticBackupPath = _updateRecoveryService.BuildAutomaticBackupPath(result.LatestReleaseId);
+            await _appDataMaintenanceService.ExportAsync(automaticBackupPath, CancellationToken.None);
+            appSnapshotPath = _appInstallationSnapshotService.BuildSnapshotPath(BuildVersionInfo.ReleaseId);
+            await _appInstallationSnapshotService.ExportCurrentInstallationAsync(appSnapshotPath, CancellationToken.None);
+            await _updateRecoveryService.SavePendingAsync(
+                new PendingUpdateRecoveryRecord
+                {
+                    BackupZipPath = automaticBackupPath,
+                    ReleaseId = result.LatestReleaseId,
+                    CreatedAtUtc = DateTime.UtcNow.ToString("O")
+                },
+                CancellationToken.None);
+            await _updateRollbackStore.AddAsync(
+                new UpdateRollbackRecord
+                {
+                    PreviousReleaseId = BuildVersionInfo.ReleaseId,
+                    PreviousVersion = BuildVersionInfo.Version,
+                    BaseBackupZipPath = automaticBackupPath,
+                    AppSnapshotZipPath = appSnapshotPath,
+                    CreatedAtUtc = DateTime.UtcNow.ToString("O")
+                },
+                CancellationToken.None);
+            AppLog.Write("Updater", string.Format("Backup automatico criado antes do update: {0}", automaticBackupPath));
+            AppLog.Write("Updater", string.Format("Snapshot da aplicacao criado antes do update: {0}", appSnapshotPath));
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusMessage = string.Format("{0}: falha ao criar backup automatico antes do update: {1}", actionLabel, ex.Message);
+            AppLog.Write("Updater", UpdateStatusMessage);
+            return;
+        }
+
         var applyResult = await _appSelfUpdateService.DownloadAndPrepareAsync(result, CancellationToken.None);
         if (!applyResult.Succeeded)
         {
@@ -1593,6 +1756,72 @@ public sealed class MainViewModel : ViewModelBase
         {
             Application.Current.Shutdown();
         }));
+    }
+
+    private async Task InitializePersistedStateWithRecoveryAsync()
+    {
+        await LoadPreferencesAsync();
+
+        try
+        {
+            await ReloadPersistedStateAsync(refreshTargets: false);
+            await TryRefreshTargetsSilentlyAsync();
+            await _updateRecoveryService.ClearPendingAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Updater", string.Format("Falha ao carregar base atual: {0}", ex.Message));
+            var recovered = await TryRestorePendingBackupAsync(ex);
+            if (!recovered)
+            {
+                throw;
+            }
+        }
+    }
+
+    private async Task<bool> TryRestorePendingBackupAsync(Exception startupException)
+    {
+        var pending = await _updateRecoveryService.LoadPendingAsync(CancellationToken.None);
+        var backupZipPath = pending?.BackupZipPath;
+        if (string.IsNullOrWhiteSpace(backupZipPath) || !File.Exists(backupZipPath))
+        {
+            var latestRollback = await _updateRollbackStore.GetLatestAsync(CancellationToken.None);
+            backupZipPath = latestRollback?.BaseBackupZipPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(backupZipPath) || !File.Exists(backupZipPath))
+        {
+            return false;
+        }
+
+        AppLog.Write("Updater", string.Format("Tentando restaurar backup automatico apos falha de startup: {0}", backupZipPath));
+
+        await ResetRuntimeStateAsync();
+        await _appDataMaintenanceService.ImportAsync(backupZipPath, CancellationToken.None);
+        await LoadPreferencesAsync();
+        await ReloadPersistedStateAsync(refreshTargets: false);
+        await TryRefreshTargetsSilentlyAsync();
+        await _updateRecoveryService.ClearPendingAsync(CancellationToken.None);
+
+        StatusMessage = string.Format(
+            "A base foi restaurada automaticamente do backup '{0}' apos falha na atualizacao: {1}",
+            backupZipPath,
+            startupException.Message);
+
+        AppLog.Write("Updater", "Backup automatico restaurado com sucesso apos falha de startup.");
+        return true;
+    }
+
+    private async Task TryRefreshTargetsSilentlyAsync()
+    {
+        try
+        {
+            await RefreshTargetsAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Startup", string.Format("Falha ao atualizar destinos apos carregar a base: {0}", ex));
+        }
     }
 
     private async Task PersistUpdatePreferencesAsync()
@@ -1660,7 +1889,8 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task RefreshTargetsAsync()
     {
-        var targets = await _displayDiscoveryService.DiscoverAsync(CancellationToken.None);
+        var targets = (await _displayDiscoveryService.DiscoverAsync(CancellationToken.None))?.ToList()
+            ?? new List<DisplayTarget>();
         await _displayIdentityResolverService.ReconcileKnownDisplaysAsync(targets, CancellationToken.None);
 
         Targets.Clear();
@@ -2203,8 +2433,7 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
-        var browserProfilesMigrated = EnsureBrowserProfileCompatibility(profile);
-        if (browserProfilesMigrated)
+        if (await TryImportLegacyActiveSessionsAsync(profile))
         {
             await _profileStore.SaveAsync(profile, CancellationToken.None);
         }
@@ -2349,7 +2578,7 @@ public sealed class MainViewModel : ViewModelBase
                     StartedAtUtc = record.StartedAtUtc
                 };
 
-                foreach (var bindingRecord in record.BoundDisplays)
+                foreach (var bindingRecord in record.BoundDisplays ?? new List<ActiveSessionDisplayBindingRecord>())
                 {
                     var target = Targets.FirstOrDefault(x =>
                         x.Id == bindingRecord.DisplayTargetId ||
@@ -2372,7 +2601,7 @@ public sealed class MainViewModel : ViewModelBase
 
                 ActiveSessions.Add(session);
 
-                foreach (var windowRecord in record.Windows)
+                foreach (var windowRecord in record.Windows ?? new List<ActiveSessionWindowRecord>())
                 {
                     Uri? initialUri = null;
                     if (!string.IsNullOrWhiteSpace(windowRecord.InitialUrl))
@@ -2807,7 +3036,7 @@ public sealed class MainViewModel : ViewModelBase
     {
         TvProfiles.Clear();
 
-        foreach (var tvProfile in profile.TvProfiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        foreach (var tvProfile in (profile.TvProfiles ?? new List<TvProfileDefinition>()).OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
             var viewModel = new TvProfileViewModel
             {
@@ -2815,7 +3044,7 @@ public sealed class MainViewModel : ViewModelBase
                 Name = tvProfile.Name
             };
 
-            foreach (var target in tvProfile.Targets)
+            foreach (var target in tvProfile.Targets ?? new List<TvProfileTargetDefinition>())
             {
                 viewModel.Targets.Add(new TvProfileTargetViewModel
                 {
@@ -2839,128 +3068,66 @@ public sealed class MainViewModel : ViewModelBase
         SelectedTvProfile = TvProfiles.FirstOrDefault();
     }
 
-    private bool EnsureBrowserProfileCompatibility(AppProfile profile)
+    private static ImportedBackupProfiles LoadProfilesFromBackup(string sourceZipPath)
     {
-        var changed = false;
-        var knownProfileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var serializer = new DataContractJsonSerializer(typeof(AppProfile));
+        var result = new ImportedBackupProfiles();
 
-        foreach (var browserProfile in profile.BrowserProfiles.ToList())
+        using var archive = ZipFile.OpenRead(sourceZipPath);
+
+        foreach (var entry in archive.Entries
+                     .Where(x => x.FullName.StartsWith("Profiles/", StringComparison.OrdinalIgnoreCase) &&
+                                 x.FullName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(x => x.FullName, StringComparer.OrdinalIgnoreCase))
         {
-            var normalizedName = BrowserProfileStorage.NormalizeName(browserProfile.Name);
-            if (string.IsNullOrWhiteSpace(normalizedName))
+            using var stream = entry.Open();
+            var profile = serializer.ReadObject(stream) as AppProfile;
+            if (profile is null)
             {
-                profile.BrowserProfiles.Remove(browserProfile);
-                changed = true;
                 continue;
             }
 
-            if (!string.Equals(browserProfile.Name, normalizedName, StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(profile.Name))
             {
-                browserProfile.Name = normalizedName;
-                changed = true;
+                profile.Name = Path.GetFileNameWithoutExtension(entry.FullName);
             }
 
-            if (!knownProfileNames.Add(normalizedName))
-            {
-                profile.BrowserProfiles.Remove(browserProfile);
-                changed = true;
-            }
+            result.Profiles.Add(profile);
         }
 
-        foreach (var windowProfile in profile.WindowProfiles)
+        result.StartupProfileName = ReadTextEntry(archive, "last-profile.txt");
+        result.DefaultProfileName = ReadTextEntry(archive, "default-profile.txt");
+
+        if (string.IsNullOrWhiteSpace(result.StartupProfileName) && result.Profiles.Count > 0)
         {
-            var normalizedAssignedName = BrowserProfileStorage.NormalizeName(windowProfile.BrowserProfileName);
-            if (string.IsNullOrWhiteSpace(normalizedAssignedName))
-            {
-                normalizedAssignedName = GenerateUniqueBrowserProfileName(windowProfile.Name, knownProfileNames);
-                windowProfile.BrowserProfileName = normalizedAssignedName;
-                changed = true;
-            }
-            else if (!string.Equals(windowProfile.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
-            {
-                windowProfile.BrowserProfileName = normalizedAssignedName;
-                changed = true;
-            }
-
-            if (knownProfileNames.Add(normalizedAssignedName))
-            {
-                profile.BrowserProfiles.Add(new BrowserProfileDefinition
-                {
-                    Name = normalizedAssignedName
-                });
-                changed = true;
-            }
-
-            foreach (var persistedWindow in profile.Windows.Where(x =>
-                         x.ActiveSessionId == windowProfile.Id ||
-                         string.Equals(x.ActiveSessionName, windowProfile.Name, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(x.ProfileName, windowProfile.Name, StringComparison.OrdinalIgnoreCase)))
-            {
-                if (!string.Equals(persistedWindow.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
-                {
-                    persistedWindow.BrowserProfileName = normalizedAssignedName;
-                    changed = true;
-                }
-            }
-
-            foreach (var activeSessionWindow in profile.ActiveSessions
-                         .Where(x => x.Id == windowProfile.Id || string.Equals(x.ProfileName, windowProfile.Name, StringComparison.OrdinalIgnoreCase) || string.Equals(x.Name, windowProfile.Name, StringComparison.OrdinalIgnoreCase))
-                         .SelectMany(x => x.Windows))
-            {
-                if (!string.Equals(activeSessionWindow.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
-                {
-                    activeSessionWindow.BrowserProfileName = normalizedAssignedName;
-                    changed = true;
-                }
-            }
+            result.StartupProfileName = result.Profiles[0].Name;
         }
 
-        foreach (var browserProfileName in knownProfileNames)
-        {
-            BrowserProfileStorage.EnsureProfileDirectory(browserProfileName);
-        }
-
-        profile.BrowserProfiles = profile.BrowserProfiles
-            .Select(x => new BrowserProfileDefinition
-            {
-                Name = BrowserProfileStorage.NormalizeName(x.Name)
-            })
-            .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-            .Distinct(new BrowserProfileDefinitionNameComparer())
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return changed;
+        return result;
     }
 
-    private static string GenerateUniqueBrowserProfileName(string? streamName, ISet<string> knownNames)
+    private static string ReadTextEntry(ZipArchive archive, string entryName)
     {
-        var baseName = BrowserProfileStorage.NormalizeName(streamName);
-        if (string.IsNullOrWhiteSpace(baseName))
+        var entry = archive.Entries.FirstOrDefault(x => string.Equals(x.FullName, entryName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
         {
-            baseName = "Perfil navegador";
+            return string.Empty;
         }
 
-        var candidate = baseName;
-        var suffix = 2;
-        while (knownNames.Contains(candidate))
-        {
-            candidate = string.Format("{0} {1}", baseName, suffix);
-            suffix++;
-        }
-
-        return candidate;
+        using var stream = entry.Open();
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Trim();
     }
 
     private void RestoreBrowserProfiles(AppProfile profile)
     {
         BrowserProfiles.Clear();
 
-        var profileNames = profile.BrowserProfiles
+        var profileNames = (profile.BrowserProfiles ?? new List<BrowserProfileDefinition>())
             .Select(x => x.Name)
-            .Concat(profile.WindowProfiles.Select(x => x.BrowserProfileName))
-            .Concat(profile.Windows.Select(x => x.BrowserProfileName))
-            .Concat(profile.ActiveSessions.SelectMany(x => x.Windows).Select(x => x.BrowserProfileName))
+            .Concat((profile.WindowProfiles ?? new List<WindowGroupProfile>()).Select(x => x.BrowserProfileName))
+            .Concat((profile.Windows ?? new List<WindowSessionProfile>()).Select(x => x.BrowserProfileName))
+            .Concat((profile.ActiveSessions ?? new List<ActiveSessionRecord>()).SelectMany(x => x.Windows ?? new List<ActiveSessionWindowRecord>()).Select(x => x.BrowserProfileName))
             .Select(BrowserProfileStorage.NormalizeName)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2975,13 +3142,49 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private async Task<bool> TryImportLegacyActiveSessionsAsync(AppProfile profile)
+    {
+        if ((profile.ActiveSessions?.Count ?? 0) > 0)
+        {
+            return false;
+        }
+
+        var legacyRecords = await _activeSessionStore.LoadAsync(CancellationToken.None);
+        if (legacyRecords.Count == 0)
+        {
+            return false;
+        }
+
+        var windowProfiles = profile.WindowProfiles ?? new List<WindowGroupProfile>();
+        var windowProfileIds = new HashSet<Guid>(windowProfiles.Select(x => x.Id));
+        var windowProfileNames = new HashSet<string>(
+            windowProfiles.Select(x => x.Name).Where(x => !string.IsNullOrWhiteSpace(x)),
+            StringComparer.OrdinalIgnoreCase);
+
+        var matchingRecords = legacyRecords
+            .Where(x =>
+                windowProfileIds.Contains(x.Id) ||
+                windowProfileNames.Contains(x.Name) ||
+                windowProfileNames.Contains(x.ProfileName))
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (matchingRecords.Count == 0)
+        {
+            return false;
+        }
+
+        profile.ActiveSessions = matchingRecords;
+        return AppProfileMigrator.Migrate(profile);
+    }
+
     private void RestoreWindowProfiles(AppProfile profile)
     {
         WindowProfiles.Clear();
         var restoredIds = new HashSet<Guid>();
         var restoredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var windowProfile in profile.WindowProfiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        foreach (var windowProfile in (profile.WindowProfiles ?? new List<WindowGroupProfile>()).OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
             var normalizedName = windowProfile.Name?.Trim() ?? string.Empty;
             if (windowProfile.Id != Guid.Empty)
@@ -3006,7 +3209,7 @@ public sealed class MainViewModel : ViewModelBase
                 BrowserProfileName = windowProfile.BrowserProfileName ?? string.Empty
             };
 
-            foreach (var window in windowProfile.Windows)
+            foreach (var window in windowProfile.Windows ?? new List<WindowLinkProfile>())
             {
                 viewModel.Windows.Add(new WindowProfileItemViewModel
                 {
@@ -4302,6 +4505,15 @@ public sealed class BrowserProfileViewModel : ViewModelBase
         get => _name;
         set => SetProperty(ref _name, value);
     }
+}
+
+internal sealed class ImportedBackupProfiles
+{
+    public List<AppProfile> Profiles { get; } = new List<AppProfile>();
+
+    public string StartupProfileName { get; set; } = string.Empty;
+
+    public string DefaultProfileName { get; set; } = string.Empty;
 }
 
 public sealed class WindowProfileItemViewModel : ViewModelBase

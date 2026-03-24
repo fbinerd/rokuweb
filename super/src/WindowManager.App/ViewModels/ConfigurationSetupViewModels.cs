@@ -218,9 +218,10 @@ public sealed class TvProfileSetupViewModel : ViewModelBase
     {
         var selectedAvailableId = SelectedAvailableTarget?.Id;
         var selectedAssociationId = SelectedAssociationTarget?.Id;
+        var safeTargets = targets ?? Enumerable.Empty<DisplayTarget>();
 
         AvailableTargets.Clear();
-        foreach (var target in targets.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        foreach (var target in safeTargets.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
             AvailableTargets.Add(target);
         }
