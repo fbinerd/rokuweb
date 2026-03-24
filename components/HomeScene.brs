@@ -383,6 +383,10 @@ end sub
 sub applyBridgeResponse()
     responseBody = m.bridgeRequestTask.responseBody
     responseCode = m.bridgeRequestTask.responseCode
+    previousFullscreenWindowId = ""
+    if m.isFullscreen and m.windowEntries.Count() > 0 and m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
+        previousFullscreenWindowId = getString(m.windowEntries[m.selectedIndex].id, "")
+    end if
 
     if responseCode <> 200 or responseBody = invalid or responseBody = ""
         if m.isAutoConnecting
@@ -476,6 +480,22 @@ sub applyBridgeResponse()
         showFullscreen()
         return
     end if
+
+    if m.isFullscreen
+        if autoFullscreenIndex >= 0
+            nextFullscreenWindowId = getString(m.windowEntries[autoFullscreenIndex].id, "")
+            if nextFullscreenWindowId <> "" and nextFullscreenWindowId <> previousFullscreenWindowId
+                m.selectedIndex = autoFullscreenIndex
+                showFullscreen()
+                return
+            end if
+        end if
+
+        if previousFullscreenWindowId <> ""
+            syncFullscreenStreamState(previousFullscreenWindowId)
+        end if
+    end if
+
     m.top.setFocus(true)
 end sub
 
@@ -1214,6 +1234,49 @@ end sub
 sub onFullscreenStreamTimerFire()
     loadWindows(true)
     refreshFullscreenPreview()
+end sub
+
+sub syncFullscreenStreamState(windowId as string)
+    if not m.isFullscreen or windowId = ""
+        return
+    end if
+
+    currentEntry = invalid
+    for each entry in m.windowEntries
+        if getString(entry.id, "") = windowId
+            currentEntry = entry
+            exit for
+        end if
+    end for
+
+    if currentEntry = invalid
+        return
+    end if
+
+    nextStreamUrl = getString(currentEntry.streamUrl, "")
+    nextUsesStream = Instr(1, LCase(nextStreamUrl), ".m3u8") > 0
+    if not nextUsesStream or m.fullscreenVideo = invalid
+        return
+    end if
+
+    if nextStreamUrl = m.videoStreamUrl
+        return
+    end if
+
+    m.videoUsesStream = true
+    m.videoStreamUrl = nextStreamUrl
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(m.videoStreamUrl)
+    content.streamFormat = "hls"
+    content.title = getString(currentEntry.title, "Painel")
+    m.fullscreenVideo.content = content
+    m.fullscreenVideo.control = "stop"
+    m.fullscreenVideo.control = "play"
+    m.statusLabel.text = "Recarregando stream do painel..."
+    ? "[HLS] reload => "; content.url
 end sub
 
 sub onClickControlTaskCompleted()

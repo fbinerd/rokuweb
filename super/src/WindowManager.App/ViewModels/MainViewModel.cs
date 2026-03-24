@@ -3048,6 +3048,20 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public Task RequestStreamReloadAsync(Guid windowId)
+    {
+        var window = Windows.FirstOrDefault(x => x.Id == windowId);
+        if (window is null)
+        {
+            StatusMessage = "A janela nao esta ativa para recarregar o stream.";
+            return Task.CompletedTask;
+        }
+
+        _webRtcPublisherService.RequestStreamReload(windowId);
+        StatusMessage = string.Format("Recarregamento do stream solicitado para '{0}'.", window.Title);
+        return Task.CompletedTask;
+    }
+
     private async Task EnsureStreamDisplayConnectedAsync(WindowProfileViewModel stream, bool forceNow)
     {
         if (!stream.KeepDisplayConnected)

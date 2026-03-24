@@ -313,22 +313,34 @@ public partial class MainWindow : Window
         };
         exclusiveToggle.Click += OnStreamWindowPrimaryExclusiveToggleClick;
 
+        var reloadButton = new Button
+        {
+            Content = "Recarregar",
+            Margin = new Thickness(0, 0, 0, 0),
+            Padding = new Thickness(8, 2, 8, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+            Tag = session.Id,
+            MinWidth = 84
+        };
+        reloadButton.Click += OnReloadStreamButtonClick;
+
         var headerTopRow = new Grid();
-        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        Grid.SetColumn(headerTitle, 0);
-        Grid.SetColumn(streamToggle, 1);
-        Grid.SetColumn(exclusiveToggle, 2);
-        headerTopRow.Children.Add(headerTitle);
+        Grid.SetColumn(streamToggle, 0);
+        Grid.SetColumn(exclusiveToggle, 1);
+        Grid.SetColumn(reloadButton, 2);
         headerTopRow.Children.Add(streamToggle);
         headerTopRow.Children.Add(exclusiveToggle);
+        headerTopRow.Children.Add(reloadButton);
 
         var header = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 8)
         };
+        header.Children.Add(headerTitle);
         header.Children.Add(headerTopRow);
         header.Children.Add(headerUrl);
         header.Children.Add(headerState);
@@ -1358,6 +1370,24 @@ public partial class MainWindow : Window
         if (stream is not null)
         {
             checkBox.IsChecked = stream.KeepDisplayConnected;
+        }
+    }
+
+    private async void OnReloadStreamButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not Guid windowId)
+        {
+            return;
+        }
+
+        button.IsEnabled = false;
+        try
+        {
+            await _viewModel.RequestStreamReloadAsync(windowId);
+        }
+        finally
+        {
+            button.IsEnabled = true;
         }
     }
 

@@ -36,6 +36,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, int> _streamReloadVersions = new ConcurrentDictionary<Guid, int>();
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
@@ -86,6 +87,12 @@ public sealed class LocalWebRtcPublisherService
     {
         RemoveExistingRoute(session.Id);
         return Task.CompletedTask;
+    }
+
+    public void RequestStreamReload(Guid windowId)
+    {
+        var version = _streamReloadVersions.AddOrUpdate(windowId, 1, (_, current) => current + 1);
+        AppLog.Write("RokuControl", string.Format("Solicitado recarregamento do stream na TV para janela {0}. versao={1}", windowId.ToString("N"), version));
     }
 
     public Task<int> ForceUpdateConnectedDisplaysAsync(CancellationToken cancellationToken)
@@ -1273,8 +1280,11 @@ public sealed class LocalWebRtcPublisherService
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
+        var streamReloadVersion = _streamReloadVersions.TryGetValue(window.Id, out var reloadVersion)
+            ? reloadVersion
+            : 0;
         var unifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
-            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
             : string.Empty;
 
         return new BridgeWindowSnapshot
