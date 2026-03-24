@@ -550,21 +550,29 @@ public partial class MainWindow : Window
         var exclusiveToggle = new CheckBox
         {
             Content = "So esta janela",
-            Margin = new Thickness(0, 0, 0, 6),
+            Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
             IsChecked = item.IsPrimaryExclusive,
             Tag = item.Id
         };
         exclusiveToggle.Click += OnStreamWindowPrimaryExclusiveToggleClick;
 
+        var headerTopRow = new Grid();
+        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerTopRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        Grid.SetColumn(streamToggle, 0);
+        Grid.SetColumn(exclusiveToggle, 1);
+        headerTopRow.Children.Add(streamToggle);
+        headerTopRow.Children.Add(exclusiveToggle);
+
         var header = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 8),
             Tag = item.Id
         };
-        header.Children.Add(streamToggle);
-        header.Children.Add(exclusiveToggle);
         header.Children.Add(headerTitle);
+        header.Children.Add(headerTopRow);
         header.Children.Add(headerUrl);
         header.Children.Add(headerState);
 
@@ -1469,22 +1477,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (header.Children[0] is CheckBox toggle)
+        if (header.Children[1] is Grid headerTopRow &&
+            headerTopRow.Children.Count >= 2 &&
+            headerTopRow.Children[0] is CheckBox toggle)
         {
             toggle.IsChecked = item.IsEnabled;
         }
 
-        if (header.Children[1] is CheckBox exclusiveToggle)
+        if (header.Children[1] is Grid headerTopRowExclusive &&
+            headerTopRowExclusive.Children.Count >= 2 &&
+            headerTopRowExclusive.Children[1] is CheckBox exclusiveToggle)
         {
             exclusiveToggle.IsChecked = item.IsPrimaryExclusive;
         }
 
-        if (header.Children[2] is TextBlock titleText)
+        if (header.Children[0] is TextBlock titleText)
         {
             titleText.Text = item.Nickname;
         }
 
-        if (header.Children[3] is TextBlock urlText)
+        if (header.Children[2] is TextBlock urlText)
         {
             urlText.Text = item.Url;
         }
