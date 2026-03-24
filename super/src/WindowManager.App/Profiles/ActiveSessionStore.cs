@@ -115,6 +115,9 @@ public sealed class ActiveSessionWindowRecord
 
     [DataMember(Order = 14)]
     public bool IsNavigationBarEnabled { get; set; }
+
+    [DataMember(Order = 15)]
+    public string BrowserProfileName { get; set; } = string.Empty;
 }
 
 [DataContract]

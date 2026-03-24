@@ -47,6 +47,9 @@ public sealed class AppProfile
 
     [DataMember(Order = 13)]
     public List<ActiveSessionRecord> ActiveSessions { get; set; } = new List<ActiveSessionRecord>();
+
+    [DataMember(Order = 14)]
+    public List<BrowserProfileDefinition> BrowserProfiles { get; set; } = new List<BrowserProfileDefinition>();
 }
 
 [DataContract]
@@ -99,6 +102,9 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 16)]
     public bool IsNavigationBarEnabled { get; set; }
+
+    [DataMember(Order = 17)]
+    public string BrowserProfileName { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -258,6 +264,9 @@ public sealed class WindowGroupProfile
 
     [DataMember(Order = 6)]
     public List<WindowLinkProfile> Windows { get; set; } = new List<WindowLinkProfile>();
+
+    [DataMember(Order = 7)]
+    public string BrowserProfileName { get; set; } = string.Empty;
 }
 
 [DataContract]
@@ -280,4 +289,11 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 6)]
     public bool IsNavigationBarEnabled { get; set; }
+}
+
+[DataContract]
+public sealed class BrowserProfileDefinition
+{
+    [DataMember(Order = 1)]
+    public string Name { get; set; } = string.Empty;
 }

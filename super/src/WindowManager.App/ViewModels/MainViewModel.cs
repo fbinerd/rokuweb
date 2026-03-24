@@ -153,6 +153,8 @@ public sealed class MainViewModel : ViewModelBase
 
     public ObservableCollection<TvProfileViewModel> TvProfiles { get; } = new ObservableCollection<TvProfileViewModel>();
 
+    public ObservableCollection<BrowserProfileViewModel> BrowserProfiles { get; } = new ObservableCollection<BrowserProfileViewModel>();
+
     public ObservableCollection<WindowProfileViewModel> WindowProfiles { get; } = new ObservableCollection<WindowProfileViewModel>();
 
     public ObservableCollection<StaticDisplayPanelViewModel> StaticPanels { get; } = new ObservableCollection<StaticDisplayPanelViewModel>();
@@ -910,6 +912,19 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
+        var browserProfileName = BrowserProfileStorage.NormalizeName(setup.SelectedBrowserProfileName);
+        if (string.IsNullOrWhiteSpace(browserProfileName))
+        {
+            StatusMessage = "Selecione um perfil de navegador para o stream.";
+            return;
+        }
+
+        if (!BrowserProfiles.Any(x => string.Equals(x.Name, browserProfileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            StatusMessage = string.Format("O perfil de navegador '{0}' nao existe mais. Crie-o novamente ou selecione outro.", browserProfileName);
+            return;
+        }
+
         var occupiedByAnotherStream = WindowProfiles.FirstOrDefault(x =>
             x.AssignedTvProfileId == setup.SelectedTvProfile.Id &&
             (!setup.EditingProfileId.HasValue || x.Id != setup.EditingProfileId.Value));
@@ -920,6 +935,19 @@ public sealed class MainViewModel : ViewModelBase
                 "O perfil de TV '{0}' ja esta ocupado pelo stream '{1}'.",
                 setup.SelectedTvProfile.Name,
                 occupiedByAnotherStream.Name);
+            return;
+        }
+
+        var browserProfileOccupiedByAnotherStream = WindowProfiles.FirstOrDefault(x =>
+            string.Equals(x.BrowserProfileName, browserProfileName, StringComparison.OrdinalIgnoreCase) &&
+            (!setup.EditingProfileId.HasValue || x.Id != setup.EditingProfileId.Value));
+
+        if (browserProfileOccupiedByAnotherStream is not null)
+        {
+            StatusMessage = string.Format(
+                "O perfil de navegador '{0}' ja esta em uso pelo stream '{1}'.",
+                browserProfileName,
+                browserProfileOccupiedByAnotherStream.Name);
             return;
         }
 
@@ -941,9 +969,11 @@ public sealed class MainViewModel : ViewModelBase
             WindowProfiles.Add(windowProfile);
         }
 
+        var browserProfileChanged = !string.Equals(windowProfile.BrowserProfileName, browserProfileName, StringComparison.OrdinalIgnoreCase);
         windowProfile.Name = name;
         windowProfile.AssignedTvProfileId = setup.SelectedTvProfile.Id;
         windowProfile.AssignedTvProfileName = setup.SelectedTvProfile.Name;
+        windowProfile.BrowserProfileName = browserProfileName;
 
         var desiredWindows = distinctWindows
             .Select(window => new
@@ -1009,6 +1039,10 @@ public sealed class MainViewModel : ViewModelBase
 
         SelectedWindowProfile = windowProfile;
         NormalizeWindowProfilesInMemory();
+        if (browserProfileChanged)
+        {
+            await ResetWindowProfileRuntimeAsync(windowProfile);
+        }
         await SyncWindowProfileRuntimeAsync(windowProfile);
         await SaveProfileInternalAsync(updateStatus: false);
         StatusMessage = string.Format(
@@ -1053,6 +1087,89 @@ public sealed class MainViewModel : ViewModelBase
         StatusMessage = string.Format("Stream '{0}' removido.", removedName);
     }
 
+    public async Task<BrowserProfileMutationResult> CreateBrowserProfileAsync(string profileName, Guid? editingStreamId)
+    {
+        var normalizedName = BrowserProfileStorage.NormalizeName(profileName);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return BrowserProfileMutationResult.Fail("Informe um nome para o perfil de navegador.");
+        }
+
+        if (BrowserProfiles.Any(x => string.Equals(x.Name, normalizedName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return BrowserProfileMutationResult.Fail(string.Format("Ja existe um perfil de navegador chamado '{0}'.", normalizedName));
+        }
+
+        var occupiedByAnotherStream = WindowProfiles.FirstOrDefault(x =>
+            string.Equals(x.BrowserProfileName, normalizedName, StringComparison.OrdinalIgnoreCase) &&
+            (!editingStreamId.HasValue || x.Id != editingStreamId.Value));
+        if (occupiedByAnotherStream is not null)
+        {
+            return BrowserProfileMutationResult.Fail(string.Format(
+                "O perfil de navegador '{0}' ja esta vinculado ao stream '{1}'.",
+                normalizedName,
+                occupiedByAnotherStream.Name));
+        }
+
+        BrowserProfileStorage.EnsureProfileDirectory(normalizedName);
+        BrowserProfiles.Add(new BrowserProfileViewModel
+        {
+            Name = normalizedName
+        });
+        await SaveProfileInternalAsync(updateStatus: false);
+        return BrowserProfileMutationResult.Success(normalizedName, string.Format("Perfil de navegador '{0}' criado.", normalizedName));
+    }
+
+    public async Task<BrowserProfileMutationResult> DeleteBrowserProfileAsync(string profileName, Guid? editingStreamId)
+    {
+        var normalizedName = BrowserProfileStorage.NormalizeName(profileName);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return BrowserProfileMutationResult.Fail("Selecione um perfil de navegador para excluir.");
+        }
+
+        var occupiedByAnotherStream = WindowProfiles.FirstOrDefault(x =>
+            string.Equals(x.BrowserProfileName, normalizedName, StringComparison.OrdinalIgnoreCase) &&
+            (!editingStreamId.HasValue || x.Id != editingStreamId.Value));
+        if (occupiedByAnotherStream is not null)
+        {
+            return BrowserProfileMutationResult.Fail(string.Format(
+                "O perfil de navegador '{0}' esta em uso pelo stream '{1}'.",
+                normalizedName,
+                occupiedByAnotherStream.Name));
+        }
+
+        var existingProfile = BrowserProfiles.FirstOrDefault(x => string.Equals(x.Name, normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (existingProfile is null)
+        {
+            return BrowserProfileMutationResult.Fail(string.Format("O perfil de navegador '{0}' nao foi encontrado.", normalizedName));
+        }
+
+        var affectedStreams = WindowProfiles
+            .Where(x => string.Equals(x.BrowserProfileName, normalizedName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var affectedStream in affectedStreams)
+        {
+            affectedStream.BrowserProfileName = string.Empty;
+            foreach (var item in affectedStream.Windows)
+            {
+                item.IsEnabled = false;
+                item.IsPrimaryExclusive = false;
+            }
+
+            await ResetWindowProfileRuntimeAsync(affectedStream);
+        }
+
+        BrowserProfiles.Remove(existingProfile);
+        BrowserProfileStorage.DeleteProfileDirectory(normalizedName);
+        RebuildActiveSessionsFromWindows();
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+        await SaveProfileInternalAsync(updateStatus: false);
+        return BrowserProfileMutationResult.Success(normalizedName, string.Format("Perfil de navegador '{0}' excluido.", normalizedName));
+    }
+
     private async Task CreateSessionFromWindowProfileAsync()
     {
         if (SelectedWindowProfile is null)
@@ -1090,6 +1207,7 @@ public sealed class MainViewModel : ViewModelBase
             browserWindow.Title = string.IsNullOrWhiteSpace(windowDefinition.Nickname) ? browserWindow.Title : windowDefinition.Nickname;
             browserWindow.InitialUri = initialUri;
             browserWindow.State = WindowSessionState.Created;
+            browserWindow.BrowserProfileName = windowProfile.BrowserProfileName ?? string.Empty;
             browserWindow.ProfileName = windowProfile.Name;
             browserWindow.ActiveSessionId = sessionId;
             browserWindow.ActiveSessionName = sessionName;
@@ -2085,6 +2203,12 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
+        var browserProfilesMigrated = EnsureBrowserProfileCompatibility(profile);
+        if (browserProfilesMigrated)
+        {
+            await _profileStore.SaveAsync(profile, CancellationToken.None);
+        }
+
         _isApplyingProfile = true;
         _suppressActiveSessionPersistence = true;
         try
@@ -2122,6 +2246,7 @@ public sealed class MainViewModel : ViewModelBase
                     TargetManualHeight = persistedWindow.TargetManualHeight,
                     IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
                     IsNavigationBarEnabled = persistedWindow.IsNavigationBarEnabled,
+                    BrowserProfileName = persistedWindow.BrowserProfileName ?? string.Empty,
                     ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
                     ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
                     ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
@@ -2154,6 +2279,7 @@ public sealed class MainViewModel : ViewModelBase
 
             RestoreProfileDisplayBindings(profile);
             RestoreTvProfiles(profile);
+            RestoreBrowserProfiles(profile);
             RestoreWindowProfiles(profile);
             NormalizeWindowProfilesInMemory();
             if (profile.ActiveSessions.Count > 0)
@@ -2273,6 +2399,7 @@ public sealed class MainViewModel : ViewModelBase
                     browserWindow.IsWebRtcPublishingEnabled = windowRecord.IsWebRtcPublishingEnabled;
                     browserWindow.IsPrimaryExclusive = windowRecord.IsPrimaryExclusive;
                     browserWindow.IsNavigationBarEnabled = windowRecord.IsNavigationBarEnabled;
+                    browserWindow.BrowserProfileName = windowRecord.BrowserProfileName ?? string.Empty;
                     browserWindow.ProfileName = record.ProfileName;
                     browserWindow.ActiveSessionId = session.Id;
                     browserWindow.ActiveSessionName = session.Name;
@@ -2331,7 +2458,8 @@ public sealed class MainViewModel : ViewModelBase
                     TargetManualHeight = window.TargetManualHeight,
                     IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    BrowserProfileName = window.BrowserProfileName ?? string.Empty
                 }).ToList(),
             BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
             {
@@ -2421,6 +2549,7 @@ public sealed class MainViewModel : ViewModelBase
                 TargetManualHeight = x.TargetManualHeight,
                 IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
                 IsNavigationBarEnabled = x.IsNavigationBarEnabled,
+                BrowserProfileName = x.BrowserProfileName ?? string.Empty,
                 ProfileName = x.ProfileName,
                 ActiveSessionId = x.ActiveSessionId,
                 ActiveSessionName = x.ActiveSessionName
@@ -2429,6 +2558,7 @@ public sealed class MainViewModel : ViewModelBase
             TvProfiles = BuildTvProfiles(),
             WindowProfiles = BuildWindowProfiles(),
             ActiveSessions = BuildActiveSessionRecords(),
+            BrowserProfiles = BuildBrowserProfiles(),
             StaticPanels = StaticPanels.Select(x => new StaticPanelProfile
             {
                 Id = x.Id,
@@ -2660,6 +2790,7 @@ public sealed class MainViewModel : ViewModelBase
                 AssignedTvProfileId = profile.AssignedTvProfileId,
                 AssignedTvProfileName = profile.AssignedTvProfileName,
                 KeepDisplayConnected = profile.KeepDisplayConnected,
+                BrowserProfileName = profile.BrowserProfileName ?? string.Empty,
                 Windows = profile.Windows.Select(window => new WindowLinkProfile
                 {
                     Id = window.Id,
@@ -2708,6 +2839,142 @@ public sealed class MainViewModel : ViewModelBase
         SelectedTvProfile = TvProfiles.FirstOrDefault();
     }
 
+    private bool EnsureBrowserProfileCompatibility(AppProfile profile)
+    {
+        var changed = false;
+        var knownProfileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var browserProfile in profile.BrowserProfiles.ToList())
+        {
+            var normalizedName = BrowserProfileStorage.NormalizeName(browserProfile.Name);
+            if (string.IsNullOrWhiteSpace(normalizedName))
+            {
+                profile.BrowserProfiles.Remove(browserProfile);
+                changed = true;
+                continue;
+            }
+
+            if (!string.Equals(browserProfile.Name, normalizedName, StringComparison.Ordinal))
+            {
+                browserProfile.Name = normalizedName;
+                changed = true;
+            }
+
+            if (!knownProfileNames.Add(normalizedName))
+            {
+                profile.BrowserProfiles.Remove(browserProfile);
+                changed = true;
+            }
+        }
+
+        foreach (var windowProfile in profile.WindowProfiles)
+        {
+            var normalizedAssignedName = BrowserProfileStorage.NormalizeName(windowProfile.BrowserProfileName);
+            if (string.IsNullOrWhiteSpace(normalizedAssignedName))
+            {
+                normalizedAssignedName = GenerateUniqueBrowserProfileName(windowProfile.Name, knownProfileNames);
+                windowProfile.BrowserProfileName = normalizedAssignedName;
+                changed = true;
+            }
+            else if (!string.Equals(windowProfile.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
+            {
+                windowProfile.BrowserProfileName = normalizedAssignedName;
+                changed = true;
+            }
+
+            if (knownProfileNames.Add(normalizedAssignedName))
+            {
+                profile.BrowserProfiles.Add(new BrowserProfileDefinition
+                {
+                    Name = normalizedAssignedName
+                });
+                changed = true;
+            }
+
+            foreach (var persistedWindow in profile.Windows.Where(x =>
+                         x.ActiveSessionId == windowProfile.Id ||
+                         string.Equals(x.ActiveSessionName, windowProfile.Name, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(x.ProfileName, windowProfile.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!string.Equals(persistedWindow.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
+                {
+                    persistedWindow.BrowserProfileName = normalizedAssignedName;
+                    changed = true;
+                }
+            }
+
+            foreach (var activeSessionWindow in profile.ActiveSessions
+                         .Where(x => x.Id == windowProfile.Id || string.Equals(x.ProfileName, windowProfile.Name, StringComparison.OrdinalIgnoreCase) || string.Equals(x.Name, windowProfile.Name, StringComparison.OrdinalIgnoreCase))
+                         .SelectMany(x => x.Windows))
+            {
+                if (!string.Equals(activeSessionWindow.BrowserProfileName, normalizedAssignedName, StringComparison.Ordinal))
+                {
+                    activeSessionWindow.BrowserProfileName = normalizedAssignedName;
+                    changed = true;
+                }
+            }
+        }
+
+        foreach (var browserProfileName in knownProfileNames)
+        {
+            BrowserProfileStorage.EnsureProfileDirectory(browserProfileName);
+        }
+
+        profile.BrowserProfiles = profile.BrowserProfiles
+            .Select(x => new BrowserProfileDefinition
+            {
+                Name = BrowserProfileStorage.NormalizeName(x.Name)
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.Name))
+            .Distinct(new BrowserProfileDefinitionNameComparer())
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return changed;
+    }
+
+    private static string GenerateUniqueBrowserProfileName(string? streamName, ISet<string> knownNames)
+    {
+        var baseName = BrowserProfileStorage.NormalizeName(streamName);
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            baseName = "Perfil navegador";
+        }
+
+        var candidate = baseName;
+        var suffix = 2;
+        while (knownNames.Contains(candidate))
+        {
+            candidate = string.Format("{0} {1}", baseName, suffix);
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private void RestoreBrowserProfiles(AppProfile profile)
+    {
+        BrowserProfiles.Clear();
+
+        var profileNames = profile.BrowserProfiles
+            .Select(x => x.Name)
+            .Concat(profile.WindowProfiles.Select(x => x.BrowserProfileName))
+            .Concat(profile.Windows.Select(x => x.BrowserProfileName))
+            .Concat(profile.ActiveSessions.SelectMany(x => x.Windows).Select(x => x.BrowserProfileName))
+            .Select(BrowserProfileStorage.NormalizeName)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var profileName in profileNames)
+        {
+            BrowserProfiles.Add(new BrowserProfileViewModel
+            {
+                Name = profileName
+            });
+        }
+    }
+
     private void RestoreWindowProfiles(AppProfile profile)
     {
         WindowProfiles.Clear();
@@ -2732,10 +2999,11 @@ public sealed class MainViewModel : ViewModelBase
             var viewModel = new WindowProfileViewModel
             {
                 Id = windowProfile.Id == Guid.Empty ? Guid.NewGuid() : windowProfile.Id,
-                Name = windowProfile.Name,
+                Name = windowProfile.Name ?? string.Empty,
                 AssignedTvProfileId = windowProfile.AssignedTvProfileId,
                 AssignedTvProfileName = windowProfile.AssignedTvProfileName,
-                KeepDisplayConnected = windowProfile.KeepDisplayConnected
+                KeepDisplayConnected = windowProfile.KeepDisplayConnected,
+                BrowserProfileName = windowProfile.BrowserProfileName ?? string.Empty
             };
 
             foreach (var window in windowProfile.Windows)
@@ -2818,6 +3086,11 @@ public sealed class MainViewModel : ViewModelBase
                 existing.AssignedTvProfileName = profile.AssignedTvProfileName;
             }
 
+            if (string.IsNullOrWhiteSpace(existing.BrowserProfileName) && !string.IsNullOrWhiteSpace(profile.BrowserProfileName))
+            {
+                existing.BrowserProfileName = profile.BrowserProfileName ?? string.Empty;
+            }
+
             existing.KeepDisplayConnected = existing.KeepDisplayConnected || profile.KeepDisplayConnected;
 
             foreach (var window in profile.Windows.ToList())
@@ -2876,7 +3149,8 @@ public sealed class MainViewModel : ViewModelBase
                     Name = windowProfile.Name,
                     AssignedTvProfileId = windowProfile.AssignedTvProfileId,
                     AssignedTvProfileName = windowProfile.AssignedTvProfileName,
-                    KeepDisplayConnected = windowProfile.KeepDisplayConnected
+                    KeepDisplayConnected = windowProfile.KeepDisplayConnected,
+                    BrowserProfileName = windowProfile.BrowserProfileName ?? string.Empty
                 };
 
                 foreach (var window in windowProfile.Windows)
@@ -3048,6 +3322,20 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private List<BrowserProfileDefinition> BuildBrowserProfiles()
+    {
+        return BrowserProfiles
+            .Select(x => BrowserProfileStorage.NormalizeName(x.Name))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new BrowserProfileDefinition
+            {
+                Name = x
+            })
+            .ToList();
+    }
+
     public Task RequestStreamReloadAsync(Guid windowId)
     {
         var window = Windows.FirstOrDefault(x => x.Id == windowId);
@@ -3197,6 +3485,22 @@ public sealed class MainViewModel : ViewModelBase
         RebuildActiveSessionsFromWindows();
     }
 
+    private async Task ResetWindowProfileRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        var liveWindows = Windows
+            .Where(x => x.ActiveSessionId == windowProfile.Id || string.Equals(x.BrowserProfileName, windowProfile.BrowserProfileName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var liveWindow in liveWindows)
+        {
+            await _webRtcPublisherService.UnpublishAsync(liveWindow, CancellationToken.None);
+            await _browserInstanceHost.CloseAsync(liveWindow.Id, CancellationToken.None);
+            Windows.Remove(liveWindow);
+        }
+
+        RebuildActiveSessionsFromWindows();
+    }
+
     private async Task ApplyStreamWindowRuntimeStateAsync(WindowProfileViewModel stream, WindowProfileItemViewModel item)
     {
         if (!item.IsEnabled)
@@ -3271,6 +3575,7 @@ public sealed class MainViewModel : ViewModelBase
         browserWindow.AssignedTarget = resolvedTarget;
         browserWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
         browserWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
+        browserWindow.BrowserProfileName = stream.BrowserProfileName ?? string.Empty;
 
         if (!Windows.Any(x => x.Id == browserWindow.Id))
         {
@@ -3947,6 +4252,7 @@ public sealed class WindowProfileViewModel : ViewModelBase
     private Guid? _assignedTvProfileId;
     private string _assignedTvProfileName = string.Empty;
     private bool _keepDisplayConnected;
+    private string _browserProfileName = string.Empty;
 
     public Guid Id
     {
@@ -3978,7 +4284,24 @@ public sealed class WindowProfileViewModel : ViewModelBase
         set => SetProperty(ref _keepDisplayConnected, value);
     }
 
+    public string BrowserProfileName
+    {
+        get => _browserProfileName;
+        set => SetProperty(ref _browserProfileName, value);
+    }
+
     public ObservableCollection<WindowProfileItemViewModel> Windows { get; } = new ObservableCollection<WindowProfileItemViewModel>();
+}
+
+public sealed class BrowserProfileViewModel : ViewModelBase
+{
+    private string _name = string.Empty;
+
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
 }
 
 public sealed class WindowProfileItemViewModel : ViewModelBase

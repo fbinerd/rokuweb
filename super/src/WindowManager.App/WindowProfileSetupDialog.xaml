@@ -24,6 +24,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
@@ -61,7 +63,40 @@
                 </ComboBox.ItemTemplate>
             </ComboBox>
 
-            <Grid Grid.Row="4" Margin="0,16,0,0">
+            <TextBlock Grid.Row="4"
+                       Grid.ColumnSpan="3"
+                       Margin="0,12,0,0"
+                       Text="Perfil do navegador"
+                       FontWeight="SemiBold" />
+            <Grid Grid.Row="5" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <ComboBox Grid.Column="0"
+                          Height="28"
+                          ItemsSource="{Binding AvailableBrowserProfiles}"
+                          SelectedItem="{Binding SelectedBrowserProfileName, UpdateSourceTrigger=PropertyChanged}"
+                          SelectionChanged="OnBrowserProfileSelectionChanged" />
+
+                <Button Grid.Column="2"
+                        Width="100"
+                        Height="28"
+                        Content="Novo perfil"
+                        Click="OnCreateBrowserProfileClick" />
+
+                <Button Grid.Column="4"
+                        Width="104"
+                        Height="28"
+                        Content="Excluir perfil"
+                        Click="OnDeleteBrowserProfileClick" />
+            </Grid>
+
+            <Grid Grid.Row="6" Margin="0,16,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="8" />
@@ -89,7 +124,7 @@
                         Click="OnRemoveWindowClick" />
             </Grid>
 
-            <GroupBox Grid.Row="5"
+            <GroupBox Grid.Row="7"
                       Grid.Column="0"
                       Margin="0,12,0,0"
                       Header="Janelas do stream">
@@ -135,7 +170,7 @@
                 </ListView>
             </GroupBox>
 
-            <GroupBox Grid.Row="5"
+            <GroupBox Grid.Row="7"
                       Grid.Column="2"
                       Margin="0,12,0,0"
                       Header="Pre-visualizacao">

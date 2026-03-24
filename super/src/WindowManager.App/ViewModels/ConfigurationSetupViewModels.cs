@@ -272,15 +272,27 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
     private string _profileName = string.Empty;
     private TvProfileViewModel? _selectedTvProfile;
     private WindowLinkEditorViewModel? _selectedWindow;
+    private string _selectedBrowserProfileName = string.Empty;
+    private readonly Func<string, Task<BrowserProfileMutationResult>>? _createBrowserProfileAsync;
+    private readonly Func<string, Task<BrowserProfileMutationResult>>? _deleteBrowserProfileAsync;
 
-    public WindowProfileSetupViewModel(IEnumerable<TvProfileViewModel> tvProfiles, WindowProfileViewModel? existingProfile = null)
+    public WindowProfileSetupViewModel(
+        IEnumerable<TvProfileViewModel> tvProfiles,
+        IEnumerable<string> browserProfiles,
+        WindowProfileViewModel? existingProfile = null,
+        Func<string, Task<BrowserProfileMutationResult>>? createBrowserProfileAsync = null,
+        Func<string, Task<BrowserProfileMutationResult>>? deleteBrowserProfileAsync = null)
     {
+        _createBrowserProfileAsync = createBrowserProfileAsync;
+        _deleteBrowserProfileAsync = deleteBrowserProfileAsync;
         AvailableTvProfiles = new ObservableCollection<TvProfileViewModel>(tvProfiles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase));
+        AvailableBrowserProfiles = new ObservableCollection<string>(browserProfiles.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
 
         if (existingProfile is not null)
         {
             EditingProfileId = existingProfile.Id;
             ProfileName = existingProfile.Name;
+            SelectedBrowserProfileName = existingProfile.BrowserProfileName;
             foreach (var window in GetDistinctWindows(
                 existingProfile.Windows.Select(x => new WindowLinkEditorViewModel
                 {
@@ -310,6 +322,8 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
     public ObservableCollection<TvProfileViewModel> AvailableTvProfiles { get; }
 
+    public ObservableCollection<string> AvailableBrowserProfiles { get; }
+
     public ObservableCollection<WindowLinkEditorViewModel> Windows { get; } = new ObservableCollection<WindowLinkEditorViewModel>();
 
     public Guid? EditingProfileId { get; }
@@ -335,6 +349,58 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
     {
         get => _selectedWindow;
         set => SetProperty(ref _selectedWindow, value);
+    }
+
+    public string SelectedBrowserProfileName
+    {
+        get => _selectedBrowserProfileName;
+        set => SetProperty(ref _selectedBrowserProfileName, value);
+    }
+
+    public async Task<BrowserProfileMutationResult> CreateBrowserProfileAsync(string? browserProfileName)
+    {
+        if (_createBrowserProfileAsync is null)
+        {
+            return BrowserProfileMutationResult.Fail("Criacao de perfil de navegador indisponivel.");
+        }
+
+        var result = await _createBrowserProfileAsync(browserProfileName ?? string.Empty);
+        if (!result.Succeeded)
+        {
+            return result;
+        }
+
+        InsertBrowserProfileSorted(result.ProfileName);
+        SelectedBrowserProfileName = result.ProfileName;
+        return result;
+    }
+
+    public async Task<BrowserProfileMutationResult> DeleteSelectedBrowserProfileAsync()
+    {
+        if (_deleteBrowserProfileAsync is null)
+        {
+            return BrowserProfileMutationResult.Fail("Exclusao de perfil de navegador indisponivel.");
+        }
+
+        var profileName = SelectedBrowserProfileName?.Trim() ?? string.Empty;
+        var result = await _deleteBrowserProfileAsync(profileName);
+        if (!result.Succeeded)
+        {
+            return result;
+        }
+
+        var existing = AvailableBrowserProfiles.FirstOrDefault(x => string.Equals(x, result.ProfileName, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            AvailableBrowserProfiles.Remove(existing);
+        }
+
+        if (string.Equals(SelectedBrowserProfileName, result.ProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedBrowserProfileName = string.Empty;
+        }
+
+        return result;
     }
 
     public void AddOrUpdateWindow(string? nickname, string? url, WindowLinkEditorViewModel? existingWindow = null)
@@ -444,6 +510,51 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
             yield return window;
         }
+    }
+
+    private void InsertBrowserProfileSorted(string profileName)
+    {
+        if (AvailableBrowserProfiles.Any(x => string.Equals(x, profileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        var insertIndex = 0;
+        while (insertIndex < AvailableBrowserProfiles.Count &&
+               string.Compare(AvailableBrowserProfiles[insertIndex], profileName, StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            insertIndex++;
+        }
+
+        AvailableBrowserProfiles.Insert(insertIndex, profileName);
+    }
+}
+
+public sealed class BrowserProfileMutationResult
+{
+    public bool Succeeded { get; set; }
+
+    public string Message { get; set; } = string.Empty;
+
+    public string ProfileName { get; set; } = string.Empty;
+
+    public static BrowserProfileMutationResult Success(string profileName, string message)
+    {
+        return new BrowserProfileMutationResult
+        {
+            Succeeded = true,
+            Message = message,
+            ProfileName = profileName
+        };
+    }
+
+    public static BrowserProfileMutationResult Fail(string message)
+    {
+        return new BrowserProfileMutationResult
+        {
+            Succeeded = false,
+            Message = message
+        };
     }
 }
 

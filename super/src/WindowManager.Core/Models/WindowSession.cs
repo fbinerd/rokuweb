@@ -24,6 +24,7 @@ public sealed class WindowSession : INotifyPropertyChanged
     private string _activeSessionName = string.Empty;
     private bool _isPrimaryExclusive;
     private bool _isNavigationBarEnabled;
+    private string _browserProfileName = string.Empty;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -133,6 +134,12 @@ public sealed class WindowSession : INotifyPropertyChanged
     {
         get => _isNavigationBarEnabled;
         set => SetProperty(ref _isNavigationBarEnabled, value);
+    }
+
+    public string BrowserProfileName
+    {
+        get => _browserProfileName;
+        set => SetProperty(ref _browserProfileName, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

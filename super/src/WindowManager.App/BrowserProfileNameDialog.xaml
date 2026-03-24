@@ -1,0 +1,56 @@
+<Window x:Class="WindowManager.App.BrowserProfileNameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Novo perfil de navegador"
+        Width="420"
+        Height="170"
+        MinWidth="380"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Nome do perfil de navegador"
+                   FontWeight="SemiBold" />
+
+        <TextBox x:Name="ProfileNameTextBox"
+                 Grid.Row="1"
+                 Margin="0,8,0,0"
+                 Height="28"
+                 VerticalContentAlignment="Center"
+                 Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
+
+        <TextBlock Grid.Row="2"
+                   Margin="0,10,0,0"
+                   Foreground="DimGray"
+                   Text="Esse perfil guarda cookies, logins, formularios e demais dados persistentes do navegador." 
+                   TextWrapping="Wrap" />
+
+        <Grid Grid.Row="3" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="1"
+                    Width="90"
+                    Height="28"
+                    Margin="0,0,8,0"
+                    Content="Cancelar"
+                    IsCancel="True" />
+
+            <Button Grid.Column="2"
+                    Width="90"
+                    Height="28"
+                    Content="Criar"
+                    IsDefault="True"
+                    Click="OnConfirmClick" />
+        </Grid>
+    </Grid>
+</Window>

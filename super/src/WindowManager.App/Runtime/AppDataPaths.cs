@@ -12,6 +12,8 @@ public static class AppDataPaths
 
     public static string CefRoot => Path.Combine(Root, "cef");
 
+    public static string CefBrowserProfilesRoot => Path.Combine(CefRoot, "profiles");
+
     public static string LogsRoot => Path.Combine(Root, "logs");
 
     public static string CrashesRoot => Path.Combine(Root, "crashes");

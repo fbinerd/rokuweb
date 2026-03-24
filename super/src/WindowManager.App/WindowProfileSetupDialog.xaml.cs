@@ -26,6 +26,7 @@ public partial class WindowProfileSetupDialog : Window
     private string? _currentPreviewAddress;
     private Guid? _activePreviewWindowId;
     private bool _saved;
+    private string _temporaryPreviewBrowserProfileName = string.Empty;
 
     public WindowProfileSetupDialog(
         WindowProfileSetupViewModel viewModel,
@@ -113,6 +114,64 @@ public partial class WindowProfileSetupDialog : Window
         ViewModel.SelectedWindow = window;
         ApplyNavigationBarPreference(window);
         _ = RefreshPreviewImageAsync();
+    }
+
+    private async void OnCreateBrowserProfileClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new BrowserProfileNameDialog
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var result = await ViewModel.CreateBrowserProfileAsync(dialog.ViewModel.ProfileName);
+        if (!result.Succeeded)
+        {
+            MessageBox.Show(this, result.Message, "Perfil do navegador", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        RecreateTemporaryPreviewCaptureWindow();
+    }
+
+    private async void OnDeleteBrowserProfileClick(object sender, RoutedEventArgs e)
+    {
+        var selectedProfile = ViewModel.SelectedBrowserProfileName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(selectedProfile))
+        {
+            MessageBox.Show(this, "Selecione um perfil de navegador para excluir.", "Perfil do navegador", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            string.Format("Excluir o perfil de navegador '{0}' e resetar completamente a base persistida dele?", selectedProfile),
+            "Excluir perfil do navegador",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var result = await ViewModel.DeleteSelectedBrowserProfileAsync();
+        if (!result.Succeeded)
+        {
+            MessageBox.Show(this, result.Message, "Perfil do navegador", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        RecreateTemporaryPreviewCaptureWindow();
+    }
+
+    private void OnBrowserProfileSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RecreateTemporaryPreviewCaptureWindow();
     }
 
     private void OnRemoveWindowClick(object sender, RoutedEventArgs e)
@@ -255,24 +314,63 @@ public partial class WindowProfileSetupDialog : Window
             RestoreSharedWindowAddresses();
             RestoreSharedWindowNavigationBars();
         }
-        _browserSnapshotService.Unregister(_temporaryPreviewWindowId);
-        _browserAudioCaptureService.Unregister(_temporaryPreviewWindowId);
-        _temporaryPreviewCaptureWindow?.Close();
-        _temporaryPreviewCaptureWindow = null;
+        CloseTemporaryPreviewCaptureWindow();
         _expandedPreviewWindow?.Close();
         _expandedPreviewWindow = null;
     }
 
     private void EnsureTemporaryPreviewCaptureWindow()
     {
-        if (_temporaryPreviewCaptureWindow is not null || !AppRuntimeState.BrowserEngineAvailable)
+        EnsureTemporaryPreviewCaptureWindow(forceRecreate: false);
+    }
+
+    private void EnsureTemporaryPreviewCaptureWindow(bool forceRecreate)
+    {
+        if (!AppRuntimeState.BrowserEngineAvailable)
         {
             return;
         }
 
-        _temporaryPreviewCaptureWindow = new BrowserCaptureWindow(_temporaryPreviewWindowId, new Uri("about:blank"), _browserAudioCaptureService);
+        var browserProfileName = ViewModel.SelectedBrowserProfileName?.Trim() ?? string.Empty;
+        if (!forceRecreate &&
+            _temporaryPreviewCaptureWindow is not null &&
+            string.Equals(_temporaryPreviewBrowserProfileName, browserProfileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        CloseTemporaryPreviewCaptureWindow();
+        _temporaryPreviewBrowserProfileName = browserProfileName;
+        _temporaryPreviewCaptureWindow = new BrowserCaptureWindow(
+            _temporaryPreviewWindowId,
+            new Uri("about:blank"),
+            _browserAudioCaptureService,
+            browserProfileName);
         _temporaryPreviewCaptureWindow.Show();
         _browserSnapshotService.Register(_temporaryPreviewWindowId, _temporaryPreviewCaptureWindow.Browser);
+    }
+
+    private void RecreateTemporaryPreviewCaptureWindow()
+    {
+        if (!AppRuntimeState.BrowserEngineAvailable)
+        {
+            return;
+        }
+
+        var shouldRefreshTemporaryPreview = _activePreviewWindowId == _temporaryPreviewWindowId;
+        EnsureTemporaryPreviewCaptureWindow(forceRecreate: true);
+        if (shouldRefreshTemporaryPreview && !string.IsNullOrWhiteSpace(_currentPreviewAddress))
+        {
+            NavigatePreview(_currentPreviewAddress, sharedWindowId: null, navigateSharedInstance: false);
+        }
+    }
+
+    private void CloseTemporaryPreviewCaptureWindow()
+    {
+        _browserSnapshotService.Unregister(_temporaryPreviewWindowId);
+        _browserAudioCaptureService.Unregister(_temporaryPreviewWindowId);
+        _temporaryPreviewCaptureWindow?.Close();
+        _temporaryPreviewCaptureWindow = null;
     }
 
     private void ApplyNavigationBarPreference(WindowLinkEditorViewModel? window)

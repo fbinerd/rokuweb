@@ -1,7 +1,9 @@
 using System;
+using System.IO;
 using System.Windows;
 using CefSharp;
 using CefSharp.Wpf;
+using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 
 namespace WindowManager.App;
@@ -110,7 +112,7 @@ public sealed class BrowserCaptureWindow : Window
 })();";
     private bool _isNavigationBarEnabled;
 
-    public BrowserCaptureWindow(Guid windowId, Uri? initialUri, BrowserAudioCaptureService audioCaptureService)
+    public BrowserCaptureWindow(Guid windowId, Uri? initialUri, BrowserAudioCaptureService audioCaptureService, string? browserProfileName = null)
     {
         Width = 1280;
         Height = 720;
@@ -122,10 +124,9 @@ public sealed class BrowserCaptureWindow : Window
         ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = false;
 
-        Browser = new ChromiumWebBrowser
-        {
-            Address = initialUri?.ToString() ?? "about:blank"
-        };
+        Browser = new ChromiumWebBrowser();
+        ConfigureRequestContext(Browser, browserProfileName);
+        Browser.Address = initialUri?.ToString() ?? "about:blank";
         Browser.AudioHandler = audioCaptureService.CreateHandler(windowId);
         Browser.FrameLoadEnd += OnBrowserFrameLoadEnd;
 
@@ -196,5 +197,26 @@ public sealed class BrowserCaptureWindow : Window
         catch
         {
         }
+    }
+
+    private static void ConfigureRequestContext(ChromiumWebBrowser browser, string? browserProfileName)
+    {
+        var normalizedProfileName = BrowserProfileStorage.NormalizeName(browserProfileName);
+        if (string.IsNullOrWhiteSpace(normalizedProfileName))
+        {
+            return;
+        }
+
+        var profileDirectory = BrowserProfileStorage.EnsureProfileDirectory(normalizedProfileName);
+        if (string.IsNullOrWhiteSpace(profileDirectory) || !Path.IsPathRooted(profileDirectory))
+        {
+            return;
+        }
+
+        browser.RequestContext = new RequestContext(new RequestContextSettings
+        {
+            CachePath = profileDirectory,
+            PersistSessionCookies = true
+        });
     }
 }

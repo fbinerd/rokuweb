@@ -180,6 +180,12 @@ public partial class MainWindow : Window
             RefreshStreamDefinitionPreviewSection(sender as WindowProfileViewModel);
             RefreshStreamPreviewSections();
         }
+
+        if (e.PropertyName == nameof(WindowProfileViewModel.BrowserProfileName) &&
+            sender is WindowProfileViewModel streamWithBrowserProfile)
+        {
+            RecreateStreamDefinitionCaptureWindows(streamWithBrowserProfile);
+        }
     }
 
     private void OnWindowProfileWindowsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -510,7 +516,7 @@ public partial class MainWindow : Window
     {
         item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
         RemoveStreamDefinitionPreviewCardOnly(item.Id);
-        EnsureStreamDefinitionCaptureWindow(item);
+        EnsureStreamDefinitionCaptureWindow(stream, item);
 
         var headerTitle = new TextBlock
         {
@@ -665,7 +671,7 @@ public partial class MainWindow : Window
         _streamDefinitionPreviewImages.Remove(itemId);
     }
 
-    private void EnsureStreamDefinitionCaptureWindow(WindowProfileItemViewModel item)
+    private void EnsureStreamDefinitionCaptureWindow(WindowProfileViewModel stream, WindowProfileItemViewModel item)
     {
         if (!AppRuntimeState.BrowserEngineAvailable)
         {
@@ -678,11 +684,30 @@ public partial class MainWindow : Window
             return;
         }
 
-        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService);
+        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService, stream.BrowserProfileName);
         captureWindow.SetNavigationBarEnabled(item.IsNavigationBarEnabled);
         _streamDefinitionCaptureWindows[item.Id] = captureWindow;
         _browserSnapshotService.Register(item.Id, captureWindow.Browser);
         captureWindow.Show();
+    }
+
+    private void RecreateStreamDefinitionCaptureWindows(WindowProfileViewModel stream)
+    {
+        foreach (var item in stream.Windows)
+        {
+            if (_streamDefinitionCaptureWindows.TryGetValue(item.Id, out var captureWindow))
+            {
+                _browserSnapshotService.Unregister(item.Id);
+                _browserAudioCaptureService.Unregister(item.Id);
+                captureWindow.Close();
+                _streamDefinitionCaptureWindows.Remove(item.Id);
+            }
+
+            EnsureStreamDefinitionCaptureWindow(stream, item);
+            _browserSnapshotService.InvalidateCapture(item.Id);
+        }
+
+        _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
     }
 
     private void OnStreamDefinitionPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -950,7 +975,11 @@ public partial class MainWindow : Window
 
     private async void OnOpenWindowProfileSetupClick(object sender, RoutedEventArgs e)
     {
-        var dialogViewModel = new WindowProfileSetupViewModel(GetAvailableTvProfilesForStream());
+        var dialogViewModel = new WindowProfileSetupViewModel(
+            GetAvailableTvProfilesForStream(),
+            GetAvailableBrowserProfilesForStream(),
+            createBrowserProfileAsync: name => _viewModel.CreateBrowserProfileAsync(name, null),
+            deleteBrowserProfileAsync: name => _viewModel.DeleteBrowserProfileAsync(name, null));
         var dialog = new WindowProfileSetupDialog(dialogViewModel, _browserSnapshotService, _browserAudioCaptureService)
         {
             Owner = this,
@@ -975,7 +1004,12 @@ public partial class MainWindow : Window
 
         _viewModel.SelectedWindowProfile = streamProfile;
 
-        var dialogViewModel = new WindowProfileSetupViewModel(GetAvailableTvProfilesForStream(streamProfile), streamProfile);
+        var dialogViewModel = new WindowProfileSetupViewModel(
+            GetAvailableTvProfilesForStream(streamProfile),
+            GetAvailableBrowserProfilesForStream(streamProfile),
+            streamProfile,
+            name => _viewModel.CreateBrowserProfileAsync(name, streamProfile.Id),
+            name => _viewModel.DeleteBrowserProfileAsync(name, streamProfile.Id));
         var dialog = new WindowProfileSetupDialog(dialogViewModel, _browserSnapshotService, _browserAudioCaptureService)
         {
             Owner = this,
@@ -1003,6 +1037,23 @@ public partial class MainWindow : Window
             .Where(x => !occupiedTvProfileIds.Contains(x.Id) ||
                         (editingStream?.AssignedTvProfileId.HasValue == true && editingStream.AssignedTvProfileId.Value == x.Id))
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private IReadOnlyList<string> GetAvailableBrowserProfilesForStream(WindowProfileViewModel? editingStream = null)
+    {
+        var occupiedBrowserProfiles = _viewModel.WindowProfiles
+            .Where(x => editingStream is null || x.Id != editingStream.Id)
+            .Select(x => x.BrowserProfileName?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return _viewModel.BrowserProfiles
+            .Select(x => x.Name)
+            .Where(x =>
+                string.Equals(x, editingStream?.BrowserProfileName, StringComparison.OrdinalIgnoreCase) ||
+                !occupiedBrowserProfiles.Contains(x))
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -1192,7 +1243,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService);
+        var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService, session.BrowserProfileName);
         captureWindow.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
         _captureWindows[session.Id] = captureWindow;
         _browserSnapshotService.Register(session.Id, captureWindow.Browser);
