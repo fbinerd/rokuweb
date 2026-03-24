@@ -53,6 +53,9 @@ public sealed class AppProfile
 
     [DataMember(Order = 15)]
     public List<BrowserProfileDefinition> BrowserProfiles { get; set; } = new List<BrowserProfileDefinition>();
+
+    [DataMember(Order = 16)]
+    public bool ShowWindowPreviews { get; set; } = true;
 }
 
 [DataContract]

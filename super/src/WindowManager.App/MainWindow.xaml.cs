@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, WrapPanel> _streamPreviewPanels = new Dictionary<string, WrapPanel>(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBlock> _streamPreviewPlaceholders = new Dictionary<string, TextBlock>(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _previewRefreshTimer;
+    private readonly DispatcherTimer _expandedPreviewRefreshTimer;
     private readonly Forms.NotifyIcon _notifyIcon;
     private TransmissionLogWindow? _logWindow;
     private Guid? _expandedPreviewWindowId;
@@ -48,6 +49,7 @@ public partial class MainWindow : Window
     private bool _hasShownTrayHint;
     private Point? _lastExpandedPreviewMousePoint;
     private DateTime _nextKeepAliveCheckUtc = DateTime.MinValue;
+    private bool _isRefreshingExpandedPreview;
     private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
@@ -87,6 +89,12 @@ public partial class MainWindow : Window
         };
         _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
 
+        _expandedPreviewRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(180)
+        };
+        _expandedPreviewRefreshTimer.Tick += OnExpandedPreviewRefreshTimerTick;
+
         _notifyIcon = CreateNotifyIcon();
 
         Loaded += OnLoaded;
@@ -103,8 +111,7 @@ public partial class MainWindow : Window
             await _viewModel.InitializeAfterStartupAsync();
             RefreshStreamProfilesListView();
             await Dispatcher.InvokeAsync(RefreshStreamProfilesListView, DispatcherPriority.Background);
-            _previewRefreshTimer.Start();
-            _ = RefreshPreviewImagesAsync();
+            ApplyPreviewMode();
         }
         catch (Exception ex)
         {
@@ -251,7 +258,7 @@ public partial class MainWindow : Window
 
         if (e.PropertyName == nameof(WindowProfileItemViewModel.Url))
         {
-            if (_streamDefinitionCaptureWindows.TryGetValue(item.Id, out var captureWindow))
+            if (_viewModel.ShowWindowPreviews && _streamDefinitionCaptureWindows.TryGetValue(item.Id, out var captureWindow))
             {
                 captureWindow.UpdateAddress(TryCreateUri(item.Url));
                 _browserSnapshotService.InvalidateCapture(item.Id);
@@ -517,7 +524,10 @@ public partial class MainWindow : Window
     {
         item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
         RemoveStreamDefinitionPreviewCardOnly(item.Id);
-        EnsureStreamDefinitionCaptureWindow(stream, item);
+        if (_viewModel.ShowWindowPreviews)
+        {
+            EnsureStreamDefinitionCaptureWindow(stream, item);
+        }
 
         var headerTitle = new TextBlock
         {
@@ -672,9 +682,9 @@ public partial class MainWindow : Window
         _streamDefinitionPreviewImages.Remove(itemId);
     }
 
-    private void EnsureStreamDefinitionCaptureWindow(WindowProfileViewModel stream, WindowProfileItemViewModel item)
+    private void EnsureStreamDefinitionCaptureWindow(WindowProfileViewModel stream, WindowProfileItemViewModel item, bool allowWhenPreviewsDisabled = false)
     {
-        if (!AppRuntimeState.BrowserEngineAvailable)
+        if (!AppRuntimeState.BrowserEngineAvailable || (!_viewModel.ShowWindowPreviews && !allowWhenPreviewsDisabled))
         {
             return;
         }
@@ -694,6 +704,11 @@ public partial class MainWindow : Window
 
     private void RecreateStreamDefinitionCaptureWindows(WindowProfileViewModel stream)
     {
+        if (!_viewModel.ShowWindowPreviews)
+        {
+            return;
+        }
+
         foreach (var item in stream.Windows)
         {
             if (_streamDefinitionCaptureWindows.TryGetValue(item.Id, out var captureWindow))
@@ -1200,7 +1215,17 @@ public partial class MainWindow : Window
         ExpandedPreviewOverlay.Visibility = Visibility.Visible;
         _expandedPreviewWindowId = previewId;
         ExpandedPreviewHost.Focus();
-        _ = RefreshPreviewImagesAsync();
+        EnsureExpandedPreviewCaptureWindow(previewId);
+        if (_viewModel.ShowWindowPreviews)
+        {
+            _expandedPreviewRefreshTimer.Stop();
+            _ = RefreshPreviewImagesAsync();
+        }
+        else
+        {
+            _expandedPreviewRefreshTimer.Start();
+            _ = RefreshExpandedPreviewNowAsync(previewId);
+        }
     }
 
     private void CloseExpandedPreview()
@@ -1216,6 +1241,16 @@ public partial class MainWindow : Window
         ExpandedPreviewOverlay.Visibility = Visibility.Collapsed;
         ExpandedPreviewTitle.Text = string.Empty;
         ExpandedPreviewImage.Source = null;
+        _expandedPreviewRefreshTimer.Stop();
+
+        if (!_viewModel.ShowWindowPreviews &&
+            _streamDefinitionCaptureWindows.TryGetValue(windowId, out var captureWindow))
+        {
+            _browserSnapshotService.Unregister(windowId);
+            _browserAudioCaptureService.Unregister(windowId);
+            captureWindow.Close();
+            _streamDefinitionCaptureWindows.Remove(windowId);
+        }
     }
 
     private void OnWindowSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -1265,6 +1300,11 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(MainViewModel.SelectedWindow))
         {
             UpdateSelectionVisuals();
+        }
+
+        if (e.PropertyName == nameof(MainViewModel.ShowWindowPreviews))
+        {
+            ApplyPreviewMode();
         }
     }
 
@@ -1875,10 +1915,7 @@ public partial class MainWindow : Window
 
     private async Task RefreshExpandedPreviewNowAsync(Guid windowId)
     {
-        _browserSnapshotService.InvalidateCapture(windowId);
-        await Task.Delay(80);
-
-        var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default);
+        var jpegBytes = await CaptureExpandedPreviewFrameAsync(windowId);
         if (jpegBytes is null || jpegBytes.Length == 0)
         {
             return;
@@ -1898,6 +1935,32 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task<byte[]?> CaptureExpandedPreviewFrameAsync(Guid windowId)
+    {
+        const int maxAttempts = 5;
+        byte[]? lastFrame = null;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            _browserSnapshotService.InvalidateCapture(windowId);
+            await Task.Delay(attempt == 0 ? 80 : 120);
+
+            var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default);
+            if (jpegBytes is null || jpegBytes.Length == 0)
+            {
+                continue;
+            }
+
+            lastFrame = jpegBytes;
+            if (!IsProbablyBlankPreview(jpegBytes))
+            {
+                return jpegBytes;
+            }
+        }
+
+        return lastFrame is not null && !IsProbablyBlankPreview(lastFrame) ? lastFrame : null;
+    }
+
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
@@ -1905,6 +1968,24 @@ public partial class MainWindow : Window
         {
             _nextKeepAliveCheckUtc = DateTime.UtcNow.AddSeconds(3);
             await _viewModel.EnsureKeepAliveStreamsAsync();
+        }
+    }
+
+    private async void OnExpandedPreviewRefreshTimerTick(object? sender, EventArgs e)
+    {
+        if (_viewModel.ShowWindowPreviews || !_expandedPreviewWindowId.HasValue || _isRefreshingExpandedPreview)
+        {
+            return;
+        }
+
+        try
+        {
+            _isRefreshingExpandedPreview = true;
+            await RefreshExpandedPreviewNowAsync(_expandedPreviewWindowId.Value);
+        }
+        finally
+        {
+            _isRefreshingExpandedPreview = false;
         }
     }
 
@@ -2009,7 +2090,7 @@ public partial class MainWindow : Window
 
     private async Task RefreshPreviewImagesAsync()
     {
-        if (_isRefreshingPreviews || !AppRuntimeState.BrowserEngineAvailable)
+        if (_isRefreshingPreviews || !AppRuntimeState.BrowserEngineAvailable || !_viewModel.ShowWindowPreviews)
         {
             return;
         }
@@ -2063,6 +2144,85 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ApplyPreviewMode()
+    {
+        if (_viewModel.ShowWindowPreviews)
+        {
+            EnsureAllStreamDefinitionCaptureWindows();
+            _expandedPreviewRefreshTimer.Stop();
+            if (!_previewRefreshTimer.IsEnabled)
+            {
+                _previewRefreshTimer.Start();
+            }
+
+            _ = RefreshPreviewImagesAsync();
+            return;
+        }
+
+        _previewRefreshTimer.Stop();
+        CloseExpandedPreview();
+        ClearPreviewImages();
+        CloseStreamDefinitionCaptureWindows();
+    }
+
+    private void EnsureAllStreamDefinitionCaptureWindows()
+    {
+        foreach (var stream in _viewModel.WindowProfiles)
+        {
+            foreach (var item in stream.Windows)
+            {
+                EnsureStreamDefinitionCaptureWindow(stream, item);
+            }
+        }
+    }
+
+    private void CloseStreamDefinitionCaptureWindows()
+    {
+        foreach (var pair in _streamDefinitionCaptureWindows.ToArray())
+        {
+            _browserSnapshotService.Unregister(pair.Key);
+            _browserAudioCaptureService.Unregister(pair.Key);
+            pair.Value.Close();
+        }
+
+        _streamDefinitionCaptureWindows.Clear();
+    }
+
+    private void ClearPreviewImages()
+    {
+        foreach (var image in _previewImages.Values)
+        {
+            image.Source = null;
+        }
+
+        foreach (var image in _streamDefinitionPreviewImages.Values)
+        {
+            image.Source = null;
+        }
+
+        ExpandedPreviewImage.Source = null;
+    }
+
+    private void EnsureExpandedPreviewCaptureWindow(Guid previewId)
+    {
+        if (_captureWindows.ContainsKey(previewId))
+        {
+            return;
+        }
+
+        foreach (var stream in _viewModel.WindowProfiles)
+        {
+            var item = stream.Windows.FirstOrDefault(x => x.Id == previewId);
+            if (item is null)
+            {
+                continue;
+            }
+
+            EnsureStreamDefinitionCaptureWindow(stream, item, allowWhenPreviewsDisabled: true);
+            return;
+        }
+    }
+
     private static BitmapImage CreateImageSource(byte[] jpegBytes)
     {
         using var stream = new MemoryStream(jpegBytes);
@@ -2074,6 +2234,62 @@ public partial class MainWindow : Window
         image.EndInit();
         image.Freeze();
         return image;
+    }
+
+    private static bool IsProbablyBlankPreview(byte[] jpegBytes)
+    {
+        try
+        {
+            using var stream = new MemoryStream(jpegBytes);
+            var decoder = BitmapDecoder.Create(
+                stream,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+
+            if (decoder.Frames.Count == 0)
+            {
+                return true;
+            }
+
+            var frame = decoder.Frames[0];
+            if (frame.PixelWidth <= 2 || frame.PixelHeight <= 2)
+            {
+                return true;
+            }
+
+            var converted = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            converted.Freeze();
+
+            var samplePoints = new[]
+            {
+                new Point(frame.PixelWidth / 2.0, frame.PixelHeight / 2.0),
+                new Point(frame.PixelWidth * 0.2, frame.PixelHeight * 0.2),
+                new Point(frame.PixelWidth * 0.8, frame.PixelHeight * 0.2),
+                new Point(frame.PixelWidth * 0.2, frame.PixelHeight * 0.8),
+                new Point(frame.PixelWidth * 0.8, frame.PixelHeight * 0.8)
+            };
+
+            var whiteOrBlackSamples = 0;
+            foreach (var point in samplePoints)
+            {
+                var x = Math.Max(0, Math.Min(frame.PixelWidth - 1, (int)Math.Round(point.X)));
+                var y = Math.Max(0, Math.Min(frame.PixelHeight - 1, (int)Math.Round(point.Y)));
+                var pixels = new byte[4];
+                converted.CopyPixels(new Int32Rect(x, y, 1, 1), pixels, 4, 0);
+
+                var brightness = (pixels[0] + pixels[1] + pixels[2]) / 3;
+                if (brightness <= 10 || brightness >= 245)
+                {
+                    whiteOrBlackSamples++;
+                }
+            }
+
+            return whiteOrBlackSamples >= 4;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsTextProducingKey(Key key)

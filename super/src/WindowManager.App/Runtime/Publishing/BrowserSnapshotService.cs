@@ -162,7 +162,16 @@ public sealed class BrowserSnapshotService
             {
                 case "move":
                     host.SendMouseMoveEvent(cursor.ToMouseEvent(), false);
-                    await HighlightElementAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true);
+                    try
+                    {
+                        await HighlightElementAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
                     AppLog.Write("RokuControl", string.Format("Mouse move => x={0}, y={1}", cursor.X, cursor.Y));
                     return RemoteCommandResult.Success();
                 case "click":
@@ -464,7 +473,9 @@ public sealed class BrowserSnapshotService
 
     private static async Task HighlightElementAtPointAsync(IFrame frame, int x, int y)
     {
-        var script = string.Format(@"
+        try
+        {
+            var script = string.Format(@"
 (function() {{
   const x = {0};
   const y = {1};
@@ -484,8 +495,18 @@ public sealed class BrowserSnapshotService
   return true;
 }})();", x, y);
 
-        await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
-        await Task.Delay(60).ConfigureAwait(false);
+            await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+            await Task.Delay(60).ConfigureAwait(false);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+        }
     }
 
     private static async Task<RemoteCommandResult> ClickElementAtPointAsync(IFrame frame, int x, int y)

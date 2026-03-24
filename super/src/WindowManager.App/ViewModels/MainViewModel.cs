@@ -68,6 +68,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isUpdateAvailable;
     private bool _isCheckingForUpdates;
     private bool _autoUpdateEnabled;
+    private bool _showWindowPreviews = true;
     private AppUpdateCheckResult? _lastUpdateCheckResult;
     private string _additionalDiscoveryCidrs = string.Empty;
     private string _selectedUpdateChannel = UpdateChannelNames.Stable;
@@ -181,6 +182,18 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsLocalDevelopmentBuild => string.Equals(BuildVersionInfo.CurrentBuildChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
 
     public bool IsAutomaticUpdateToggleEnabled => !IsLocalDevelopmentBuild;
+
+    public bool ShowWindowPreviews
+    {
+        get => _showWindowPreviews;
+        set
+        {
+            if (SetProperty(ref _showWindowPreviews, value))
+            {
+                QueueAutoSave();
+            }
+        }
+    }
 
     public AsyncRelayCommand CreateWindowCommand { get; }
     public AsyncRelayCommand NavigateSelectedWindowCommand { get; }
@@ -2446,6 +2459,7 @@ public sealed class MainViewModel : ViewModelBase
 
             var restoredSessionId = Guid.NewGuid();
             var restoredSessionName = profile.Name;
+            ShowWindowPreviews = profile.ShowWindowPreviews;
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
             WebRtcSpecificIp = profile.WebRtcSpecificIp ?? string.Empty;
@@ -2744,6 +2758,7 @@ public sealed class MainViewModel : ViewModelBase
             WebRtcServerPort = WebRtcServerPort,
             WebRtcBindMode = WebRtcBindMode,
             WebRtcSpecificIp = WebRtcSpecificIp,
+            ShowWindowPreviews = ShowWindowPreviews,
             DisplayTargets = Targets.Select(x => new DisplayTargetProfile
             {
                 Id = x.Id,

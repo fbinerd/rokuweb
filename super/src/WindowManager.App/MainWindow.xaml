@@ -61,6 +61,10 @@
                         Height="34"
                         Margin="0,0,8,0"
                         Click="OnOpenLogsClick" />
+                <CheckBox Content="Mostrar previsualizacoes"
+                          Margin="0,0,12,0"
+                          VerticalAlignment="Center"
+                          IsChecked="{Binding ShowWindowPreviews, UpdateSourceTrigger=PropertyChanged}" />
                 <Button Content="Atualizar destinos"
                         Width="160"
                         Height="34"
