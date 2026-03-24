@@ -2818,6 +2818,8 @@ public sealed class MainViewModel : ViewModelBase
                 existing.AssignedTvProfileName = profile.AssignedTvProfileName;
             }
 
+            existing.KeepDisplayConnected = existing.KeepDisplayConnected || profile.KeepDisplayConnected;
+
             foreach (var window in profile.Windows.ToList())
             {
                 var duplicateWindow = existing.Windows.FirstOrDefault(x =>
@@ -2873,7 +2875,8 @@ public sealed class MainViewModel : ViewModelBase
                     Id = windowProfile.Id == Guid.Empty ? Guid.NewGuid() : windowProfile.Id,
                     Name = windowProfile.Name,
                     AssignedTvProfileId = windowProfile.AssignedTvProfileId,
-                    AssignedTvProfileName = windowProfile.AssignedTvProfileName
+                    AssignedTvProfileName = windowProfile.AssignedTvProfileName,
+                    KeepDisplayConnected = windowProfile.KeepDisplayConnected
                 };
 
                 foreach (var window in windowProfile.Windows)
@@ -2884,7 +2887,8 @@ public sealed class MainViewModel : ViewModelBase
                         Nickname = window.Nickname,
                         Url = window.Url,
                         IsEnabled = window.IsEnabled,
-                        IsPrimaryExclusive = window.IsPrimaryExclusive
+                        IsPrimaryExclusive = window.IsPrimaryExclusive,
+                        IsNavigationBarEnabled = window.IsNavigationBarEnabled
                     });
                 }
 

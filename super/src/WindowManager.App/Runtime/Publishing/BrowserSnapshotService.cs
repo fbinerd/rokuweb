@@ -217,6 +217,16 @@ public sealed class BrowserSnapshotService
 
                     AppLog.Write("RokuControl", "Historico avancar ignorado; navegador sem pagina seguinte.");
                     return RemoteCommandResult.Success();
+                case "scroll-up":
+                    var scrollUpResult = await ScrollPageAsync(frame, host, cursor.ToMouseEvent(), -420).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", string.Format("Scroll para cima enviado ao CEF. ok={0}", scrollUpResult.Ok));
+                    return scrollUpResult;
+                case "scroll-down":
+                    var scrollDownResult = await ScrollPageAsync(frame, host, cursor.ToMouseEvent(), 420).ConfigureAwait(true);
+                    InvalidateCapture(windowId);
+                    AppLog.Write("RokuControl", string.Format("Scroll para baixo enviado ao CEF. ok={0}", scrollDownResult.Ok));
+                    return scrollDownResult;
                 case "media-seek-backward":
                     var seekBackwardResult = await SeekMediaAsync(frame, host, -10).ConfigureAwait(true);
                     InvalidateCapture(windowId);
@@ -765,6 +775,62 @@ public sealed class BrowserSnapshotService
 
         await Task.Delay(120).ConfigureAwait(false);
         return result;
+    }
+
+    private static async Task<RemoteCommandResult> ScrollPageAsync(IFrame frame, IBrowserHost host, MouseEvent mouseEvent, int deltaY)
+    {
+        host.SendMouseMoveEvent(mouseEvent, false);
+        host.SendMouseWheelEvent(mouseEvent, 0, deltaY < 0 ? 120 : -120);
+
+        var script = string.Format(@"
+(function() {{
+  try {{
+    const x = {1};
+    const y = {2};
+    const delta = {0};
+    const target = document.elementFromPoint(x, y);
+    const isScrollable = (el) => {{
+      if (!el) return false;
+      const style = window.getComputedStyle(el);
+      const overflowY = style ? style.overflowY : '';
+      return (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && el.scrollHeight > el.clientHeight;
+    }};
+
+    let scrollTarget = target;
+    while (scrollTarget && !isScrollable(scrollTarget)) {{
+      scrollTarget = scrollTarget.parentElement;
+    }}
+
+    if (!scrollTarget) {{
+      scrollTarget = document.scrollingElement || document.documentElement || document.body;
+    }}
+
+    if (!scrollTarget) {{
+      return JSON.stringify({{ ok: false }});
+    }}
+
+    const before = scrollTarget === document.body || scrollTarget === document.documentElement || scrollTarget === document.scrollingElement
+      ? (window.scrollY || scrollTarget.scrollTop || 0)
+      : (scrollTarget.scrollTop || 0);
+
+    if (scrollTarget === document.body || scrollTarget === document.documentElement || scrollTarget === document.scrollingElement) {{
+      window.scrollBy({{ top: delta, left: 0, behavior: 'auto' }});
+    }} else {{
+      scrollTarget.scrollTop = (scrollTarget.scrollTop || 0) + delta;
+    }}
+
+    const after = scrollTarget === document.body || scrollTarget === document.documentElement || scrollTarget === document.scrollingElement
+      ? (window.scrollY || scrollTarget.scrollTop || 0)
+      : (scrollTarget.scrollTop || 0);
+    return JSON.stringify({{ ok: true, before: before, after: after, moved: before <> after }});
+  }} catch (e) {{
+    return JSON.stringify({{ ok: false }});
+  }}
+}})();", deltaY, mouseEvent.X, mouseEvent.Y);
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        await Task.Delay(80).ConfigureAwait(false);
+        return ParseRemoteCommandResult(response?.Result as string);
     }
 
     private static string EscapeJavaScriptString(string value)

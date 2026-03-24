@@ -12,12 +12,15 @@ sub init()
     m.isFullscreenRefreshInFlight = false
     m.previewRevision = 0
     m.heldDirectionKey = ""
+    m.heldRemoteCommand = ""
+    m.heldRemoteKey = ""
     m.cursorX = 640
     m.cursorY = 360
     m.lockedFullscreen = false
     m.lockedWindowId = ""
     m.backHoldTimespan = invalid
     m.backLongPressThresholdMs = 650
+    m.scrollModeEnabled = false
     m.autoConnectAttempts = 0
     m.isAutoConnecting = true
     m.keyboardPurpose = ""
@@ -40,6 +43,8 @@ sub init()
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.versionLabel = m.top.findNode("versionLabel")
+    m.fullscreenToastGroup = m.top.findNode("fullscreenToastGroup")
+    m.fullscreenToastLabel = m.top.findNode("fullscreenToastLabel")
     m.fullscreenPosterA = m.top.findNode("fullscreenPosterA")
     m.fullscreenPosterB = m.top.findNode("fullscreenPosterB")
     m.activeFullscreenPoster = m.fullscreenPosterA
@@ -56,6 +61,7 @@ sub init()
     m.autoConnectTimer = m.top.findNode("autoConnectTimer")
     m.fullscreenStreamTimer = m.top.findNode("fullscreenStreamTimer")
     m.fullscreenVideoWatchTimer = m.top.findNode("fullscreenVideoWatchTimer")
+    m.scrollModeToastTimer = m.top.findNode("scrollModeToastTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
@@ -106,6 +112,7 @@ sub init()
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
     m.fullscreenStreamTimer.observeField("fire", "onFullscreenStreamTimerFire")
     m.fullscreenVideoWatchTimer.observeField("fire", "onFullscreenVideoWatchTimerFire")
+    m.scrollModeToastTimer.observeField("fire", "onScrollModeToastTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
     m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
@@ -130,6 +137,7 @@ sub init()
     m.pendingEditableActivation = false
     m.pendingEditableValue = ""
     m.pendingEditableMultiline = false
+    m.blueModifierActive = false
 
     m.titleLabel.text = GetRokuAppShortName()
     m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
@@ -148,6 +156,10 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
     if m.isFullscreen
         if not press
+            if isBlueKey(normalizedKey)
+                return true
+            end if
+
             if normalizedKey = "back"
                 heldMs = 0
                 if m.backHoldTimespan <> invalid
@@ -180,6 +192,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 return true
             end if
 
+            if normalizedKey = m.heldRemoteKey
+                stopHeldRemoteCommand()
+                return true
+            end if
+
             return false
         end if
 
@@ -188,6 +205,16 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if normalizedKey = "back"
             m.backHoldTimespan = CreateObject("roTimespan")
             m.backHoldTimespan.Mark()
+            return true
+        end if
+
+        if isBlueKey(normalizedKey)
+            m.scrollModeEnabled = not m.scrollModeEnabled
+            if m.scrollModeEnabled
+                showScrollModeToast("Modo de rolagem ativado")
+            else
+                showScrollModeToast("Modo de rolagem desativado")
+            end if
             return true
         end if
 
@@ -210,14 +237,22 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isMinusKey(normalizedKey)
             clearPendingEditableActivation()
-            sendRemoteCommand("history-back")
+            if m.scrollModeEnabled
+                startHeldRemoteCommand(normalizedKey, "scroll-down")
+            else
+                sendRemoteCommand("history-back")
+            end if
             scheduleFullscreenRefresh()
             return true
         end if
 
         if isPlusKey(normalizedKey)
             clearPendingEditableActivation()
-            sendRemoteCommand("history-forward")
+            if m.scrollModeEnabled
+                startHeldRemoteCommand(normalizedKey, "scroll-up")
+            else
+                sendRemoteCommand("history-forward")
+            end if
             scheduleFullscreenRefresh()
             return true
         end if
@@ -619,6 +654,12 @@ sub showFullscreen()
         m.bufferFullscreenPoster.uri = ""
     end if
     m.cursorMarker.visible = true
+    if m.fullscreenToastGroup <> invalid
+        m.fullscreenToastGroup.visible = false
+    end if
+    if m.fullscreenToastLabel <> invalid
+        m.fullscreenToastLabel.text = ""
+    end if
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
@@ -637,10 +678,12 @@ sub hideFullscreen()
     m.isFullscreen = false
     clearPendingEditableActivation()
     stopHeldDirection()
+    stopHeldRemoteCommand()
     stopFullscreenStream()
     stopPanelAudio()
     m.videoUsesStream = false
     m.videoStreamUrl = ""
+    m.scrollModeEnabled = false
     if m.fullscreenVideo <> invalid
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.content = invalid
@@ -649,9 +692,18 @@ sub hideFullscreen()
     if m.fullscreenVideoWatchTimer <> invalid
         m.fullscreenVideoWatchTimer.control = "stop"
     end if
+    if m.scrollModeToastTimer <> invalid
+        m.scrollModeToastTimer.control = "stop"
+    end if
     m.fullscreenPosterA.visible = false
     m.fullscreenPosterB.visible = false
     m.cursorMarker.visible = false
+    if m.fullscreenToastGroup <> invalid
+        m.fullscreenToastGroup.visible = false
+    end if
+    if m.fullscreenToastLabel <> invalid
+        m.fullscreenToastLabel.text = ""
+    end if
     m.titleLabel.visible = true
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
@@ -984,6 +1036,7 @@ sub moveCursor(command as string)
 end sub
 
 sub startHeldDirection(key as string)
+    stopHeldRemoteCommand()
     m.heldDirectionKey = key
     moveCursor(key)
     sendPointerCommand("move")
@@ -996,7 +1049,27 @@ end sub
 
 sub stopHeldDirection()
     m.heldDirectionKey = ""
+    if m.cursorMoveTimer <> invalid and m.heldRemoteCommand = ""
+        m.cursorMoveTimer.control = "stop"
+    end if
+end sub
+
+sub startHeldRemoteCommand(key as string, command as string)
+    stopHeldDirection()
+    m.heldRemoteKey = key
+    m.heldRemoteCommand = command
+    sendRemoteCommand(command)
+
     if m.cursorMoveTimer <> invalid
+        m.cursorMoveTimer.control = "stop"
+        m.cursorMoveTimer.control = "start"
+    end if
+end sub
+
+sub stopHeldRemoteCommand()
+    m.heldRemoteKey = ""
+    m.heldRemoteCommand = ""
+    if m.cursorMoveTimer <> invalid and m.heldDirectionKey = ""
         m.cursorMoveTimer.control = "stop"
     end if
 end sub
@@ -1004,15 +1077,20 @@ end sub
 sub onCursorMoveTimerFire()
     if not m.isFullscreen
         stopHeldDirection()
+        stopHeldRemoteCommand()
         return
     end if
 
-    if m.heldDirectionKey = ""
+    if m.heldDirectionKey <> ""
+        moveCursor(m.heldDirectionKey)
+        sendPointerCommand("move")
         return
     end if
 
-    moveCursor(m.heldDirectionKey)
-    sendPointerCommand("move")
+    if m.heldRemoteCommand <> ""
+        sendRemoteCommand(m.heldRemoteCommand)
+        scheduleFullscreenRefresh()
+    end if
 end sub
 
 sub updateCursorMarker()
@@ -1418,3 +1496,40 @@ end function
 function isOptionsKey(key as string) as boolean
     return key = "info" or key = "options"
 end function
+
+function isBlueKey(key as string) as boolean
+    return key = "blue"
+end function
+
+sub showScrollModeToast(message as string)
+    if m.fullscreenToastLabel <> invalid and m.isFullscreen
+        m.fullscreenToastLabel.text = message
+        if m.fullscreenToastGroup <> invalid
+            m.fullscreenToastGroup.visible = true
+        end if
+    else if m.statusLabel <> invalid
+        m.statusLabel.text = message
+        m.statusLabel.visible = true
+    else
+        return
+    end if
+
+    if m.scrollModeToastTimer <> invalid
+        m.scrollModeToastTimer.control = "stop"
+        m.scrollModeToastTimer.control = "start"
+    end if
+end sub
+
+sub onScrollModeToastTimerFire()
+    if m.isFullscreen
+        if m.fullscreenToastGroup <> invalid
+            m.fullscreenToastGroup.visible = false
+        end if
+        if m.fullscreenToastLabel <> invalid
+            m.fullscreenToastLabel.text = ""
+        end if
+        return
+    end if
+
+    refreshGrid()
+end sub
