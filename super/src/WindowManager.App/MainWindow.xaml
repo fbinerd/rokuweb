@@ -51,6 +51,16 @@
                         Height="34"
                         Margin="0,0,8,0"
                         Command="{Binding PowerOffConnectedRokusCommand}" />
+                <Button Content="Interromper transmissoes"
+                        Width="180"
+                        Height="34"
+                        Margin="0,0,8,0"
+                        Command="{Binding StopAllStreamTransmissionsCommand}" />
+                <Button Content="Liberar transmissoes"
+                        Width="160"
+                        Height="34"
+                        Margin="0,0,8,0"
+                        Command="{Binding ResumeAllStreamTransmissionsCommand}" />
                 <Button Content="Encerrar app"
                         Width="120"
                         Height="34"
@@ -274,6 +284,24 @@
 
                 <GroupBox Header="Atualizacoes" Margin="0,12,0,0">
                     <StackPanel Margin="12">
+                        <Border Margin="0,0,0,12"
+                                Padding="10"
+                                Background="#FFF8EEC7"
+                                BorderBrush="#F59E0B"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Visibility="{Binding IsCheckingForUpdates, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel>
+                                <TextBlock Text="Processando atualizacao..."
+                                           FontWeight="SemiBold" />
+                                <ProgressBar Margin="0,8,0,0"
+                                             Height="14"
+                                             IsIndeterminate="True" />
+                                <TextBlock Margin="0,8,0,0"
+                                           Text="{Binding UpdateStatusMessage}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                         <CheckBox Content="Baixar e aplicar atualizacoes automaticamente ao iniciar"
                                   IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}"
                                   IsEnabled="{Binding IsAutomaticUpdateToggleEnabled}" />

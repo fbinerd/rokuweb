@@ -142,6 +142,8 @@ public sealed class MainViewModel : ViewModelBase
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
         PowerOnConnectedRokusCommand = new AsyncRelayCommand(PowerOnConnectedRokusAsync);
         PowerOffConnectedRokusCommand = new AsyncRelayCommand(PowerOffConnectedRokusAsync);
+        StopAllStreamTransmissionsCommand = new AsyncRelayCommand(StopAllStreamTransmissionsAsync);
+        ResumeAllStreamTransmissionsCommand = new AsyncRelayCommand(ResumeAllStreamTransmissionsAsync);
         CreateSessionFromProfileCommand = new AsyncRelayCommand(CreateSessionFromProfileAsync, CanCreateSessionFromProfile);
         BindSelectedTargetToSessionCommand = new AsyncRelayCommand(BindSelectedTargetToSessionAsync, CanBindSelectedTargetToSession);
         UnbindSelectedTargetFromSessionCommand = new AsyncRelayCommand(UnbindSelectedTargetFromSessionAsync, CanBindSelectedTargetToSession);
@@ -217,6 +219,8 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
     public AsyncRelayCommand PowerOnConnectedRokusCommand { get; }
     public AsyncRelayCommand PowerOffConnectedRokusCommand { get; }
+    public AsyncRelayCommand StopAllStreamTransmissionsCommand { get; }
+    public AsyncRelayCommand ResumeAllStreamTransmissionsCommand { get; }
     public AsyncRelayCommand CreateSessionFromProfileCommand { get; }
     public AsyncRelayCommand BindSelectedTargetToSessionCommand { get; }
     public AsyncRelayCommand UnbindSelectedTargetFromSessionCommand { get; }
@@ -3566,6 +3570,56 @@ public sealed class MainViewModel : ViewModelBase
         _webRtcPublisherService.RequestStreamReload(windowId);
         StatusMessage = string.Format("Recarregamento do stream solicitado para '{0}'.", window.Title);
         return Task.CompletedTask;
+    }
+
+    private async Task StopAllStreamTransmissionsAsync()
+    {
+        foreach (var stream in WindowProfiles.ToList())
+        {
+            foreach (var item in stream.Windows.ToList())
+            {
+                item.IsEnabled = false;
+                item.IsPrimaryExclusive = false;
+                await ApplyStreamWindowRuntimeStateAsync(stream, item);
+            }
+        }
+
+        await SaveProfileInternalAsync(updateStatus: false);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+        StatusMessage = "Todas as transmissoes dos streams foram interrompidas.";
+    }
+
+    private async Task ResumeAllStreamTransmissionsAsync()
+    {
+        foreach (var stream in WindowProfiles.ToList())
+        {
+            var exclusiveItem = stream.Windows.FirstOrDefault(x => x.IsPrimaryExclusive);
+            if (exclusiveItem is not null)
+            {
+                foreach (var item in stream.Windows)
+                {
+                    item.IsEnabled = item.Id == exclusiveItem.Id;
+                }
+            }
+            else
+            {
+                foreach (var item in stream.Windows)
+                {
+                    item.IsEnabled = true;
+                }
+            }
+
+            foreach (var item in stream.Windows.ToList())
+            {
+                await ApplyStreamWindowRuntimeStateAsync(stream, item);
+            }
+        }
+
+        await SaveProfileInternalAsync(updateStatus: false);
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
+        StatusMessage = "Todas as transmissoes dos streams foram liberadas.";
     }
 
     private async Task EnsureStreamDisplayConnectedAsync(WindowProfileViewModel stream, bool forceNow)

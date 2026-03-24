@@ -267,9 +267,17 @@ public partial class MainWindow : Window
         }
 
         if (e.PropertyName == nameof(WindowProfileItemViewModel.Url) ||
-            e.PropertyName == nameof(WindowProfileItemViewModel.Nickname))
+            e.PropertyName == nameof(WindowProfileItemViewModel.Nickname) ||
+            e.PropertyName == nameof(WindowProfileItemViewModel.IsEnabled) ||
+            e.PropertyName == nameof(WindowProfileItemViewModel.IsPrimaryExclusive))
         {
             RefreshStreamDefinitionPreviewCardHeader(item);
+
+            var session = _viewModel.Windows.FirstOrDefault(x => x.Id == item.Id);
+            if (session is not null)
+            {
+                RefreshRuntimePreviewCardHeader(session);
+            }
         }
     }
 
