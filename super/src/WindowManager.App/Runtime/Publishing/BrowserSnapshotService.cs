@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Runtime.InteropServices;
 using WindowManager.App.Runtime;
 
 namespace WindowManager.App.Runtime.Publishing;
@@ -18,25 +19,36 @@ public sealed class BrowserSnapshotService
 {
     private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(140);
     private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(66);
+    private static readonly TimeSpan CaptureSourceLogInterval = TimeSpan.FromSeconds(5);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
     private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();
+    private readonly ConcurrentDictionary<Guid, CachedPaintFrame> _paintFrames = new ConcurrentDictionary<Guid, CachedPaintFrame>();
     private readonly ConcurrentDictionary<Guid, Task<byte[]?>> _captureTasks = new ConcurrentDictionary<Guid, Task<byte[]?>>();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _captureLoops = new ConcurrentDictionary<Guid, CancellationTokenSource>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
+    private readonly ConcurrentDictionary<Guid, CapturePathLogState> _capturePathLogStates = new ConcurrentDictionary<Guid, CapturePathLogState>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
     {
+        browser.Paint -= OnBrowserPaint;
+        browser.Paint += OnBrowserPaint;
         _browsers[windowId] = browser;
         _cachedFrames.TryRemove(windowId, out _);
+        _paintFrames.TryRemove(windowId, out _);
         StartCaptureLoop(windowId, browser);
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
     }
 
     public void Unregister(Guid windowId)
     {
-        _browsers.TryRemove(windowId, out _);
+        if (_browsers.TryRemove(windowId, out var browser))
+        {
+            browser.Paint -= OnBrowserPaint;
+        }
         _cachedFrames.TryRemove(windowId, out _);
+        _paintFrames.TryRemove(windowId, out _);
         _captureTasks.TryRemove(windowId, out _);
+        _capturePathLogStates.TryRemove(windowId, out _);
         if (_captureLoops.TryRemove(windowId, out var cancellation))
         {
             try
@@ -102,7 +114,20 @@ public sealed class BrowserSnapshotService
             cached.Bytes.Length > 0 &&
             DateTime.UtcNow - cached.CapturedAtUtc <= CachedFrameLifetime)
         {
+            LogCapturePath(windowId, "jpeg-cache", cached.Bytes.Length, 0, 0);
             return cached.Bytes;
+        }
+
+        if (_paintFrames.TryGetValue(windowId, out var paintFrame) &&
+            DateTime.UtcNow - paintFrame.CapturedAtUtc <= CachedFrameLifetime)
+        {
+            var jpegBytes = EncodePaintFrameToJpeg(paintFrame);
+            if (jpegBytes is not null && jpegBytes.Length > 0)
+            {
+                _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+                LogCapturePath(windowId, "paint", jpegBytes.Length, paintFrame.Width, paintFrame.Height);
+                return jpegBytes;
+            }
         }
 
         var captureTask = _captureTasks.GetOrAdd(windowId, _ => CaptureFreshJpegAsync(windowId, browser));
@@ -112,6 +137,7 @@ public sealed class BrowserSnapshotService
             if (jpegBytes is not null && jpegBytes.Length > 0)
             {
                 _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+                LogCapturePath(windowId, "render-target-fallback", jpegBytes.Length, 0, 0);
             }
             return jpegBytes;
         }
@@ -388,6 +414,105 @@ public sealed class BrowserSnapshotService
         }
     }
 
+    public async Task<BitmapSource?> CaptureBitmapSourceAsync(Guid windowId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_browsers.ContainsKey(windowId))
+        {
+            return null;
+        }
+
+        if (_paintFrames.TryGetValue(windowId, out var paintFrame) &&
+            DateTime.UtcNow - paintFrame.CapturedAtUtc <= CachedFrameLifetime)
+        {
+            var bitmap = CreateBitmapSourceFromPaintFrame(paintFrame);
+            if (bitmap is not null)
+            {
+                return bitmap;
+            }
+        }
+
+        var jpegBytes = await CaptureJpegAsync(windowId, cancellationToken).ConfigureAwait(false);
+        return jpegBytes is null || jpegBytes.Length == 0
+            ? null
+            : CreateBitmapSourceFromJpeg(jpegBytes);
+    }
+
+    private static byte[]? EncodePaintFrameToJpeg(CachedPaintFrame frame)
+    {
+        var bitmap = CreateBitmapSourceFromPaintFrame(frame);
+        if (bitmap is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var encoder = new JpegBitmapEncoder();
+            encoder.QualityLevel = 68;
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+
+            using (var stream = new MemoryStream())
+            {
+                encoder.Save(stream);
+                return stream.ToArray();
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static BitmapSource? CreateBitmapSourceFromPaintFrame(CachedPaintFrame frame)
+    {
+        if (frame.Bytes is null || frame.Bytes.Length == 0 || frame.Width <= 1 || frame.Height <= 1)
+        {
+            return null;
+        }
+
+        try
+        {
+            var stride = frame.Width * 4;
+            var bitmap = BitmapSource.Create(
+                frame.Width,
+                frame.Height,
+                96,
+                96,
+                PixelFormats.Bgra32,
+                null,
+                frame.Bytes,
+                stride);
+            bitmap.Freeze();
+            return bitmap;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static BitmapSource? CreateBitmapSourceFromJpeg(byte[] jpegBytes)
+    {
+        try
+        {
+            using var stream = new MemoryStream(jpegBytes);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void StartCaptureLoop(Guid windowId, ChromiumWebBrowser browser)
     {
         if (_captureLoops.TryRemove(windowId, out var existingCancellation))
@@ -419,6 +544,13 @@ public sealed class BrowserSnapshotService
                     break;
                 }
 
+                if (_paintFrames.TryGetValue(windowId, out var paintFrame) &&
+                    DateTime.UtcNow - paintFrame.CapturedAtUtc <= CachedFrameLifetime)
+                {
+                    await Task.Delay(BackgroundCaptureInterval, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 if (!_captureTasks.ContainsKey(windowId))
                 {
                     var jpegBytes = await CaptureFreshJpegAsync(windowId, browser).ConfigureAwait(false);
@@ -441,6 +573,77 @@ public sealed class BrowserSnapshotService
                 break;
             }
         }
+    }
+
+    private void OnBrowserPaint(object? sender, PaintEventArgs e)
+    {
+        if (sender is not ChromiumWebBrowser browser || e is null || e.IsPopup || e.Width <= 1 || e.Height <= 1)
+        {
+            return;
+        }
+
+        Guid? windowId = null;
+        foreach (var kvp in _browsers)
+        {
+            if (ReferenceEquals(kvp.Value, browser))
+            {
+                windowId = kvp.Key;
+                break;
+            }
+        }
+
+        if (!windowId.HasValue || e.Buffer == IntPtr.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            var byteCount = checked(e.Width * e.Height * 4);
+            var buffer = new byte[byteCount];
+            Marshal.Copy(e.Buffer, buffer, 0, byteCount);
+            _paintFrames[windowId.Value] = new CachedPaintFrame(buffer, e.Width, e.Height, DateTime.UtcNow);
+            _cachedFrames.TryRemove(windowId.Value, out _);
+            LogCapturePath(windowId.Value, "paint-buffer-updated", byteCount, e.Width, e.Height);
+        }
+        catch
+        {
+        }
+    }
+
+    private void LogCapturePath(Guid windowId, string source, int bytes, int width, int height)
+    {
+        var now = DateTime.UtcNow;
+        var state = _capturePathLogStates.GetOrAdd(windowId, _ => new CapturePathLogState());
+        var shouldLog = false;
+        var previousSource = state.LastSource;
+
+        lock (state.Sync)
+        {
+            if (!string.Equals(state.LastSource, source, StringComparison.Ordinal) ||
+                now - state.LastLoggedAtUtc >= CaptureSourceLogInterval)
+            {
+                state.LastSource = source;
+                state.LastLoggedAtUtc = now;
+                shouldLog = true;
+            }
+        }
+
+        if (!shouldLog)
+        {
+            return;
+        }
+
+        AppLog.Write(
+            "PreviewCapture",
+            string.Format(
+                "janela={0} origem={1} bytes={2} size={3}x{4} anterior={5}",
+                windowId.ToString("N"),
+                source,
+                bytes,
+                width,
+                height,
+                string.IsNullOrWhiteSpace(previousSource) ? "-" : previousSource));
     }
 
     private static void SendKey(IBrowserHost host, int keyCode)
@@ -879,6 +1082,25 @@ internal sealed class CachedJpegFrame
     public DateTime CapturedAtUtc { get; }
 }
 
+internal sealed class CachedPaintFrame
+{
+    public CachedPaintFrame(byte[] bytes, int width, int height, DateTime capturedAtUtc)
+    {
+        Bytes = bytes;
+        Width = width;
+        Height = height;
+        CapturedAtUtc = capturedAtUtc;
+    }
+
+    public byte[] Bytes { get; }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    public DateTime CapturedAtUtc { get; }
+}
+
  [DataContract]
 public sealed class RemoteCommandResult
 {
@@ -946,4 +1168,13 @@ public sealed class RemoteCursorState
     {
         return new MouseEvent(X, Y, CefEventFlags.None);
     }
+}
+
+internal sealed class CapturePathLogState
+{
+    public object Sync { get; } = new object();
+
+    public DateTime LastLoggedAtUtc { get; set; } = DateTime.MinValue;
+
+    public string LastSource { get; set; } = string.Empty;
 }

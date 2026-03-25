@@ -400,23 +400,14 @@ public partial class WindowProfileSetupDialog : Window
             return;
         }
 
-        var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(_activePreviewWindowId.Value, default);
-        if (jpegBytes is null || jpegBytes.Length == 0)
+        var bitmap = await _browserSnapshotService.CaptureBitmapSourceAsync(_activePreviewWindowId.Value, default);
+        if (bitmap is null)
         {
             return;
         }
 
-        using (var stream = new MemoryStream(jpegBytes))
-        {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.StreamSource = stream;
-            bitmap.EndInit();
-            bitmap.Freeze();
-            PreviewImage.Source = bitmap;
-            _expandedPreviewWindow?.UpdatePreview(bitmap, PreviewAddressText.Text, false);
-        }
+        PreviewImage.Source = bitmap;
+        _expandedPreviewWindow?.UpdatePreview(bitmap, PreviewAddressText.Text, false);
     }
 
     private void OpenExpandedPreview()

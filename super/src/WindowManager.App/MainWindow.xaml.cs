@@ -1878,13 +1878,12 @@ public partial class MainWindow : Window
         _browserSnapshotService.InvalidateCapture(windowId);
         await Task.Delay(80);
 
-        var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(windowId, default);
-        if (jpegBytes is null || jpegBytes.Length == 0)
+        var imageSource = await _browserSnapshotService.CaptureBitmapSourceAsync(windowId, default);
+        if (imageSource is null)
         {
             return;
         }
 
-        var imageSource = CreateImageSource(jpegBytes);
         ExpandedPreviewImage.Source = imageSource;
 
         if (_previewImages.TryGetValue(windowId, out var runtimeImage))
@@ -2019,13 +2018,12 @@ public partial class MainWindow : Window
         {
             foreach (var session in _viewModel.Windows.ToArray())
             {
-                var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(session.Id, default);
-                if (jpegBytes is null || jpegBytes.Length == 0)
+                var imageSource = await _browserSnapshotService.CaptureBitmapSourceAsync(session.Id, default);
+                if (imageSource is null)
                 {
                     continue;
                 }
 
-                var imageSource = CreateImageSource(jpegBytes);
                 if (_previewImages.TryGetValue(session.Id, out var image))
                 {
                     image.Source = imageSource;
@@ -2039,13 +2037,12 @@ public partial class MainWindow : Window
 
             foreach (var itemId in _streamDefinitionPreviewImages.Keys.ToArray())
             {
-                var jpegBytes = await _browserSnapshotService.CaptureJpegAsync(itemId, default);
-                if (jpegBytes is null || jpegBytes.Length == 0)
+                var imageSource = await _browserSnapshotService.CaptureBitmapSourceAsync(itemId, default);
+                if (imageSource is null)
                 {
                     continue;
                 }
 
-                var imageSource = CreateImageSource(jpegBytes);
                 if (_streamDefinitionPreviewImages.TryGetValue(itemId, out var image))
                 {
                     image.Source = imageSource;
@@ -2061,19 +2058,6 @@ public partial class MainWindow : Window
         {
             _isRefreshingPreviews = false;
         }
-    }
-
-    private static BitmapImage CreateImageSource(byte[] jpegBytes)
-    {
-        using var stream = new MemoryStream(jpegBytes);
-        var image = new BitmapImage();
-        image.BeginInit();
-        image.CacheOption = BitmapCacheOption.OnLoad;
-        image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-        image.StreamSource = stream;
-        image.EndInit();
-        image.Freeze();
-        return image;
     }
 
     private static bool IsTextProducingKey(Key key)

@@ -13,9 +13,9 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelRollingHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(2000);
-    private const int PlaylistSize = 4;
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(1.0);
+    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(1000);
+    private const int PlaylistSize = 6;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
     private readonly BrowserSnapshotService _snapshotService;
@@ -183,6 +183,12 @@ public sealed class BrowserPanelRollingHlsService
 
     private sealed class WindowRollingStream : IDisposable
     {
+        private static readonly EncodingProfile[] EncodingProfiles = new[]
+        {
+            new EncodingProfile("high", 6, 700, 850, 1200, "960:540"),
+            new EncodingProfile("medium", 5, 500, 650, 900, "854:480"),
+            new EncodingProfile("low", 4, 320, 420, 600, "640:360")
+        };
         private readonly object _gate = new();
         private readonly Guid _windowId;
         private readonly List<SegmentEntry> _segments = new();
@@ -191,6 +197,9 @@ public sealed class BrowserPanelRollingHlsService
         private DateTime _lastTouchedUtc;
         private int _sequence;
         private bool _loggedPlaylistReady;
+        private int _profileIndex = 1;
+        private int _slowSegmentStreak;
+        private int _fastSegmentStreak;
 
         public WindowRollingStream(Guid windowId, string outputDirectory)
         {
@@ -252,6 +261,7 @@ public sealed class BrowserPanelRollingHlsService
         {
             while (!cancellationToken.IsCancellationRequested)
             {
+                var cycleStartedAtUtc = DateTime.UtcNow;
                 try
                 {
                     if (DateTime.UtcNow - _lastTouchedUtc > TimeSpan.FromMinutes(5))
@@ -260,32 +270,33 @@ public sealed class BrowserPanelRollingHlsService
                         continue;
                     }
 
-                    var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
+                    var framePaths = await CaptureFrameSequenceAsync(snapshotService, cancellationToken).ConfigureAwait(false);
                     var wavBytes = UseSyntheticAudio
                         ? BuildSineWaveSnapshot()
                         : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
-                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
+                    if (framePaths.Count == 0 || wavBytes is null || wavBytes.Length < 4096)
                     {
+                        DeleteFiles(framePaths);
                         await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
                     var nextSequence = Interlocked.Increment(ref _sequence);
-                    var imagePath = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}.jpg");
+                    var profile = EncodingProfiles[_profileIndex];
                     var audioPath = Path.Combine(OutputDirectory, $"audio-{nextSequence:D6}.wav");
                     var segmentFileName = $"segment-{nextSequence:D6}.ts";
                     var segmentPath = Path.Combine(OutputDirectory, segmentFileName);
+                    var segmentFramePattern = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}-%03d.jpg");
 
-                    File.WriteAllBytes(imagePath, jpegBytes);
                     File.WriteAllBytes(audioPath, wavBytes);
+                    for (var index = 0; index < framePaths.Count; index++)
+                    {
+                        var targetPath = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}-{index:D3}.jpg");
+                        File.Copy(framePaths[index], targetPath, true);
+                    }
 
-                    var arguments = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
-                        imagePath,
-                        audioPath,
-                        SegmentDuration.TotalSeconds,
-                        segmentPath);
+                    var arguments = BuildFfmpegArguments(profile, segmentFramePattern, audioPath, segmentPath);
+                    var stopwatch = Stopwatch.StartNew();
 
                     using var process = Process.Start(new ProcessStartInfo
                     {
@@ -304,10 +315,13 @@ public sealed class BrowserPanelRollingHlsService
                     }
 
                     await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
+                    stopwatch.Stop();
                     if (process.ExitCode == 0 && File.Exists(segmentPath))
                     {
                         RegisterSegment(new SegmentEntry(segmentFileName, SegmentDuration));
                         WritePlaylist();
+                        AppLog.Write("PanelRollingHls", $"Segmento com movimento gerado: janela={_windowId:N}, seq={nextSequence}, frames={framePaths.Count}, perfil={profile.Name}, buildMs={(int)stopwatch.Elapsed.TotalMilliseconds}");
+                        UpdateAdaptiveProfile(stopwatch.Elapsed);
                         if (!_loggedPlaylistReady)
                         {
                             _loggedPlaylistReady = true;
@@ -320,8 +334,12 @@ public sealed class BrowserPanelRollingHlsService
                         AppLog.Write("PanelRollingHls", $"ffmpeg falhou na janela {_windowId:N}: {error}");
                     }
 
-                    TryDelete(imagePath);
                     TryDelete(audioPath);
+                    DeleteFiles(framePaths);
+                    foreach (var generatedFrame in Directory.GetFiles(OutputDirectory, $"frame-{nextSequence:D6}-*.jpg"))
+                    {
+                        TryDelete(generatedFrame);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -332,7 +350,100 @@ public sealed class BrowserPanelRollingHlsService
                     AppLog.Write("PanelRollingHls", $"Erro no gerador rolling HLS da janela {_windowId:N}: {ex.Message}");
                 }
 
-                await Task.Delay(SegmentInterval, cancellationToken).ConfigureAwait(false);
+                var remainingDelay = SegmentInterval - (DateTime.UtcNow - cycleStartedAtUtc);
+                if (remainingDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(remainingDelay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private async Task<List<string>> CaptureFrameSequenceAsync(BrowserSnapshotService snapshotService, CancellationToken cancellationToken)
+        {
+            var frames = new List<string>();
+            var frameRate = EncodingProfiles[_profileIndex].FrameRate;
+            var frameCount = Math.Max(2, Math.Min(6, (int)Math.Round(SegmentDuration.TotalSeconds * frameRate)));
+            var frameStep = TimeSpan.FromMilliseconds(SegmentDuration.TotalMilliseconds / frameCount);
+
+            for (var index = 0; index < frameCount; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
+                if (jpegBytes is not null && jpegBytes.Length >= 1024)
+                {
+                    var framePath = Path.Combine(OutputDirectory, $"capture-{_windowId:N}-{Guid.NewGuid():N}-{index:D3}.jpg");
+                    File.WriteAllBytes(framePath, jpegBytes);
+                    frames.Add(framePath);
+                }
+
+                if (index + 1 < frameCount)
+                {
+                    await Task.Delay(frameStep, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return frames;
+        }
+
+        private string BuildFfmpegArguments(EncodingProfile profile, string segmentFramePattern, string audioPath, string segmentPath)
+        {
+            var gop = profile.FrameRate * 2;
+            var scaleFilter = string.IsNullOrWhiteSpace(profile.Scale)
+                ? string.Empty
+                : string.Format(CultureInfo.InvariantCulture, " -vf \"scale={0}:flags=lanczos\"", profile.Scale);
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "-hide_banner -loglevel error -y -framerate {0} -start_number 0 -i \"{1}\" -i \"{2}\" -map 0:v:0 -map 1:a:0 -t {3:0.###} -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline -level 3.1 -pix_fmt yuv420p{4} -b:v {5}k -maxrate {6}k -bufsize {7}k -g {8} -keyint_min {8} -sc_threshold 0 -threads 2 -c:a aac -b:a 96k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{9}\"",
+                profile.FrameRate,
+                segmentFramePattern,
+                audioPath,
+                SegmentDuration.TotalSeconds,
+                scaleFilter,
+                profile.VideoBitrateKbps,
+                profile.MaxRateKbps,
+                profile.BufferSizeKbps,
+                gop,
+                segmentPath);
+        }
+
+        private void UpdateAdaptiveProfile(TimeSpan buildElapsed)
+        {
+            var slowThreshold = TimeSpan.FromMilliseconds(SegmentInterval.TotalMilliseconds * 0.7);
+            var fastThreshold = TimeSpan.FromMilliseconds(SegmentInterval.TotalMilliseconds * 0.35);
+
+            if (buildElapsed >= slowThreshold)
+            {
+                _slowSegmentStreak++;
+                _fastSegmentStreak = 0;
+            }
+            else if (buildElapsed <= fastThreshold)
+            {
+                _fastSegmentStreak++;
+                _slowSegmentStreak = 0;
+            }
+            else
+            {
+                _slowSegmentStreak = 0;
+                _fastSegmentStreak = 0;
+            }
+
+            if (_slowSegmentStreak >= 2 && _profileIndex < EncodingProfiles.Length - 1)
+            {
+                _profileIndex++;
+                _slowSegmentStreak = 0;
+                _fastSegmentStreak = 0;
+                AppLog.Write("PanelRollingHls", $"Perfil adaptativo reduzido: janela={_windowId:N}, perfil={EncodingProfiles[_profileIndex].Name}");
+                return;
+            }
+
+            if (_fastSegmentStreak >= 6 && _profileIndex > 0)
+            {
+                _profileIndex--;
+                _slowSegmentStreak = 0;
+                _fastSegmentStreak = 0;
+                AppLog.Write("PanelRollingHls", $"Perfil adaptativo elevado: janela={_windowId:N}, perfil={EncodingProfiles[_profileIndex].Name}");
             }
         }
 
@@ -422,6 +533,14 @@ public sealed class BrowserPanelRollingHlsService
             {
             }
         }
+
+        private static void DeleteFiles(IEnumerable<string> paths)
+        {
+            foreach (var path in paths)
+            {
+                TryDelete(path);
+            }
+        }
     }
 
     private sealed class SegmentEntry
@@ -435,6 +554,72 @@ public sealed class BrowserPanelRollingHlsService
         public string FileName { get; }
 
         public TimeSpan Duration { get; }
+    }
+
+    private sealed class FfmpegStreamSession : IDisposable
+    {
+        private readonly Process _process;
+
+        public FfmpegStreamSession(Process process)
+        {
+            _process = process;
+            InputStream = process.StandardInput.BaseStream;
+        }
+
+        public Stream InputStream { get; }
+
+        public bool IsRunning => !_process.HasExited;
+
+        public int ExitCode => _process.HasExited ? _process.ExitCode : 0;
+
+        public void Dispose()
+        {
+            try
+            {
+                InputStream.Dispose();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (!_process.HasExited)
+                {
+                    _process.Kill();
+                }
+            }
+            catch
+            {
+            }
+
+            _process.Dispose();
+        }
+    }
+
+    private sealed class EncodingProfile
+    {
+        public EncodingProfile(string name, int frameRate, int videoBitrateKbps, int maxRateKbps, int bufferSizeKbps, string scale)
+        {
+            Name = name;
+            FrameRate = frameRate;
+            VideoBitrateKbps = videoBitrateKbps;
+            MaxRateKbps = maxRateKbps;
+            BufferSizeKbps = bufferSizeKbps;
+            Scale = scale;
+        }
+
+        public string Name { get; }
+
+        public int FrameRate { get; }
+
+        public int VideoBitrateKbps { get; }
+
+        public int MaxRateKbps { get; }
+
+        public int BufferSizeKbps { get; }
+
+        public string Scale { get; }
     }
 
     private static byte[] BuildSineWaveSnapshot()

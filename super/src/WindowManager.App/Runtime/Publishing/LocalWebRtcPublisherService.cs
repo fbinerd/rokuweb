@@ -1386,13 +1386,10 @@ public sealed class LocalWebRtcPublisherService
 
     private static bool ShouldAutoSideloadOnRegistration(string expectedVersion)
     {
-        if (string.IsNullOrWhiteSpace(expectedVersion))
-        {
-            return false;
-        }
-
-        var currentChannel = UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel);
-        return !string.Equals(currentChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
+        // Test branch: keep mismatch detection visible in logs, but never enqueue
+        // automatic sideload on registration. We use manual sideload while tuning
+        // video fluency to avoid background deploy noise during playback tests.
+        return false;
     }
 
     private static string TryReadLocalRokuPackageReleaseId()
