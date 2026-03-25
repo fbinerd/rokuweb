@@ -681,21 +681,25 @@ public sealed class MainViewModel : ViewModelBase
             throw new FileNotFoundException("Nao foi possivel localizar o backup informado.", sourceZipPath);
         }
 
+        // Lê os perfis do backup zip sem sobrescrever arquivos diretamente
         var imported = LoadProfilesFromBackup(sourceZipPath);
         if (imported.Profiles.Count == 0)
         {
             throw new InvalidOperationException("O backup nao contem nenhum perfil valido para restauracao.");
         }
 
+        // Limpa runtime e base local, mas não sobrescreve arquivos de perfil existentes
         await ResetRuntimeStateAsync();
         await _appDataMaintenanceService.ResetAsync(CancellationToken.None);
 
+        // Migra e salva cada perfil individualmente
         foreach (var profile in imported.Profiles)
         {
             AppProfileMigrator.Migrate(profile);
             await _profileStore.SaveAsync(profile, CancellationToken.None);
         }
 
+        // Define perfil padrão e de inicialização, se existirem
         if (!string.IsNullOrWhiteSpace(imported.DefaultProfileName))
         {
             await _profileStore.SetDefaultProfileNameAsync(imported.DefaultProfileName, CancellationToken.None);
