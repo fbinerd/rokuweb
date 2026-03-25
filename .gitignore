@@ -22,3 +22,5 @@ local-roku.zip
 .codex-publish-stable-*/
 tools/ffmpeg/_download/
 tools/ffmpeg/*.exe
+tools/yt-dlp/*.exe
+

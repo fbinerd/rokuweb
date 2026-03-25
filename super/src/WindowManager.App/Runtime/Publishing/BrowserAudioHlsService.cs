@@ -246,7 +246,7 @@ public sealed class BrowserAudioHlsService
                         continue;
                     }
 
-                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, TimeSpan.FromSeconds(6));
+                    var wavBytes = audioCaptureService.CaptureWaveSnapshot(_windowId, TimeSpan.FromSeconds(9));
                     if (wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(700), cancellationToken).ConfigureAwait(false);
@@ -266,7 +266,7 @@ public sealed class BrowserAudioHlsService
                     var arguments =
                         string.Format(
                             CultureInfo.InvariantCulture,
-                            "-hide_banner -loglevel error -y -i \"{0}\" -vn -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time 2 -hls_list_size 3 -hls_flags delete_segments+omit_endlist+independent_segments -hls_segment_filename \"{1}\" \"{2}\"",
+                            "-hide_banner -loglevel error -y -i \"{0}\" -vn -c:a aac -b:a 128k -ar 44100 -ac 2 -f hls -hls_time 2 -hls_list_size 4 -hls_flags delete_segments+omit_endlist+independent_segments -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -hls_segment_filename \"{1}\" \"{2}\"",
                             inputPath,
                             segmentPattern,
                             playlistPath);
