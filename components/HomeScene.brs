@@ -1016,6 +1016,10 @@ sub playLegacyPanelAudioChunk()
         m.audioPlayer.Stop()
     end if
     m.audioPlayer = CreateObject("roAudioPlayer")
+    if m.audioPlayer = invalid or m.audioPlayer.SetLoop = invalid
+        m.statusLabel.text = "Falha ao criar roAudioPlayer (thread errada?)"
+        return
+    end if
     m.audioPlayer.SetLoop(false)
     m.audioPlayer.AddContent(audioItem)
     m.audioPlayer.Play()
