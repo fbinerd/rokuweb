@@ -13,8 +13,8 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelRollingHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(2000);
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(1.0);
+    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(900);
     private const int PlaylistSize = 4;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
@@ -83,6 +83,24 @@ public sealed class BrowserPanelRollingHlsService
         }
 
         path = Path.Combine(stream.OutputDirectory, "index.m3u8");
+        return File.Exists(path);
+    }
+
+    public bool TryGetMasterPlaylistPath(Guid windowId, out string path)
+    {
+        path = string.Empty;
+        if (!IsAvailable)
+        {
+            return false;
+        }
+
+        EnsureWindow(windowId);
+        if (!_streams.TryGetValue(windowId, out var stream))
+        {
+            return false;
+        }
+
+        path = Path.Combine(stream.OutputDirectory, "master.m3u8");
         return File.Exists(path);
     }
 
@@ -368,6 +386,7 @@ public sealed class BrowserPanelRollingHlsService
             var builder = new StringBuilder();
             builder.AppendLine("#EXTM3U");
             builder.AppendLine("#EXT-X-VERSION:3");
+            builder.AppendLine("#EXT-X-INDEPENDENT-SEGMENTS");
             builder.AppendLine("#EXT-X-TARGETDURATION:" + targetDuration.ToString(CultureInfo.InvariantCulture));
             builder.AppendLine("#EXT-X-MEDIA-SEQUENCE:" + firstSequence.ToString(CultureInfo.InvariantCulture));
 
@@ -378,6 +397,18 @@ public sealed class BrowserPanelRollingHlsService
             }
 
             File.WriteAllText(Path.Combine(OutputDirectory, "index.m3u8"), builder.ToString(), Encoding.ASCII);
+            WriteMasterPlaylist();
+        }
+
+        private void WriteMasterPlaylist()
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("#EXTM3U");
+            builder.AppendLine("#EXT-X-VERSION:3");
+            builder.AppendLine("#EXT-X-INDEPENDENT-SEGMENTS");
+            builder.AppendLine("#EXT-X-STREAM-INF:BANDWIDTH=768000,CODECS=\"mp4a.40.2,avc1.42E01E\",RESOLUTION=1280x720,FRAME-RATE=24,CLOSED-CAPTIONS=NONE");
+            builder.AppendLine("index.m3u8");
+            File.WriteAllText(Path.Combine(OutputDirectory, "master.m3u8"), builder.ToString(), Encoding.ASCII);
         }
 
         public void Dispose()

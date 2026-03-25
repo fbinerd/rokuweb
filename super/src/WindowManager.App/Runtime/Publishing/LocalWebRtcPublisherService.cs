@@ -1009,6 +1009,19 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Janela HLS do painel invalida.", "text/plain; charset=utf-8");
         }
 
+        if (string.Equals(filePart, "master.m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_browserPanelRollingHlsService.TryGetMasterPlaylistPath(windowId, out var masterPlaylistPath))
+            {
+                MaybeLogPanelHlsServe(windowId, filePart, false);
+                return BuildHttpResponse(404, "Master playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var playlistText = File.ReadAllText(masterPlaylistPath);
+            MaybeLogPanelHlsServe(windowId, filePart, true);
+            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+        }
+
         if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
         {
             if (!_browserPanelRollingHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
@@ -1284,7 +1297,7 @@ public sealed class LocalWebRtcPublisherService
             ? reloadVersion
             : 0;
         var unifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
-            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
+            ? string.Format("http://{0}:{1}/panel-roll/{2}/master.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
             : string.Empty;
 
         return new BridgeWindowSnapshot
@@ -1298,10 +1311,12 @@ public sealed class LocalWebRtcPublisherService
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = _browserAudioHlsService.IsAvailable
-                ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
-                : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id),
+            AudioStreamUrl = string.IsNullOrWhiteSpace(unifiedPanelStreamUrl)
+                ? (_browserAudioHlsService.IsAvailable
+                    ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+                    : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")))
+                : string.Empty,
+            AudioAvailable = string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) && _browserAudioCaptureService.HasRecentAudio(window.Id),
             ProfileName = window.ProfileName ?? string.Empty,
             ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
             ActiveSessionName = window.ActiveSessionName ?? string.Empty,
