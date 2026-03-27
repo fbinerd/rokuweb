@@ -18,6 +18,8 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class LocalWebRtcPublisherService
 {
+    private const string InteractionStreamingMode = "Interacao";
+    private const string VideoStreamingMode = "Video";
     private static readonly HttpClient DeviceProbeHttpClient = new HttpClient
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -26,6 +28,7 @@ public sealed class LocalWebRtcPublisherService
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly BrowserAudioHlsService _browserAudioHlsService;
+    private readonly BrowserPanelInteractionHlsService _browserPanelInteractionHlsService;
     private readonly BrowserPanelRollingHlsService _browserPanelRollingHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
@@ -39,16 +42,19 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsRequestUtcByDisplay = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, int> _streamReloadVersions = new ConcurrentDictionary<Guid, int>();
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastInteractionReloadUtc = new ConcurrentDictionary<Guid, DateTime>();
+    private static readonly TimeSpan InteractionReloadDebounce = TimeSpan.FromMilliseconds(700);
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, BrowserPanelInteractionHlsService browserPanelInteractionHlsService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _browserAudioCaptureService = browserAudioCaptureService;
         _browserAudioHlsService = browserAudioHlsService;
+        _browserPanelInteractionHlsService = browserPanelInteractionHlsService;
         _browserPanelRollingHlsService = browserPanelRollingHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
@@ -553,8 +559,18 @@ public sealed class LocalWebRtcPublisherService
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
+            var streamingMode = NormalizeStreamingMode(window.StreamingMode);
             _browserAudioHlsService.EnsureWindow(window.Id);
-            _browserPanelRollingHlsService.EnsureWindow(window.Id);
+            if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+            {
+                _browserPanelInteractionHlsService.EnsureWindow(window.Id);
+                _browserPanelRollingHlsService.Unregister(window.Id);
+            }
+            else
+            {
+                _browserPanelRollingHlsService.EnsureWindow(window.Id);
+                _browserPanelInteractionHlsService.Unregister(window.Id);
+            }
             var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
@@ -566,6 +582,7 @@ public sealed class LocalWebRtcPublisherService
             {
                 _windowSnapshots.TryRemove(existingId, out _);
                 _browserAudioHlsService.Unregister(existingId);
+                _browserPanelInteractionHlsService.Unregister(existingId);
                 _browserPanelRollingHlsService.Unregister(existingId);
             }
         }
@@ -706,6 +723,18 @@ public sealed class LocalWebRtcPublisherService
                 }
 
                 var panelHlsResponseBytes = await BuildPanelHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (normalizedPath.StartsWith("/panel-interaction/", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(remoteAddress))
+                {
+                    _lastPanelHlsRequestUtcByDisplay[remoteAddress] = DateTime.UtcNow;
+                }
+
+                var panelHlsResponseBytes = await BuildPanelInteractionHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
                 await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -1038,8 +1067,100 @@ public sealed class LocalWebRtcPublisherService
 
         var result = await _browserSnapshotService.SendRemoteCommandAsync(windowId, command, x, y, text, cancellationToken);
         AppLog.Write("RokuControl", string.Format("/api/control => janela={0}, comando={1}, x={2}, y={3}, ok={4}, editable={5}", windowId.ToString("N"), command, x, y, result.Ok, result.Editable));
+        MaybeRequestInteractionReload(windowId, command, result);
         var body = SerializeJson(result);
         return BuildHttpResponse(result.Ok ? 200 : 404, body, "application/json; charset=utf-8");
+    }
+
+    private void MaybeRequestInteractionReload(Guid windowId, string command, RemoteCommandResult result)
+    {
+        if (!result.Ok)
+        {
+            return;
+        }
+
+        if (!IsVideoStreamingMode(windowId))
+        {
+            return;
+        }
+
+        if (!ShouldReloadAfterControl(command))
+        {
+            return;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var shouldReload = false;
+
+        _lastInteractionReloadUtc.AddOrUpdate(
+            windowId,
+            _ =>
+            {
+                shouldReload = true;
+                return nowUtc;
+            },
+            (_, previousUtc) =>
+            {
+                if (nowUtc - previousUtc >= InteractionReloadDebounce)
+                {
+                    shouldReload = true;
+                    return nowUtc;
+                }
+
+                return previousUtc;
+            });
+
+        if (!shouldReload)
+        {
+            return;
+        }
+
+        AppLog.Write(
+            "RokuControl",
+            string.Format(
+                "Recarregamento rapido do stream solicitado apos comando interativo: janela={0}, comando={1}",
+                windowId.ToString("N"),
+                command ?? string.Empty));
+        RequestStreamReload(windowId);
+    }
+
+    private static bool ShouldReloadAfterControl(string command)
+    {
+        switch ((command ?? string.Empty).Trim().ToLowerInvariant())
+        {
+            case "click":
+            case "ok":
+            case "select":
+            case "set-text":
+            case "back":
+            case "reload":
+            case "history-back":
+            case "history-forward":
+            case "scroll-up":
+            case "scroll-down":
+            case "media-seek-backward":
+            case "media-seek-forward":
+            case "enter":
+            case "media-play-pause":
+            case "play":
+            case "tab":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool IsVideoStreamingMode(Guid windowId)
+    {
+        if (_windowSnapshots.TryGetValue(windowId, out var snapshot))
+        {
+            return string.Equals(
+                NormalizeStreamingMode(snapshot.StreamingMode),
+                VideoStreamingMode,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private async Task<byte[]> BuildThumbnailResponseAsync(string normalizedPath, CancellationToken cancellationToken)
@@ -1122,14 +1243,20 @@ public sealed class LocalWebRtcPublisherService
 
         if (filePart.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
         {
+            var requestedPlaylist = filePart;
+            if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+            {
+                filePart = "medium.m3u8";
+            }
+
             if (!_browserPanelRollingHlsService.TryGetOutputFilePath(windowId, filePart, out var playlistPath))
             {
-                MaybeLogPanelHlsServe(windowId, filePart, false);
+                MaybeLogPanelHlsServe(windowId, requestedPlaylist, false);
                 return BuildHttpResponse(404, "Playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
             }
 
             var playlistText = File.ReadAllText(playlistPath);
-            MaybeLogPanelHlsServe(windowId, filePart, true);
+            MaybeLogPanelHlsServe(windowId, requestedPlaylist, true);
             return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
         }
 
@@ -1137,6 +1264,49 @@ public sealed class LocalWebRtcPublisherService
         {
             MaybeLogPanelHlsServe(windowId, filePart, false);
             return BuildHttpResponse(404, "Segmento HLS do painel indisponivel.", "text/plain; charset=utf-8");
+        }
+
+        var segmentBytes = File.ReadAllBytes(segmentPath);
+        MaybeLogPanelHlsServe(windowId, filePart, true);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
+    private async Task<byte[]> BuildPanelInteractionHlsResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/panel-interaction/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Playlist HLS de interacao do painel nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Janela HLS de interacao invalida.", "text/plain; charset=utf-8");
+        }
+
+        if (filePart.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase) ||
+                !_browserPanelInteractionHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            {
+                MaybeLogPanelHlsServe(windowId, filePart, false);
+                return BuildHttpResponse(404, "Playlist HLS de interacao indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            var playlistText = File.ReadAllText(playlistPath);
+            MaybeLogPanelHlsServe(windowId, filePart, true);
+            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserPanelInteractionHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        {
+            MaybeLogPanelHlsServe(windowId, filePart, false);
+            return BuildHttpResponse(404, "Segmento HLS de interacao indisponivel.", "text/plain; charset=utf-8");
         }
 
         var segmentBytes = File.ReadAllBytes(segmentPath);
@@ -1325,6 +1495,14 @@ public sealed class LocalWebRtcPublisherService
             return resolvedWindows;
         }
 
+        var hasInteractionModeWindow = resolvedWindows.Any(x =>
+            string.Equals(NormalizeStreamingMode(x.StreamingMode), InteractionStreamingMode, StringComparison.OrdinalIgnoreCase));
+
+        if (hasInteractionModeWindow)
+        {
+            return resolvedWindows;
+        }
+
         AppLog.Write(
             "RokuDeploy",
             string.Format(
@@ -1403,20 +1581,53 @@ public sealed class LocalWebRtcPublisherService
 
     private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
     {
+        var streamingMode = NormalizeStreamingMode(window.StreamingMode);
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
         var streamReloadVersion = _streamReloadVersions.TryGetValue(window.Id, out var reloadVersion)
             ? reloadVersion
             : 0;
-        var candidateUnifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
-            ? string.Format("http://{0}:{1}/panel-roll/{2}/master.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
-            : string.Empty;
-        var panelHlsReady =
-            _browserPanelRollingHlsService.IsAvailable &&
-            _browserPanelRollingHlsService.TryGetMasterPlaylistPath(window.Id, out _) &&
-            _browserPanelRollingHlsService.TryGetPlaylistPath(window.Id, out _);
-        var unifiedPanelStreamUrl = panelHlsReady ? candidateUnifiedPanelStreamUrl : string.Empty;
+
+        string unifiedPanelStreamUrl;
+        bool panelHlsReady;
+
+        if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+        {
+            unifiedPanelStreamUrl = _browserPanelInteractionHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
+                : string.Empty;
+            panelHlsReady =
+                _browserPanelInteractionHlsService.IsAvailable &&
+                _browserPanelInteractionHlsService.TryGetPlaylistPath(window.Id, out _);
+            if (!panelHlsReady)
+            {
+                unifiedPanelStreamUrl = string.Empty;
+            }
+        }
+        else
+        {
+            var candidateUnifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/panel-roll/{2}/master.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
+                : string.Empty;
+            panelHlsReady =
+                _browserPanelRollingHlsService.IsAvailable &&
+                _browserPanelRollingHlsService.TryGetMasterPlaylistPath(window.Id, out _) &&
+                _browserPanelRollingHlsService.TryGetPlaylistPath(window.Id, out _);
+            unifiedPanelStreamUrl = panelHlsReady ? candidateUnifiedPanelStreamUrl : string.Empty;
+        }
+
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Bridge snapshot => janela={0}, modo={1}, stream={2}, autoFullscreen={3}, hlsReady={4}",
+                window.Id.ToString("N"),
+                streamingMode,
+                string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? "<sem-stream>" : unifiedPanelStreamUrl,
+                string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase)
+                    ? window.IsPrimaryExclusive
+                    : window.IsPrimaryExclusive && panelHlsReady,
+                panelHlsReady));
 
         return new BridgeWindowSnapshot
         {
@@ -1438,7 +1649,10 @@ public sealed class LocalWebRtcPublisherService
             ProfileName = window.ProfileName ?? string.Empty,
             ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
             ActiveSessionName = window.ActiveSessionName ?? string.Empty,
-            AutoOpenFullscreen = window.IsPrimaryExclusive && panelHlsReady,
+            StreamingMode = streamingMode,
+            AutoOpenFullscreen = string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase)
+                ? window.IsPrimaryExclusive
+                : window.IsPrimaryExclusive && panelHlsReady,
             AssignedDisplayId = window.AssignedTarget?.Id.ToString("N") ?? string.Empty,
             AssignedDisplayName = window.AssignedTarget?.Name ?? string.Empty,
             AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty
@@ -1656,6 +1870,13 @@ public sealed class LocalWebRtcPublisherService
         return !string.IsNullOrWhiteSpace(display.DeviceId) &&
                display.DeviceId.StartsWith("roku-", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string NormalizeStreamingMode(string? value)
+    {
+        return string.Equals((value ?? string.Empty).Trim(), VideoStreamingMode, StringComparison.OrdinalIgnoreCase)
+            ? VideoStreamingMode
+            : InteractionStreamingMode;
+    }
 }
 
 [DataContract]
@@ -1719,16 +1940,19 @@ public sealed class BridgeWindowSnapshot
     [DataMember(Name = "activeSessionName", Order = 14)]
     public string ActiveSessionName { get; set; } = string.Empty;
 
-    [DataMember(Name = "autoOpenFullscreen", Order = 15)]
+    [DataMember(Name = "streamingMode", Order = 15)]
+    public string StreamingMode { get; set; } = "Interacao";
+
+    [DataMember(Name = "autoOpenFullscreen", Order = 16)]
     public bool AutoOpenFullscreen { get; set; }
 
-    [DataMember(Name = "assignedDisplayId", Order = 16)]
+    [DataMember(Name = "assignedDisplayId", Order = 17)]
     public string AssignedDisplayId { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayName", Order = 17)]
+    [DataMember(Name = "assignedDisplayName", Order = 18)]
     public string AssignedDisplayName { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayAddress", Order = 18)]
+    [DataMember(Name = "assignedDisplayAddress", Order = 19)]
     public string AssignedDisplayAddress { get; set; } = string.Empty;
 }
 

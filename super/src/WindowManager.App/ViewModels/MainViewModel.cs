@@ -1086,7 +1086,8 @@ public sealed class MainViewModel : ViewModelBase
                 Url = window.Url,
                 IsEnabled = window.IsEnabled,
                 IsPrimaryExclusive = window.IsPrimaryExclusive,
-                IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
             })
             .ToList();
 
@@ -1101,12 +1102,26 @@ public sealed class MainViewModel : ViewModelBase
                     x.Url,
                     IsEnabled = x.Id == exclusiveWindow.Id,
                     IsPrimaryExclusive = x.Id == exclusiveWindow.Id,
-                    x.IsNavigationBarEnabled
+                    x.IsNavigationBarEnabled,
+                    x.StreamingMode
                 })
                 .ToList();
         }
 
         var desiredWindowIds = desiredWindows.Select(x => x.Id).ToHashSet();
+        var streamingModeChanged = desiredWindows.Any(desiredWindow =>
+        {
+            var existingWindow = windowProfile.Windows.FirstOrDefault(x => x.Id == desiredWindow.Id);
+            if (existingWindow is null)
+            {
+                return false;
+            }
+
+            return !string.Equals(
+                StreamingModeOptions.Normalize(existingWindow.StreamingMode),
+                desiredWindow.StreamingMode,
+                StringComparison.OrdinalIgnoreCase);
+        });
         var windowsToRemove = windowProfile.Windows
             .Where(existing => !desiredWindowIds.Contains(existing.Id))
             .ToList();
@@ -1128,7 +1143,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = desiredWindow.Url,
                     IsEnabled = desiredWindow.IsEnabled,
                     IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled,
+                    StreamingMode = desiredWindow.StreamingMode
                 });
                 continue;
             }
@@ -1138,11 +1154,12 @@ public sealed class MainViewModel : ViewModelBase
             existingWindow.IsEnabled = desiredWindow.IsEnabled;
             existingWindow.IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive;
             existingWindow.IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled;
+            existingWindow.StreamingMode = desiredWindow.StreamingMode;
         }
 
         SelectedWindowProfile = windowProfile;
         NormalizeWindowProfilesInMemory();
-        if (browserProfileChanged)
+        if (browserProfileChanged || streamingModeChanged)
         {
             await ResetWindowProfileRuntimeAsync(windowProfile);
         }
@@ -2494,6 +2511,7 @@ public sealed class MainViewModel : ViewModelBase
                     IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
                     IsNavigationBarEnabled = persistedWindow.IsNavigationBarEnabled,
                     BrowserProfileName = persistedWindow.BrowserProfileName ?? string.Empty,
+                    StreamingMode = StreamingModeOptions.Normalize(persistedWindow.StreamingMode),
                     ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
                     ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
                     ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
@@ -2647,6 +2665,7 @@ public sealed class MainViewModel : ViewModelBase
                     browserWindow.IsPrimaryExclusive = windowRecord.IsPrimaryExclusive;
                     browserWindow.IsNavigationBarEnabled = windowRecord.IsNavigationBarEnabled;
                     browserWindow.BrowserProfileName = windowRecord.BrowserProfileName ?? string.Empty;
+                    browserWindow.StreamingMode = StreamingModeOptions.Normalize(windowRecord.StreamingMode);
                     browserWindow.ProfileName = record.ProfileName;
                     browserWindow.ActiveSessionId = session.Id;
                     browserWindow.ActiveSessionName = session.Name;
@@ -2706,7 +2725,8 @@ public sealed class MainViewModel : ViewModelBase
                     IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
                     IsNavigationBarEnabled = window.IsNavigationBarEnabled,
-                    BrowserProfileName = window.BrowserProfileName ?? string.Empty
+                    BrowserProfileName = window.BrowserProfileName ?? string.Empty,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 }).ToList(),
             BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
             {
@@ -2798,6 +2818,7 @@ public sealed class MainViewModel : ViewModelBase
                 IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
                 IsNavigationBarEnabled = x.IsNavigationBarEnabled,
                 BrowserProfileName = x.BrowserProfileName ?? string.Empty,
+                StreamingMode = StreamingModeOptions.Normalize(x.StreamingMode),
                 ProfileName = x.ProfileName,
                 ActiveSessionId = x.ActiveSessionId,
                 ActiveSessionName = x.ActiveSessionName
@@ -3046,7 +3067,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 }).ToList()
             }).ToList();
     }
@@ -3237,7 +3259,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 });
             }
 
@@ -3384,7 +3407,8 @@ public sealed class MainViewModel : ViewModelBase
                         Url = window.Url,
                         IsEnabled = window.IsEnabled,
                         IsPrimaryExclusive = window.IsPrimaryExclusive,
-                        IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                        IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                        StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                     });
                 }
 
@@ -3832,6 +3856,7 @@ public sealed class MainViewModel : ViewModelBase
         browserWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
         browserWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
         browserWindow.BrowserProfileName = stream.BrowserProfileName ?? string.Empty;
+        browserWindow.StreamingMode = StreamingModeOptions.Normalize(item.StreamingMode);
 
         if (!Windows.Any(x => x.Id == browserWindow.Id))
         {
@@ -4577,6 +4602,7 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     private bool _isEnabled;
     private bool _isPrimaryExclusive;
     private bool _isNavigationBarEnabled;
+    private string _streamingMode = StreamingModeOptions.Interaction;
 
     public Guid Id
     {
@@ -4612,6 +4638,12 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     {
         get => _isNavigationBarEnabled;
         set => SetProperty(ref _isNavigationBarEnabled, value);
+    }
+
+    public string StreamingMode
+    {
+        get => _streamingMode;
+        set => SetProperty(ref _streamingMode, StreamingModeOptions.Normalize(value));
     }
 }
 

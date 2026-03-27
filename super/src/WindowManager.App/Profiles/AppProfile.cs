@@ -111,6 +111,9 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 17)]
     public string BrowserProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 18)]
+    public string StreamingMode { get; set; } = "Interacao";
 }
 
 [DataContract]
@@ -295,6 +298,9 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 6)]
     public bool IsNavigationBarEnabled { get; set; }
+
+    [DataMember(Order = 7)]
+    public string StreamingMode { get; set; } = "Interacao";
 }
 
 [DataContract]

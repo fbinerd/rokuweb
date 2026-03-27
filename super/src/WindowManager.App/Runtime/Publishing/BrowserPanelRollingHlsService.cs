@@ -346,6 +346,23 @@ public sealed class BrowserPanelRollingHlsService
                     PrimaryRendition.FrameRate.ToString(CultureInfo.InvariantCulture)));
             builder.AppendLine("medium.m3u8");
             File.WriteAllText(Path.Combine(OutputDirectory, "master.m3u8"), builder.ToString(), Encoding.ASCII);
+            TryWriteInteractionPlaylistAlias();
+        }
+
+        private void TryWriteInteractionPlaylistAlias()
+        {
+            try
+            {
+                var mediumPlaylistPath = Path.Combine(OutputDirectory, "medium.m3u8");
+                var interactionPlaylistPath = Path.Combine(OutputDirectory, "index.m3u8");
+                if (File.Exists(mediumPlaylistPath))
+                {
+                    File.Copy(mediumPlaylistPath, interactionPlaylistPath, overwrite: true);
+                }
+            }
+            catch
+            {
+            }
         }
 
         public void Dispose()

@@ -118,6 +118,9 @@ public sealed class ActiveSessionWindowRecord
 
     [DataMember(Order = 15)]
     public string BrowserProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 16)]
+    public string StreamingMode { get; set; } = "Interacao";
 }
 
 [DataContract]

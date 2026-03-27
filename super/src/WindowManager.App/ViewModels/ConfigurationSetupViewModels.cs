@@ -302,7 +302,8 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
                     Url = x.Url,
                     IsEnabled = x.IsEnabled,
                     IsPrimaryExclusive = x.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = x.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = x.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(x.StreamingMode)
                 })))
             {
                 Windows.Add(new WindowLinkEditorViewModel
@@ -313,6 +314,7 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
                     IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode),
                     Number = Windows.Count + 1
                 });
             }
@@ -430,6 +432,7 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
             Id = Guid.NewGuid(),
             Nickname = resolvedNickname,
             Url = normalizedUrl,
+            StreamingMode = StreamingModeOptions.Interaction,
             Number = Windows.Count + 1
         };
 
@@ -672,6 +675,7 @@ public sealed class WindowLinkEditorViewModel : ViewModelBase
     private bool _isEnabled;
     private bool _isPrimaryExclusive;
     private bool _isNavigationBarEnabled;
+    private string _streamingMode = StreamingModeOptions.Interaction;
 
     public Guid Id
     {
@@ -721,7 +725,34 @@ public sealed class WindowLinkEditorViewModel : ViewModelBase
         set => SetProperty(ref _isNavigationBarEnabled, value);
     }
 
+    public string StreamingMode
+    {
+        get => _streamingMode;
+        set => SetProperty(ref _streamingMode, StreamingModeOptions.Normalize(value));
+    }
+
+    public IReadOnlyList<string> AvailableStreamingModes => StreamingModeOptions.All;
+
     public string NumberLabel => Number <= 0 ? string.Empty : Number.ToString();
+}
+
+public static class StreamingModeOptions
+{
+    public const string Interaction = "Interacao";
+    public const string Video = "Video";
+
+    public static IReadOnlyList<string> All { get; } = new[] { Interaction, Video };
+
+    public static string Normalize(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        if (string.Equals(normalized, Video, StringComparison.OrdinalIgnoreCase))
+        {
+            return Video;
+        }
+
+        return Interaction;
+    }
 }
 
 public sealed class StreamWindowEditorViewModel : ViewModelBase
