@@ -525,6 +525,12 @@ public partial class MainWindow : Window
     {
         item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
         RemoveStreamDefinitionPreviewCardOnly(item.Id);
+        if (item.IsEnabled || _viewModel.Windows.Any(x => x.Id == item.Id))
+        {
+            _streamDefinitionSectionKeys.Remove(item.Id);
+            return;
+        }
+
         if (_viewModel.ShowWindowPreviews && !item.IsEnabled && !_viewModel.Windows.Any(x => x.Id == item.Id))
         {
             EnsureStreamDefinitionCaptureWindow(stream, item);
