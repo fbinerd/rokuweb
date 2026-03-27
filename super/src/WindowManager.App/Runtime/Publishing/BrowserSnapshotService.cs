@@ -16,8 +16,9 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserSnapshotService
 {
-    private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(140);
-    private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(66);
+    private static readonly StreamingTuning Tuning = StreamingTuning.Current;
+    private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(Tuning.SnapshotCacheLifetimeMs);
+    private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(Tuning.SnapshotBackgroundCaptureIntervalMs);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
     private readonly ConcurrentDictionary<Guid, CachedBitmapFrame> _cachedBitmapFrames = new ConcurrentDictionary<Guid, CachedBitmapFrame>();
     private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();

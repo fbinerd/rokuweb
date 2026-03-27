@@ -13,10 +13,11 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelRollingHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(0.75);
-    private const int PlaylistSize = 3;
+    private static readonly StreamingTuning Tuning = StreamingTuning.Current;
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(Tuning.HlsSegmentDurationSeconds);
+    private static readonly int PlaylistSize = Tuning.HlsPlaylistSize;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
-    private static readonly RenditionProfile PrimaryRendition = new("medium", "854x480", 850_000, 96_000, 18);
+    private static readonly RenditionProfile PrimaryRendition = new("medium", Tuning.HlsResolution, Tuning.HlsVideoBitrate, Tuning.HlsAudioBitrate, Tuning.HlsFrameRate);
 
     private readonly BrowserSnapshotService _snapshotService;
     private readonly BrowserAudioCaptureService _audioCaptureService;
@@ -362,7 +363,7 @@ public sealed class BrowserPanelRollingHlsService
     private sealed class ContinuousEncoderSession : IDisposable
     {
         private static readonly TimeSpan VideoFrameInterval = TimeSpan.FromMilliseconds(1000.0 / 18.0);
-        private static readonly TimeSpan AudioChunkInterval = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan AudioChunkInterval = TimeSpan.FromMilliseconds(Tuning.AudioChunkIntervalMs);
 
         private readonly Guid _windowId;
         private readonly string _outputDirectory;
@@ -530,7 +531,9 @@ public sealed class BrowserPanelRollingHlsService
 
         private async Task PumpAudioAsync()
         {
-            var bytesPerChunk = AlignAudioBytes(_audioFormat.SampleRate * _audioFormat.Channels * 2 / 10, _audioFormat.Channels);
+            var bytesPerChunk = AlignAudioBytes(
+                (int)Math.Round(_audioFormat.SampleRate * _audioFormat.Channels * 2 * AudioChunkInterval.TotalSeconds),
+                _audioFormat.Channels);
             var silence = new byte[bytesPerChunk];
             var cursor = 0L;
             var chunkIndex = 0;
