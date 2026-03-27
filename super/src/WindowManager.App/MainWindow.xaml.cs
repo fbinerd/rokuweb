@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private bool _hasShownTrayHint;
     private Point? _lastExpandedPreviewMousePoint;
     private DateTime _nextKeepAliveCheckUtc = DateTime.MinValue;
+    private readonly DateTime _keepAliveStartupGraceUntilUtc = DateTime.UtcNow.AddSeconds(45);
     private bool _isRefreshingExpandedPreview;
     private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
@@ -524,7 +525,7 @@ public partial class MainWindow : Window
     {
         item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
         RemoveStreamDefinitionPreviewCardOnly(item.Id);
-        if (_viewModel.ShowWindowPreviews)
+        if (_viewModel.ShowWindowPreviews && !item.IsEnabled && !_viewModel.Windows.Any(x => x.Id == item.Id))
         {
             EnsureStreamDefinitionCaptureWindow(stream, item);
         }
@@ -695,7 +696,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService, stream.BrowserProfileName);
+        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService, stream.BrowserProfileName, enableAudioCapture: false);
         captureWindow.SetNavigationBarEnabled(item.IsNavigationBarEnabled);
         _streamDefinitionCaptureWindows[item.Id] = captureWindow;
         _browserSnapshotService.Register(item.Id, captureWindow.Browser);
@@ -719,8 +720,11 @@ public partial class MainWindow : Window
                 _streamDefinitionCaptureWindows.Remove(item.Id);
             }
 
-            EnsureStreamDefinitionCaptureWindow(stream, item);
-            _browserSnapshotService.InvalidateCapture(item.Id);
+            if (!item.IsEnabled && !_viewModel.Windows.Any(x => x.Id == item.Id))
+            {
+                EnsureStreamDefinitionCaptureWindow(stream, item);
+                _browserSnapshotService.InvalidateCapture(item.Id);
+            }
         }
 
         _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
@@ -1396,11 +1400,11 @@ public partial class MainWindow : Window
 
         if (_streamDefinitionCaptureWindows.TryGetValue(session.Id, out var existingDefinitionCapture))
         {
+            _browserSnapshotService.Unregister(session.Id);
+            _browserAudioCaptureService.Unregister(session.Id);
+            existingDefinitionCapture.Close();
             _streamDefinitionCaptureWindows.Remove(session.Id);
-            existingDefinitionCapture.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
-            _captureWindows[session.Id] = existingDefinitionCapture;
             RemoveStreamDefinitionPreviewCardOnly(session.Id);
-            return;
         }
 
         var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService, session.BrowserProfileName);
@@ -1964,6 +1968,11 @@ public partial class MainWindow : Window
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
+        if (DateTime.UtcNow < _keepAliveStartupGraceUntilUtc)
+        {
+            return;
+        }
+
         if (DateTime.UtcNow >= _nextKeepAliveCheckUtc)
         {
             _nextKeepAliveCheckUtc = DateTime.UtcNow.AddSeconds(3);
@@ -2171,6 +2180,11 @@ public partial class MainWindow : Window
         {
             foreach (var item in stream.Windows)
             {
+                if (item.IsEnabled || _viewModel.Windows.Any(x => x.Id == item.Id))
+                {
+                    continue;
+                }
+
                 EnsureStreamDefinitionCaptureWindow(stream, item);
             }
         }

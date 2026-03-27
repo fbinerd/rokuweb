@@ -16,7 +16,7 @@
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="editableActivationTimer" repeat="false" duration="0.7" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
-    <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
+    <Timer id="fullscreenStreamTimer" repeat="true" duration="0.75" />
     <Timer id="fullscreenVideoWatchTimer" repeat="true" duration="1.0" />
     <Timer id="scrollModeToastTimer" repeat="false" duration="1.2" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
@@ -25,12 +25,6 @@
     <Timer id="audioHlsRestartTimer" repeat="false" duration="0.35" />
     <Audio id="panelAudioNode" />
     <Video id="panelAudioVideo" width="2" height="2" translation="[-10, -10]" visible="false" />
-    <Video
-      id="fullscreenVideo"
-      width="1280"
-      height="720"
-      translation="[0,0]"
-      visible="false" />
     <Rectangle
       id="background"
       width="1280"
@@ -115,6 +109,12 @@
       translation="[0, 0]"
       visible="false"
       loadDisplayMode="zoomToFill" />
+    <Video
+      id="fullscreenVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
     <Poster
       id="cursorMarker"
       width="56"

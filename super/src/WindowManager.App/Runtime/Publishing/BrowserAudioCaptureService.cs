@@ -11,8 +11,9 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserAudioCaptureService
 {
-    private static readonly TimeSpan AudioFreshnessWindow = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan AudioFreshnessWindow = TimeSpan.FromMilliseconds(450);
+    private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromMilliseconds(900);
+    private static readonly TimeSpan AudioRestartCoalesceWindow = TimeSpan.FromSeconds(5);
     private readonly ConcurrentDictionary<Guid, WindowAudioBuffer> _buffers = new ConcurrentDictionary<Guid, WindowAudioBuffer>();
 
     public IAudioHandler CreateHandler(Guid windowId)
@@ -51,14 +52,55 @@ public sealed class BrowserAudioCaptureService
         return buffer.BuildWaveSnapshot(maxDuration);
     }
 
+    public AudioPcmChunk ReadPcmChunk(Guid windowId, long cursor, int maxBytes)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return AudioPcmChunk.Empty(cursor);
+        }
+
+        return buffer.ReadPcmChunk(cursor, maxBytes);
+    }
+
+    public AudioFormatInfo? GetAudioFormat(Guid windowId)
+    {
+        if (!_buffers.TryGetValue(windowId, out var buffer))
+        {
+            return null;
+        }
+
+        return buffer.GetAudioFormat();
+    }
+
     internal bool TryConfigure(Guid windowId, CefSharp.Structs.AudioParameters parameters, int channels)
     {
         var sampleRate = Math.Max(1, parameters.SampleRate);
         var resolvedChannels = Math.Max(1, channels);
         var maxBytes = sampleRate * resolvedChannels * 2 * (int)Math.Max(1, MaxBufferedAudio.TotalSeconds);
         var buffer = _buffers.GetOrAdd(windowId, _ => new WindowAudioBuffer());
-        buffer.Configure(sampleRate, resolvedChannels, maxBytes);
-        AppLog.Write("BrowserAudio", string.Format("Audio stream iniciado: janela={0}, sampleRate={1}, channels={2}", windowId.ToString("N"), sampleRate, resolvedChannels));
+        var configureResult = buffer.Configure(sampleRate, resolvedChannels, maxBytes, AudioRestartCoalesceWindow);
+        if (configureResult.ReusedExistingStream)
+        {
+            AppLog.Write(
+                "BrowserAudio",
+                string.Format(
+                    "Audio stream reiniciado/reaproveitado: janela={0}, sampleRate={1}, channels={2}, generation={3}",
+                    windowId.ToString("N"),
+                    sampleRate,
+                    resolvedChannels,
+                    configureResult.Generation));
+        }
+        else
+        {
+            AppLog.Write(
+                "BrowserAudio",
+                string.Format(
+                    "Audio stream iniciado: janela={0}, sampleRate={1}, channels={2}, generation={3}",
+                    windowId.ToString("N"),
+                    sampleRate,
+                    resolvedChannels,
+                    configureResult.Generation));
+        }
         return true;
     }
 
@@ -124,17 +166,30 @@ public sealed class BrowserAudioCaptureService
         private int _sampleRate;
         private int _channels;
         private int _maxBytes;
+        private long _totalBytesWritten;
+        private int _streamGeneration;
         private DateTime _lastPacketUtc = DateTime.MinValue;
 
-        public void Configure(int sampleRate, int channels, int maxBytes)
+        public AudioConfigureResult Configure(int sampleRate, int channels, int maxBytes, TimeSpan restartCoalesceWindow)
         {
             lock (_gate)
             {
+                var sameFormat = _sampleRate == sampleRate && _channels == channels;
+                var recentlyActive = _lastPacketUtc != DateTime.MinValue && DateTime.UtcNow - _lastPacketUtc <= restartCoalesceWindow;
+                if (sameFormat && recentlyActive)
+                {
+                    _maxBytes = Math.Max(4096, maxBytes);
+                    return new AudioConfigureResult(_streamGeneration, true);
+                }
+
                 _sampleRate = sampleRate;
                 _channels = channels;
                 _maxBytes = Math.Max(4096, maxBytes);
                 _pcmBytes = Array.Empty<byte>();
+                _totalBytesWritten = 0;
+                _streamGeneration++;
                 _lastPacketUtc = DateTime.MinValue;
+                return new AudioConfigureResult(_streamGeneration, false);
             }
         }
 
@@ -191,6 +246,8 @@ public sealed class BrowserAudioCaptureService
         {
             lock (_gate)
             {
+                _pcmBytes = Array.Empty<byte>();
+                _totalBytesWritten = 0;
                 _lastPacketUtc = DateTime.MinValue;
             }
         }
@@ -230,6 +287,66 @@ public sealed class BrowserAudioCaptureService
             }
         }
 
+        public AudioFormatInfo? GetAudioFormat()
+        {
+            lock (_gate)
+            {
+                if (_sampleRate <= 0 || _channels <= 0)
+                {
+                    return null;
+                }
+
+                return new AudioFormatInfo(_sampleRate, _channels, _streamGeneration);
+            }
+        }
+
+        public AudioPcmChunk ReadPcmChunk(long cursor, int maxBytes)
+        {
+            lock (_gate)
+            {
+                if (_sampleRate <= 0 || _channels <= 0 || maxBytes <= 0)
+                {
+                    return AudioPcmChunk.Empty(cursor);
+                }
+
+                var bytesPerFrame = _channels * 2;
+                if (bytesPerFrame <= 0)
+                {
+                    return AudioPcmChunk.Empty(cursor);
+                }
+
+                if (_pcmBytes.Length == 0)
+                {
+                    return new AudioPcmChunk(Array.Empty<byte>(), cursor, _sampleRate, _channels, _streamGeneration);
+                }
+
+                var availableEnd = _totalBytesWritten;
+                if (_lastPacketUtc == DateTime.MinValue || DateTime.UtcNow - _lastPacketUtc > AudioFreshnessWindow)
+                {
+                    return new AudioPcmChunk(Array.Empty<byte>(), availableEnd, _sampleRate, _channels, _streamGeneration);
+                }
+
+                var availableStart = Math.Max(0, availableEnd - _pcmBytes.Length);
+                var normalizedCursor = Math.Max(cursor, availableStart);
+                if (normalizedCursor > availableEnd)
+                {
+                    normalizedCursor = availableEnd;
+                }
+
+                var availableBytes = (int)Math.Min(maxBytes, availableEnd - normalizedCursor);
+                availableBytes -= availableBytes % bytesPerFrame;
+                if (availableBytes <= 0)
+                {
+                    return new AudioPcmChunk(Array.Empty<byte>(), normalizedCursor, _sampleRate, _channels, _streamGeneration);
+                }
+
+                var startIndex = (int)(normalizedCursor - availableStart);
+                var slice = new byte[availableBytes];
+                Buffer.BlockCopy(_pcmBytes, startIndex, slice, 0, availableBytes);
+                return new AudioPcmChunk(slice, normalizedCursor + availableBytes, _sampleRate, _channels, _streamGeneration);
+            }
+        }
+
         private void AppendBytes(byte[] packetBytes)
         {
             if (packetBytes.Length == 0)
@@ -251,6 +368,7 @@ public sealed class BrowserAudioCaptureService
             var bytesToCopyFromPacket = Math.Min(packetBytes.Length, targetLength);
             Buffer.BlockCopy(packetBytes, packetBytes.Length - bytesToCopyFromPacket, combined, targetLength - bytesToCopyFromPacket, bytesToCopyFromPacket);
             _pcmBytes = combined;
+            _totalBytesWritten += packetBytes.Length;
         }
 
         private byte[] SliceRecentPcmBytes(TimeSpan maxDuration)
@@ -316,5 +434,61 @@ public sealed class BrowserAudioCaptureService
                 return stream.ToArray();
             }
         }
+    }
+}
+
+public readonly struct AudioConfigureResult
+{
+    public AudioConfigureResult(int generation, bool reusedExistingStream)
+    {
+        Generation = generation;
+        ReusedExistingStream = reusedExistingStream;
+    }
+
+    public int Generation { get; }
+
+    public bool ReusedExistingStream { get; }
+}
+
+public sealed class AudioFormatInfo
+{
+    public AudioFormatInfo(int sampleRate, int channels, int generation)
+    {
+        SampleRate = sampleRate;
+        Channels = channels;
+        Generation = generation;
+    }
+
+    public int SampleRate { get; }
+
+    public int Channels { get; }
+
+    public int Generation { get; }
+}
+
+public sealed class AudioPcmChunk
+{
+    public AudioPcmChunk(byte[] bytes, long nextCursor, int sampleRate, int channels, int generation)
+    {
+        Bytes = bytes ?? Array.Empty<byte>();
+        NextCursor = nextCursor;
+        SampleRate = sampleRate;
+        Channels = channels;
+        Generation = generation;
+    }
+
+    public byte[] Bytes { get; }
+
+    public long NextCursor { get; }
+
+    public int SampleRate { get; }
+
+    public int Channels { get; }
+
+    public int Generation { get; }
+
+    public static AudioPcmChunk Empty(long nextCursor)
+    {
+        return new AudioPcmChunk(Array.Empty<byte>(), nextCursor, 0, 0, 0);
     }
 }

@@ -19,14 +19,17 @@ public sealed class BrowserSnapshotService
     private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(140);
     private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(66);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
+    private readonly ConcurrentDictionary<Guid, CachedBitmapFrame> _cachedBitmapFrames = new ConcurrentDictionary<Guid, CachedBitmapFrame>();
     private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();
     private readonly ConcurrentDictionary<Guid, Task<byte[]?>> _captureTasks = new ConcurrentDictionary<Guid, Task<byte[]?>>();
+    private readonly ConcurrentDictionary<Guid, Task<CachedBitmapFrame?>> _bitmapCaptureTasks = new ConcurrentDictionary<Guid, Task<CachedBitmapFrame?>>();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _captureLoops = new ConcurrentDictionary<Guid, CancellationTokenSource>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
     {
         _browsers[windowId] = browser;
+        _cachedBitmapFrames.TryRemove(windowId, out _);
         _cachedFrames.TryRemove(windowId, out _);
         StartCaptureLoop(windowId, browser);
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
@@ -35,7 +38,9 @@ public sealed class BrowserSnapshotService
     public void Unregister(Guid windowId)
     {
         _browsers.TryRemove(windowId, out _);
+        _cachedBitmapFrames.TryRemove(windowId, out _);
         _cachedFrames.TryRemove(windowId, out _);
+        _bitmapCaptureTasks.TryRemove(windowId, out _);
         _captureTasks.TryRemove(windowId, out _);
         if (_captureLoops.TryRemove(windowId, out var cancellation))
         {
@@ -85,10 +90,11 @@ public sealed class BrowserSnapshotService
 
     public void InvalidateCapture(Guid windowId)
     {
+        _cachedBitmapFrames.TryRemove(windowId, out _);
         _cachedFrames.TryRemove(windowId, out _);
     }
 
-    public async Task<byte[]?> CaptureJpegAsync(Guid windowId, CancellationToken cancellationToken)
+    public async Task<CachedBitmapFrame?> CaptureBitmapFrameAsync(Guid windowId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -97,22 +103,64 @@ public sealed class BrowserSnapshotService
             return null;
         }
 
+        if (_cachedBitmapFrames.TryGetValue(windowId, out var cachedBitmap) &&
+            cachedBitmap.Pixels is not null &&
+            cachedBitmap.Pixels.Length > 0 &&
+            DateTime.UtcNow - cachedBitmap.CapturedAtUtc <= CachedFrameLifetime)
+        {
+            return cachedBitmap;
+        }
+
+        var captureTask = _bitmapCaptureTasks.GetOrAdd(windowId, _ => CaptureFreshBitmapFrameAsync(windowId, browser));
+        try
+        {
+            var bitmapFrame = await captureTask.ConfigureAwait(false);
+            if (bitmapFrame is not null && bitmapFrame.Pixels.Length > 0)
+            {
+                _cachedBitmapFrames[windowId] = bitmapFrame;
+            }
+            return bitmapFrame;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (_bitmapCaptureTasks.TryGetValue(windowId, out var activeTask) && ReferenceEquals(activeTask, captureTask))
+            {
+                _bitmapCaptureTasks.TryRemove(windowId, out _);
+            }
+        }
+    }
+
+    public async Task<byte[]?> CaptureJpegAsync(Guid windowId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var frame = await CaptureBitmapFrameAsync(windowId, cancellationToken).ConfigureAwait(false);
+        if (frame is null)
+        {
+            return null;
+        }
+
         if (_cachedFrames.TryGetValue(windowId, out var cached) &&
             cached.Bytes is not null &&
             cached.Bytes.Length > 0 &&
-            DateTime.UtcNow - cached.CapturedAtUtc <= CachedFrameLifetime)
+            cached.CapturedAtUtc >= frame.CapturedAtUtc)
         {
             return cached.Bytes;
         }
 
-        var captureTask = _captureTasks.GetOrAdd(windowId, _ => CaptureFreshJpegAsync(windowId, browser));
+        var captureTask = _captureTasks.GetOrAdd(windowId, _ => EncodeJpegAsync(windowId, frame));
         try
         {
             var jpegBytes = await captureTask.ConfigureAwait(false);
             if (jpegBytes is not null && jpegBytes.Length > 0)
             {
-                _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+                _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, frame.CapturedAtUtc);
             }
+
             return jpegBytes;
         }
         catch
@@ -359,18 +407,18 @@ public sealed class BrowserSnapshotService
         });
     }
 
-    private static async Task<byte[]?> CaptureFreshJpegAsync(Guid windowId, ChromiumWebBrowser browser)
+    private static async Task<CachedBitmapFrame?> CaptureFreshBitmapFrameAsync(Guid windowId, ChromiumWebBrowser browser)
     {
         try
         {
-            return await browser.Dispatcher.InvokeAsync(() =>
+            return await browser.Dispatcher.InvokeAsync<CachedBitmapFrame?>(() =>
             {
                 var width = Math.Max(1, (int)Math.Ceiling(browser.ActualWidth));
                 var height = Math.Max(1, (int)Math.Ceiling(browser.ActualHeight));
 
                 if (width <= 1 || height <= 1)
                 {
-                    return (byte[]?)null;
+                    return null;
                 }
 
                 browser.Measure(new Size(width, height));
@@ -379,16 +427,10 @@ public sealed class BrowserSnapshotService
 
                 var renderTarget = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
                 renderTarget.Render(browser);
-
-                var encoder = new JpegBitmapEncoder();
-                encoder.QualityLevel = 68;
-                encoder.Frames.Add(BitmapFrame.Create(renderTarget));
-
-                using (var stream = new MemoryStream())
-                {
-                    encoder.Save(stream);
-                    return stream.ToArray();
-                }
+                var stride = width * 4;
+                var pixels = new byte[stride * height];
+                renderTarget.CopyPixels(pixels, stride, 0);
+                return new CachedBitmapFrame(pixels, width, height, stride, DateTime.UtcNow);
             });
         }
         catch
@@ -428,12 +470,12 @@ public sealed class BrowserSnapshotService
                     break;
                 }
 
-                if (!_captureTasks.ContainsKey(windowId))
+                if (!_bitmapCaptureTasks.ContainsKey(windowId))
                 {
-                    var jpegBytes = await CaptureFreshJpegAsync(windowId, browser).ConfigureAwait(false);
-                    if (jpegBytes is not null && jpegBytes.Length > 0)
+                    var bitmapFrame = await CaptureFreshBitmapFrameAsync(windowId, browser).ConfigureAwait(false);
+                    if (bitmapFrame is not null && bitmapFrame.Pixels.Length > 0)
                     {
-                        _cachedFrames[windowId] = new CachedJpegFrame(jpegBytes, DateTime.UtcNow);
+                        _cachedBitmapFrames[windowId] = bitmapFrame;
                     }
                 }
             }
@@ -450,6 +492,37 @@ public sealed class BrowserSnapshotService
                 break;
             }
         }
+    }
+
+    private static Task<byte[]?> EncodeJpegAsync(Guid windowId, CachedBitmapFrame frame)
+    {
+        return Task.Run(() =>
+        {
+            try
+            {
+                using var stream = new MemoryStream();
+                var bitmap = BitmapSource.Create(
+                    frame.Width,
+                    frame.Height,
+                    96,
+                    96,
+                    PixelFormats.Pbgra32,
+                    null,
+                    frame.Pixels,
+                    frame.Stride);
+                var encoder = new JpegBitmapEncoder
+                {
+                    QualityLevel = 68
+                };
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                encoder.Save(stream);
+                return (byte[]?)stream.ToArray();
+            }
+            catch
+            {
+                return null;
+            }
+        });
     }
 
     private static void SendKey(IBrowserHost host, int keyCode)
@@ -896,6 +969,28 @@ internal sealed class CachedJpegFrame
     }
 
     public byte[] Bytes { get; }
+
+    public DateTime CapturedAtUtc { get; }
+}
+
+public sealed class CachedBitmapFrame
+{
+    public CachedBitmapFrame(byte[] pixels, int width, int height, int stride, DateTime capturedAtUtc)
+    {
+        Pixels = pixels ?? Array.Empty<byte>();
+        Width = width;
+        Height = height;
+        Stride = stride;
+        CapturedAtUtc = capturedAtUtc;
+    }
+
+    public byte[] Pixels { get; }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    public int Stride { get; }
 
     public DateTime CapturedAtUtc { get; }
 }

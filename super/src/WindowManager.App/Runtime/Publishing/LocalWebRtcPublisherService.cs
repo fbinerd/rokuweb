@@ -34,8 +34,10 @@ public sealed class LocalWebRtcPublisherService
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
     private readonly ConcurrentDictionary<string, BridgeActiveSessionSnapshot> _sessionSnapshots = new ConcurrentDictionary<string, BridgeActiveSessionSnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _displayReadyUtcByDeviceId = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsRequestUtcByDisplay = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, int> _streamReloadVersions = new ConcurrentDictionary<Guid, int>();
 
     private TcpListener? _listener;
@@ -133,7 +135,7 @@ public sealed class LocalWebRtcPublisherService
                     display.ChannelVersion,
                     display.ExpectedChannelVersion));
 
-            var result = await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+            var result = await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion, "manual_batch_update").ConfigureAwait(false);
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
@@ -199,7 +201,7 @@ public sealed class LocalWebRtcPublisherService
                 display.ChannelVersion,
                 display.ExpectedChannelVersion));
 
-        return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+        return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion, "manual_target_update").ConfigureAwait(false);
     }
 
     public async Task<RokuPowerBatchResult> SendPowerCommandToConnectedDisplaysAsync(bool powerOn, CancellationToken cancellationToken)
@@ -289,6 +291,17 @@ public sealed class LocalWebRtcPublisherService
 
         if (requirePowerOn)
         {
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Keepalive ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
             var powerResult = await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn: true).ConfigureAwait(false);
             AppLog.Write(
                 "StreamKeepAlive",
@@ -315,7 +328,18 @@ public sealed class LocalWebRtcPublisherService
             !string.IsNullOrWhiteSpace(display.ChannelVersion) &&
             !string.Equals(display.ChannelVersion, expectedVersion, StringComparison.OrdinalIgnoreCase))
         {
-            return await _rokuDevDeploymentService.DeployNowAsync(display, expectedVersion).ConfigureAwait(false);
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Sideload ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
+            return await _rokuDevDeploymentService.DeployNowAsync(display, expectedVersion, "ensure_display_version_mismatch").ConfigureAwait(false);
         }
 
         return await LaunchDevChannelWithWakeRetryAsync(target, display, requirePowerOn, cancellationToken).ConfigureAwait(false);
@@ -329,6 +353,17 @@ public sealed class LocalWebRtcPublisherService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+        {
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "ForceWake ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                    target.Name,
+                    target.NetworkAddress));
+            return "streaming_recente";
+        }
 
         var display = _registeredDisplays.Values.FirstOrDefault(x =>
             string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase) ||
@@ -355,7 +390,7 @@ public sealed class LocalWebRtcPublisherService
                 powerResult));
 
         await Task.Delay(1500, cancellationToken).ConfigureAwait(false);
-        return await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+        return await _rokuDevDeploymentService.LaunchDevChannelAsync(display, "force_wake").ConfigureAwait(false);
     }
 
     public IReadOnlyList<RegisteredDisplaySnapshot> GetRegisteredDisplaysSnapshot()
@@ -384,6 +419,21 @@ public sealed class LocalWebRtcPublisherService
         return DateTime.UtcNow - lastSeenUtc.ToUniversalTime() < maxAge;
     }
 
+    public bool IsDisplayStreamingRecently(DisplayTarget target, TimeSpan maxAge)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return false;
+        }
+
+        if (!_lastPanelHlsRequestUtcByDisplay.TryGetValue(target.NetworkAddress, out var lastRequestUtc))
+        {
+            return false;
+        }
+
+        return DateTime.UtcNow - lastRequestUtc < maxAge;
+    }
+
     private async Task<string> LaunchDevChannelWithWakeRetryAsync(
         DisplayTarget target,
         RegisteredDisplaySnapshot display,
@@ -398,7 +448,20 @@ public sealed class LocalWebRtcPublisherService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            lastResult = await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Tentativa {0}/{1} de abrir app Roku ignorada para TV '{2}' ({3}) porque ela esta consumindo HLS recentemente.",
+                        attempt,
+                        attempts,
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
+            lastResult = await _rokuDevDeploymentService.LaunchDevChannelAsync(display, requirePowerOn ? "ensure_display_with_power" : "ensure_display").ConfigureAwait(false);
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
@@ -637,6 +700,11 @@ public sealed class LocalWebRtcPublisherService
 
             if (normalizedPath.StartsWith("/panel-roll/", StringComparison.OrdinalIgnoreCase))
             {
+                if (!string.IsNullOrWhiteSpace(remoteAddress))
+                {
+                    _lastPanelHlsRequestUtcByDisplay[remoteAddress] = DateTime.UtcNow;
+                }
+
                 var panelHlsResponseBytes = await BuildPanelHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
                 await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
                 return;
@@ -675,6 +743,12 @@ public sealed class LocalWebRtcPublisherService
         if (string.Equals(normalizedPath, "/api/register-display", StringComparison.OrdinalIgnoreCase))
         {
             RegisterDisplay(requestTarget, remoteAddress);
+            return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
+        }
+
+        if (string.Equals(normalizedPath, "/api/display-ready", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkDisplayReady(requestTarget, remoteAddress);
             return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
         }
 
@@ -752,6 +826,12 @@ public sealed class LocalWebRtcPublisherService
                 !string.Equals(previous.NetworkAddress, snapshot.NetworkAddress, StringComparison.OrdinalIgnoreCase);
         }
 
+        if (_registeredDisplays.TryGetValue(key, out var previousRegistered) &&
+            !string.Equals(previousRegistered.ChannelVersion, snapshot.ChannelVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            _displayReadyUtcByDeviceId.TryRemove(key, out _);
+        }
+
         _registeredDisplays[key] = snapshot;
 
         if (changed)
@@ -789,9 +869,40 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.DeviceId,
                         snapshot.ChannelVersion,
                         snapshot.ExpectedChannelVersion));
-                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "register_display");
             }
         }
+    }
+
+    private void MarkDisplayReady(string requestTarget, string remoteAddress)
+    {
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
+        {
+            return;
+        }
+
+        var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+        var deviceId = GetValue(values, "deviceId");
+        if (string.IsNullOrWhiteSpace(deviceId) && !string.IsNullOrWhiteSpace(remoteAddress))
+        {
+            deviceId = _registeredDisplays.Values
+                .FirstOrDefault(x => string.Equals(x.NetworkAddress, remoteAddress, StringComparison.OrdinalIgnoreCase))
+                ?.DeviceId ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return;
+        }
+
+        _displayReadyUtcByDeviceId[deviceId] = DateTime.UtcNow;
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Display-ready recebido: id={0}, ip={1}",
+                deviceId,
+                remoteAddress));
     }
 
     private void LogInputRequest(string requestTarget, string remoteAddress)
@@ -899,7 +1010,7 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.DeviceId,
                         snapshot.ChannelVersion,
                         snapshot.ExpectedChannelVersion));
-                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "input_log");
             }
         }
     }
@@ -1009,22 +1120,9 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Janela HLS do painel invalida.", "text/plain; charset=utf-8");
         }
 
-        if (string.Equals(filePart, "master.m3u8", StringComparison.OrdinalIgnoreCase))
+        if (filePart.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
         {
-            if (!_browserPanelRollingHlsService.TryGetMasterPlaylistPath(windowId, out var masterPlaylistPath))
-            {
-                MaybeLogPanelHlsServe(windowId, filePart, false);
-                return BuildHttpResponse(404, "Master playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
-            }
-
-            var playlistText = File.ReadAllText(masterPlaylistPath);
-            MaybeLogPanelHlsServe(windowId, filePart, true);
-            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
-        }
-
-        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!_browserPanelRollingHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            if (!_browserPanelRollingHlsService.TryGetOutputFilePath(windowId, filePart, out var playlistPath))
             {
                 MaybeLogPanelHlsServe(windowId, filePart, false);
                 return BuildHttpResponse(404, "Playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
@@ -1035,7 +1133,7 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
         }
 
-        if (!_browserPanelRollingHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        if (!_browserPanelRollingHlsService.TryGetOutputFilePath(windowId, filePart, out var segmentPath))
         {
             MaybeLogPanelHlsServe(windowId, filePart, false);
             return BuildHttpResponse(404, "Segmento HLS do painel indisponivel.", "text/plain; charset=utf-8");
@@ -1215,11 +1313,26 @@ public sealed class LocalWebRtcPublisherService
             return new List<BridgeWindowSnapshot>();
         }
 
-        return allWindows
+        var resolvedWindows = allWindows
             .Where(x => sessionIds.Contains(x.ActiveSessionId))
             .Concat(directlyAssignedWindows)
             .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
+            .ToList();
+
+        if (string.IsNullOrWhiteSpace(deviceId) || _displayReadyUtcByDeviceId.ContainsKey(deviceId))
+        {
+            return resolvedWindows;
+        }
+
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Bridge respondeu sem stream para TV id={0} porque ainda nao recebeu display-ready.",
+                deviceId));
+
+        return resolvedWindows
+            .Select(CloneWindowSnapshotWithoutStreams)
             .ToList();
     }
 
@@ -1296,9 +1409,14 @@ public sealed class LocalWebRtcPublisherService
         var streamReloadVersion = _streamReloadVersions.TryGetValue(window.Id, out var reloadVersion)
             ? reloadVersion
             : 0;
-        var unifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
+        var candidateUnifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
             ? string.Format("http://{0}:{1}/panel-roll/{2}/master.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
             : string.Empty;
+        var panelHlsReady =
+            _browserPanelRollingHlsService.IsAvailable &&
+            _browserPanelRollingHlsService.TryGetMasterPlaylistPath(window.Id, out _) &&
+            _browserPanelRollingHlsService.TryGetPlaylistPath(window.Id, out _);
+        var unifiedPanelStreamUrl = panelHlsReady ? candidateUnifiedPanelStreamUrl : string.Empty;
 
         return new BridgeWindowSnapshot
         {
@@ -1320,7 +1438,7 @@ public sealed class LocalWebRtcPublisherService
             ProfileName = window.ProfileName ?? string.Empty,
             ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
             ActiveSessionName = window.ActiveSessionName ?? string.Empty,
-            AutoOpenFullscreen = window.IsPrimaryExclusive,
+            AutoOpenFullscreen = window.IsPrimaryExclusive && panelHlsReady,
             AssignedDisplayId = window.AssignedTarget?.Id.ToString("N") ?? string.Empty,
             AssignedDisplayName = window.AssignedTarget?.Name ?? string.Empty,
             AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty
@@ -1401,13 +1519,35 @@ public sealed class LocalWebRtcPublisherService
 
     private static bool ShouldAutoSideloadOnRegistration(string expectedVersion)
     {
-        if (string.IsNullOrWhiteSpace(expectedVersion))
-        {
-            return false;
-        }
+        // Nesta branch experimental, o sideload automatico durante o registro da TV
+        // interrompe sessoes em andamento e pode reabrir o app no meio do playback.
+        // Mantemos a deteccao de desatualizacao, mas exigimos disparo manual.
+        return false;
+    }
 
-        var currentChannel = UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel);
-        return !string.Equals(currentChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
+    private static BridgeWindowSnapshot CloneWindowSnapshotWithoutStreams(BridgeWindowSnapshot source)
+    {
+        return new BridgeWindowSnapshot
+        {
+            Id = source.Id,
+            Title = source.Title,
+            State = source.State,
+            InitialUrl = source.InitialUrl,
+            PublishedWebRtcUrl = source.PublishedWebRtcUrl,
+            StreamUrl = string.Empty,
+            IsPublishing = source.IsPublishing,
+            ServerUrl = source.ServerUrl,
+            ThumbnailUrl = source.ThumbnailUrl,
+            AudioStreamUrl = string.Empty,
+            AudioAvailable = false,
+            ProfileName = source.ProfileName,
+            ActiveSessionId = source.ActiveSessionId,
+            ActiveSessionName = source.ActiveSessionName,
+            AutoOpenFullscreen = false,
+            AssignedDisplayId = source.AssignedDisplayId,
+            AssignedDisplayName = source.AssignedDisplayName,
+            AssignedDisplayAddress = source.AssignedDisplayAddress
+        };
     }
 
     private static string TryReadLocalRokuPackageReleaseId()

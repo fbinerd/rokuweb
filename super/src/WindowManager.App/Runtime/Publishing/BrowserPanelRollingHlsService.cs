@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -13,10 +13,10 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelRollingHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(1.0);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(900);
-    private const int PlaylistSize = 4;
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(0.75);
+    private const int PlaylistSize = 3;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
+    private static readonly RenditionProfile PrimaryRendition = new("medium", "854x480", 850_000, 96_000, 18);
 
     private readonly BrowserSnapshotService _snapshotService;
     private readonly BrowserAudioCaptureService _audioCaptureService;
@@ -55,7 +55,6 @@ public sealed class BrowserPanelRollingHlsService
         }
 
         var stream = _streams.GetOrAdd(windowId, id => new WindowRollingStream(id, Path.Combine(_rootDirectory, id.ToString("N"))));
-        stream.ResetIfAwaitingFreshAudio(!_audioCaptureService.HasRecentAudio(windowId));
         stream.Touch();
         stream.EnsureStarted(_snapshotService, _audioCaptureService, _ffmpegPath);
     }
@@ -82,7 +81,7 @@ public sealed class BrowserPanelRollingHlsService
             return false;
         }
 
-        path = Path.Combine(stream.OutputDirectory, "index.m3u8");
+        path = Path.Combine(stream.OutputDirectory, "medium.m3u8");
         return File.Exists(path);
     }
 
@@ -104,7 +103,7 @@ public sealed class BrowserPanelRollingHlsService
         return File.Exists(path);
     }
 
-    public bool TryGetSegmentPath(Guid windowId, string fileName, out string path)
+    public bool TryGetOutputFilePath(Guid windowId, string fileName, out string path)
     {
         path = string.Empty;
         if (!_streams.TryGetValue(windowId, out var stream))
@@ -201,14 +200,10 @@ public sealed class BrowserPanelRollingHlsService
 
     private sealed class WindowRollingStream : IDisposable
     {
-        private readonly object _gate = new();
         private readonly Guid _windowId;
-        private readonly List<SegmentEntry> _segments = new();
         private CancellationTokenSource? _cancellation;
         private Task? _worker;
         private DateTime _lastTouchedUtc;
-        private int _sequence;
-        private bool _loggedPlaylistReady;
 
         public WindowRollingStream(Guid windowId, string outputDirectory)
         {
@@ -225,45 +220,17 @@ public sealed class BrowserPanelRollingHlsService
             _lastTouchedUtc = DateTime.UtcNow;
         }
 
-        public void ResetIfAwaitingFreshAudio(bool awaitingFreshAudio)
+        public void EnsureStarted(BrowserSnapshotService snapshotService, BrowserAudioCaptureService audioCaptureService, string ffmpegPath)
         {
-            if (!awaitingFreshAudio)
+            if (_worker is not null && !_worker.IsCompleted)
             {
                 return;
             }
 
-            lock (_gate)
-            {
-                if (_segments.Count == 0 && !File.Exists(Path.Combine(OutputDirectory, "index.m3u8")))
-                {
-                    return;
-                }
-
-                _segments.Clear();
-                _sequence = 0;
-                _loggedPlaylistReady = false;
-                TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
-                foreach (var stale in Directory.GetFiles(OutputDirectory, "segment-*.ts"))
-                {
-                    TryDelete(stale);
-                }
-            }
-        }
-
-        public void EnsureStarted(BrowserSnapshotService snapshotService, BrowserAudioCaptureService audioCaptureService, string ffmpegPath)
-        {
-            lock (_gate)
-            {
-                if (_worker is not null && !_worker.IsCompleted)
-                {
-                    return;
-                }
-
-                _cancellation?.Cancel();
-                _cancellation?.Dispose();
-                _cancellation = new CancellationTokenSource();
-                _worker = Task.Run(() => RunAsync(snapshotService, audioCaptureService, ffmpegPath, _cancellation.Token));
-            }
+            _cancellation?.Cancel();
+            _cancellation?.Dispose();
+            _cancellation = new CancellationTokenSource();
+            _worker = Task.Run(() => RunAsync(snapshotService, audioCaptureService, ffmpegPath, _cancellation.Token));
         }
 
         private async Task RunAsync(BrowserSnapshotService snapshotService, BrowserAudioCaptureService audioCaptureService, string ffmpegPath, CancellationToken cancellationToken)
@@ -278,68 +245,47 @@ public sealed class BrowserPanelRollingHlsService
                         continue;
                     }
 
-                    var jpegBytes = await snapshotService.CaptureJpegAsync(_windowId, cancellationToken).ConfigureAwait(false);
-                    var wavBytes = UseSyntheticAudio
-                        ? BuildSineWaveSnapshot()
-                        : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration);
-                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
+                    var firstFrame = await WaitForInitialFrameAsync(snapshotService, cancellationToken).ConfigureAwait(false);
+                    if (firstFrame is null)
                     {
-                        await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
-                    var nextSequence = Interlocked.Increment(ref _sequence);
-                    var imagePath = Path.Combine(OutputDirectory, $"frame-{nextSequence:D6}.jpg");
-                    var audioPath = Path.Combine(OutputDirectory, $"audio-{nextSequence:D6}.wav");
-                    var segmentFileName = $"segment-{nextSequence:D6}.ts";
-                    var segmentPath = Path.Combine(OutputDirectory, segmentFileName);
+                    var audioFormat = audioCaptureService.GetAudioFormat(_windowId) ?? new AudioFormatInfo(44100, 2, 0);
+                    ResetOutputDirectory();
+                    WriteMasterPlaylist();
 
-                    File.WriteAllBytes(imagePath, jpegBytes);
-                    File.WriteAllBytes(audioPath, wavBytes);
+                    using var session = new ContinuousEncoderSession(
+                        _windowId,
+                        OutputDirectory,
+                        ffmpegPath,
+                        snapshotService,
+                        audioCaptureService,
+                        firstFrame,
+                        audioFormat,
+                        cancellationToken);
 
-                    var arguments = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
-                        imagePath,
-                        audioPath,
-                        SegmentDuration.TotalSeconds,
-                        segmentPath);
+                    AppLog.Write(
+                        "PanelRollingHls",
+                        string.Format(
+                            CultureInfo.InvariantCulture,
+                            "Encoder HLS continuo iniciado: janela={0}, source={1}x{2}, target={3}, fps={4}, audio={5}/{6}",
+                            _windowId.ToString("N"),
+                            firstFrame.Width,
+                            firstFrame.Height,
+                            PrimaryRendition.Resolution,
+                            PrimaryRendition.FrameRate,
+                            audioFormat.SampleRate,
+                            audioFormat.Channels));
 
-                    using var process = Process.Start(new ProcessStartInfo
+                    await session.RunAsync().ConfigureAwait(false);
+
+                    if (!cancellationToken.IsCancellationRequested)
                     {
-                        FileName = ffmpegPath,
-                        Arguments = arguments,
-                        CreateNoWindow = true,
-                        UseShellExecute = false,
-                        RedirectStandardError = true,
-                        RedirectStandardOutput = true
-                    });
-
-                    if (process is null)
-                    {
-                        await Task.Delay(SegmentInterval, cancellationToken).ConfigureAwait(false);
-                        continue;
+                        AppLog.Write("PanelRollingHls", $"Encoder HLS continuo reiniciando para janela {_windowId:N}.");
+                        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
                     }
-
-                    await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
-                    if (process.ExitCode == 0 && File.Exists(segmentPath))
-                    {
-                        RegisterSegment(new SegmentEntry(segmentFileName, SegmentDuration));
-                        WritePlaylist();
-                        if (!_loggedPlaylistReady)
-                        {
-                            _loggedPlaylistReady = true;
-                            AppLog.Write("PanelRollingHls", $"Playlist HLS rolling pronta para janela {_windowId:N}");
-                        }
-                    }
-                    else
-                    {
-                        var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                        AppLog.Write("PanelRollingHls", $"ffmpeg falhou na janela {_windowId:N}: {error}");
-                    }
-
-                    TryDelete(imagePath);
-                    TryDelete(audioPath);
                 }
                 catch (OperationCanceledException)
                 {
@@ -347,57 +293,40 @@ public sealed class BrowserPanelRollingHlsService
                 }
                 catch (Exception ex)
                 {
-                    AppLog.Write("PanelRollingHls", $"Erro no gerador rolling HLS da janela {_windowId:N}: {ex.Message}");
+                    AppLog.Write("PanelRollingHls", $"Erro no encoder continuo da janela {_windowId:N}: {ex.Message}");
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
                 }
-
-                await Task.Delay(SegmentInterval, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        private void RegisterSegment(SegmentEntry entry)
+        private async Task<CachedBitmapFrame?> WaitForInitialFrameAsync(BrowserSnapshotService snapshotService, CancellationToken cancellationToken)
         {
-            lock (_gate)
+            for (var attempt = 0; attempt < 40 && !cancellationToken.IsCancellationRequested; attempt++)
             {
-                _segments.Add(entry);
-                while (_segments.Count > PlaylistSize)
+                var frame = await snapshotService.CaptureBitmapFrameAsync(_windowId, cancellationToken).ConfigureAwait(false);
+                if (frame is not null && frame.Pixels.Length >= 4096)
                 {
-                    var stale = _segments[0];
-                    _segments.RemoveAt(0);
-                    TryDelete(Path.Combine(OutputDirectory, stale.FileName));
+                    return frame;
                 }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
             }
+
+            return null;
         }
 
-        private void WritePlaylist()
+        private void ResetOutputDirectory()
         {
-            List<SegmentEntry> snapshot;
-            lock (_gate)
+            Directory.CreateDirectory(OutputDirectory);
+            foreach (var file in Directory.GetFiles(OutputDirectory, "*.m3u8"))
             {
-                snapshot = _segments.ToList();
+                TryDelete(file);
             }
 
-            if (snapshot.Count == 0)
+            foreach (var file in Directory.GetFiles(OutputDirectory, "*.ts"))
             {
-                return;
+                TryDelete(file);
             }
-
-            var firstSequence = ParseSequence(snapshot[0].FileName);
-            var targetDuration = (int)Math.Ceiling(SegmentDuration.TotalSeconds);
-            var builder = new StringBuilder();
-            builder.AppendLine("#EXTM3U");
-            builder.AppendLine("#EXT-X-VERSION:3");
-            builder.AppendLine("#EXT-X-INDEPENDENT-SEGMENTS");
-            builder.AppendLine("#EXT-X-TARGETDURATION:" + targetDuration.ToString(CultureInfo.InvariantCulture));
-            builder.AppendLine("#EXT-X-MEDIA-SEQUENCE:" + firstSequence.ToString(CultureInfo.InvariantCulture));
-
-            foreach (var segment in snapshot)
-            {
-                builder.AppendLine("#EXTINF:" + segment.Duration.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + ",");
-                builder.AppendLine(segment.FileName);
-            }
-
-            File.WriteAllText(Path.Combine(OutputDirectory, "index.m3u8"), builder.ToString(), Encoding.ASCII);
-            WriteMasterPlaylist();
         }
 
         private void WriteMasterPlaylist()
@@ -406,8 +335,15 @@ public sealed class BrowserPanelRollingHlsService
             builder.AppendLine("#EXTM3U");
             builder.AppendLine("#EXT-X-VERSION:3");
             builder.AppendLine("#EXT-X-INDEPENDENT-SEGMENTS");
-            builder.AppendLine("#EXT-X-STREAM-INF:BANDWIDTH=768000,CODECS=\"mp4a.40.2,avc1.42E01E\",RESOLUTION=1280x720,FRAME-RATE=24,CLOSED-CAPTIONS=NONE");
-            builder.AppendLine("index.m3u8");
+            builder.AppendLine(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "#EXT-X-STREAM-INF:BANDWIDTH={0},AVERAGE-BANDWIDTH={1},CODECS=\"mp4a.40.2,avc1.42E01E\",RESOLUTION={2},FRAME-RATE={3},CLOSED-CAPTIONS=NONE",
+                    PrimaryRendition.VideoBitrate + PrimaryRendition.AudioBitrate,
+                    PrimaryRendition.VideoBitrate + PrimaryRendition.AudioBitrate,
+                    PrimaryRendition.Resolution,
+                    PrimaryRendition.FrameRate.ToString(CultureInfo.InvariantCulture)));
+            builder.AppendLine("medium.m3u8");
             File.WriteAllText(Path.Combine(OutputDirectory, "master.m3u8"), builder.ToString(), Encoding.ASCII);
         }
 
@@ -421,95 +357,466 @@ public sealed class BrowserPanelRollingHlsService
             {
             }
         }
+    }
 
-        private static int ParseSequence(string fileName)
+    private sealed class ContinuousEncoderSession : IDisposable
+    {
+        private static readonly TimeSpan VideoFrameInterval = TimeSpan.FromMilliseconds(1000.0 / 18.0);
+        private static readonly TimeSpan AudioChunkInterval = TimeSpan.FromMilliseconds(100);
+
+        private readonly Guid _windowId;
+        private readonly string _outputDirectory;
+        private readonly string _ffmpegPath;
+        private readonly BrowserSnapshotService _snapshotService;
+        private readonly BrowserAudioCaptureService _audioCaptureService;
+        private readonly CancellationToken _cancellationToken;
+        private readonly CachedBitmapFrame _initialFrame;
+        private readonly AudioFormatInfo _audioFormat;
+        private readonly string _videoPipeName;
+        private readonly string _audioPipeName;
+        private readonly NamedPipeServerStream _videoPipe;
+        private readonly NamedPipeServerStream _audioPipe;
+
+        private Process? _ffmpegProcess;
+        private bool _lastAudioChunkUsedSilence;
+        private int _consecutiveSilentAudioChunks;
+        private int _consecutiveRealAudioChunks;
+        private int _lastAudioGeneration = -1;
+
+        public ContinuousEncoderSession(
+            Guid windowId,
+            string outputDirectory,
+            string ffmpegPath,
+            BrowserSnapshotService snapshotService,
+            BrowserAudioCaptureService audioCaptureService,
+            CachedBitmapFrame initialFrame,
+            AudioFormatInfo audioFormat,
+            CancellationToken cancellationToken)
         {
-            var name = Path.GetFileNameWithoutExtension(fileName);
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return 0;
-            }
-
-            var parts = name.Split('-');
-            if (parts.Length < 2)
-            {
-                return 0;
-            }
-
-            var lastPart = parts[parts.Length - 1];
-            return int.TryParse(lastPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sequence) ? sequence : 0;
+            _windowId = windowId;
+            _outputDirectory = outputDirectory;
+            _ffmpegPath = ffmpegPath;
+            _snapshotService = snapshotService;
+            _audioCaptureService = audioCaptureService;
+            _initialFrame = initialFrame;
+            _audioFormat = audioFormat;
+            _cancellationToken = cancellationToken;
+            _videoPipeName = "superpainel_video_" + windowId.ToString("N");
+            _audioPipeName = "superpainel_audio_" + windowId.ToString("N");
+            _videoPipe = new NamedPipeServerStream(_videoPipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            _audioPipe = new NamedPipeServerStream(_audioPipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         }
 
-        private static void TryDelete(string path)
+        public async Task RunAsync()
+        {
+            var ffmpegArguments = BuildFfmpegArguments(_initialFrame, _audioFormat, _outputDirectory, _videoPipeName, _audioPipeName);
+            var waitVideoConnectionTask = Task.Run(() => _videoPipe.WaitForConnection(), _cancellationToken);
+            var waitAudioConnectionTask = Task.Run(() => _audioPipe.WaitForConnection(), _cancellationToken);
+
+            _ffmpegProcess = Process.Start(new ProcessStartInfo
+            {
+                FileName = _ffmpegPath,
+                Arguments = ffmpegArguments,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            });
+
+            if (_ffmpegProcess is null)
+            {
+                throw new InvalidOperationException("Nao foi possivel iniciar o ffmpeg para HLS continuo.");
+            }
+
+            var videoConnectionWinner = await Task.WhenAny(waitVideoConnectionTask, Task.Delay(TimeSpan.FromSeconds(5), _cancellationToken)).ConfigureAwait(false);
+            if (videoConnectionWinner != waitVideoConnectionTask)
+            {
+                var stderr = _ffmpegProcess.HasExited
+                    ? await _ffmpegProcess.StandardError.ReadToEndAsync().ConfigureAwait(false)
+                    : "ffmpeg nao conectou na pipe de video dentro do prazo.";
+                AppLog.Write(
+                    "PanelRollingHls",
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "ffmpeg continuo nao conectou: janela={0}, args={1}, stderr={2}",
+                        _windowId.ToString("N"),
+                        ffmpegArguments,
+                        stderr));
+                return;
+            }
+
+            var videoPumpTask = Task.Run(PumpVideoAsync, _cancellationToken);
+
+            var audioConnectionWinner = await Task.WhenAny(waitAudioConnectionTask, Task.Delay(TimeSpan.FromSeconds(5), _cancellationToken)).ConfigureAwait(false);
+            if (audioConnectionWinner != waitAudioConnectionTask)
+            {
+                var stderr = _ffmpegProcess.HasExited
+                    ? await _ffmpegProcess.StandardError.ReadToEndAsync().ConfigureAwait(false)
+                    : "ffmpeg nao conectou na pipe de audio dentro do prazo.";
+                AppLog.Write(
+                    "PanelRollingHls",
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "ffmpeg continuo nao conectou audio: janela={0}, stderr={1}",
+                        _windowId.ToString("N"),
+                        stderr));
+                return;
+            }
+
+            var audioPumpTask = Task.Run(PumpAudioAsync, _cancellationToken);
+            var processTask = Task.Run(() => _ffmpegProcess.WaitForExit(), _cancellationToken);
+
+            var completed = await Task.WhenAny(videoPumpTask, audioPumpTask, processTask).ConfigureAwait(false);
+            if (completed == processTask && !_cancellationToken.IsCancellationRequested)
+            {
+                var stderr = await _ffmpegProcess.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                AppLog.Write("PanelRollingHls", $"ffmpeg continuo saiu para janela {_windowId:N}: code={_ffmpegProcess.ExitCode}, error={stderr}");
+            }
+
+            Dispose();
+        }
+
+        private async Task PumpVideoAsync()
+        {
+            var frame = _initialFrame;
+            var frameIndex = 0;
+            var sourceWidth = _initialFrame.Width;
+            var sourceHeight = _initialFrame.Height;
+
+            while (!_cancellationToken.IsCancellationRequested && _videoPipe.IsConnected)
+            {
+                var startedAtUtc = DateTime.UtcNow;
+                try
+                {
+                    var latestFrame = await _snapshotService.CaptureBitmapFrameAsync(_windowId, _cancellationToken).ConfigureAwait(false);
+                    if (latestFrame is not null && latestFrame.Width == sourceWidth && latestFrame.Height == sourceHeight && latestFrame.Pixels.Length == frame.Pixels.Length)
+                    {
+                        frame = latestFrame;
+                    }
+
+                    await _videoPipe.WriteAsync(frame.Pixels, 0, frame.Pixels.Length, _cancellationToken).ConfigureAwait(false);
+                    await _videoPipe.FlushAsync(_cancellationToken).ConfigureAwait(false);
+                    frameIndex++;
+                    if (frameIndex % 90 == 0)
+                    {
+                        AppLog.Write(
+                            "PanelRollingHls",
+                            string.Format(
+                                CultureInfo.InvariantCulture,
+                                "Video continuo alimentado: janela={0}, frames={1}, frameBytes={2}, source={3}x{4}",
+                                _windowId.ToString("N"),
+                                frameIndex,
+                                frame.Pixels.Length,
+                                sourceWidth,
+                                sourceHeight));
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (IOException)
+                {
+                    break;
+                }
+
+                var delay = VideoFrameInterval - (DateTime.UtcNow - startedAtUtc);
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, _cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private async Task PumpAudioAsync()
+        {
+            var bytesPerChunk = AlignAudioBytes(_audioFormat.SampleRate * _audioFormat.Channels * 2 / 10, _audioFormat.Channels);
+            var silence = new byte[bytesPerChunk];
+            var cursor = 0L;
+            var chunkIndex = 0;
+
+            while (!_cancellationToken.IsCancellationRequested && _audioPipe.IsConnected)
+            {
+                var startedAtUtc = DateTime.UtcNow;
+                try
+                {
+                    byte[] bytesToWrite;
+                    bool usedSilence;
+                    if (UseSyntheticAudio)
+                    {
+                        bytesToWrite = BuildSyntheticPcmChunk(_audioFormat.SampleRate, _audioFormat.Channels, bytesPerChunk, chunkIndex);
+                        usedSilence = false;
+                    }
+                    else
+                    {
+                        var chunk = _audioCaptureService.ReadPcmChunk(_windowId, cursor, bytesPerChunk);
+                        cursor = chunk.NextCursor;
+                        if (_lastAudioGeneration != -1 && chunk.Generation != 0 && chunk.Generation != _lastAudioGeneration)
+                        {
+                            AppLog.Write(
+                                "PanelRollingHls",
+                                string.Format(
+                                    CultureInfo.InvariantCulture,
+                                    "Audio continuo trocou de geracao: janela={0}, anterior={1}, atual={2}, cursor={3}",
+                                    _windowId.ToString("N"),
+                                    _lastAudioGeneration,
+                                    chunk.Generation,
+                                    cursor));
+                            bytesToWrite = silence;
+                            usedSilence = true;
+                        }
+                        else
+                        {
+                            bytesToWrite = NormalizeAudioChunk(chunk.Bytes, silence, _audioFormat.Channels);
+                            usedSilence = chunk.Bytes.Length == 0;
+                        }
+
+                        if (chunk.Generation != 0)
+                        {
+                            _lastAudioGeneration = chunk.Generation;
+                        }
+                    }
+
+                    if (usedSilence)
+                    {
+                        _consecutiveSilentAudioChunks++;
+                        _consecutiveRealAudioChunks = 0;
+                        if (!_lastAudioChunkUsedSilence || _consecutiveSilentAudioChunks % 20 == 0)
+                        {
+                            AppLog.Write(
+                                "PanelRollingHls",
+                                string.Format(
+                                    CultureInfo.InvariantCulture,
+                                    "Audio continuo em silencio: janela={0}, chunksSilencio={1}, cursor={2}, bytes={3}",
+                                    _windowId.ToString("N"),
+                                    _consecutiveSilentAudioChunks,
+                                    cursor,
+                                    bytesToWrite.Length));
+                        }
+                    }
+                    else
+                    {
+                        _consecutiveRealAudioChunks++;
+                        if (_lastAudioChunkUsedSilence)
+                        {
+                            AppLog.Write(
+                                "PanelRollingHls",
+                                string.Format(
+                                    CultureInfo.InvariantCulture,
+                                    "Audio continuo voltou a dados reais: janela={0}, cursor={1}, bytes={2}",
+                                    _windowId.ToString("N"),
+                                    cursor,
+                                    bytesToWrite.Length));
+                        }
+
+                        _consecutiveSilentAudioChunks = 0;
+                    }
+
+                    _lastAudioChunkUsedSilence = usedSilence;
+
+                    await _audioPipe.WriteAsync(bytesToWrite, 0, bytesToWrite.Length, _cancellationToken).ConfigureAwait(false);
+                    await _audioPipe.FlushAsync(_cancellationToken).ConfigureAwait(false);
+                    chunkIndex++;
+                    if (chunkIndex % 50 == 0)
+                    {
+                        AppLog.Write(
+                            "PanelRollingHls",
+                            string.Format(
+                                CultureInfo.InvariantCulture,
+                                "Audio continuo alimentado: janela={0}, chunks={1}, bytes={2}, sampleRate={3}, channels={4}",
+                                _windowId.ToString("N"),
+                                chunkIndex,
+                                bytesToWrite.Length,
+                                _audioFormat.SampleRate,
+                                _audioFormat.Channels));
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (IOException)
+                {
+                    break;
+                }
+
+                var delay = AudioChunkInterval - (DateTime.UtcNow - startedAtUtc);
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, _cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        public void Dispose()
         {
             try
             {
-                if (File.Exists(path))
+                if (_ffmpegProcess is not null && !_ffmpegProcess.HasExited)
                 {
-                    File.Delete(path);
+                    _ffmpegProcess.Kill();
                 }
             }
             catch
             {
             }
-        }
-    }
 
-    private sealed class SegmentEntry
-    {
-        public SegmentEntry(string fileName, TimeSpan duration)
-        {
-            FileName = fileName;
-            Duration = duration;
-        }
-
-        public string FileName { get; }
-
-        public TimeSpan Duration { get; }
-    }
-
-    private static byte[] BuildSineWaveSnapshot()
-    {
-        const int sampleRate = 48000;
-        const int channels = 2;
-        const double frequency = 440.0;
-        var totalFrames = (int)Math.Round(SegmentDuration.TotalSeconds * sampleRate);
-        var pcmBytes = new byte[totalFrames * channels * 2];
-        var writeIndex = 0;
-
-        for (var frame = 0; frame < totalFrames; frame++)
-        {
-            var sample = (short)Math.Round(Math.Sin((2.0 * Math.PI * frequency * frame) / sampleRate) * (short.MaxValue * 0.25));
-            for (var channel = 0; channel < channels; channel++)
+            try
             {
-                pcmBytes[writeIndex++] = (byte)(sample & 0xFF);
-                pcmBytes[writeIndex++] = (byte)((sample >> 8) & 0xFF);
+                _videoPipe.Dispose();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _audioPipe.Dispose();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _ffmpegProcess?.Dispose();
+            }
+            catch
+            {
             }
         }
 
-        using (var stream = new MemoryStream(44 + pcmBytes.Length))
-        using (var writer = new BinaryWriter(stream))
+        private static string BuildFfmpegArguments(CachedBitmapFrame frame, AudioFormatInfo audioFormat, string outputDirectory, string videoPipeName, string audioPipeName)
         {
-            const int bitsPerSample = 16;
-            var blockAlign = channels * bitsPerSample / 8;
-            var byteRate = sampleRate * blockAlign;
+            var segmentPattern = Path.Combine(outputDirectory, "segment-%06d.ts");
+            var playlistPath = Path.Combine(outputDirectory, "medium.m3u8");
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "-hide_banner -loglevel error -y -fflags +genpts -thread_queue_size 512 -f rawvideo -pix_fmt bgra -video_size {0}x{1} -framerate {2} -i \"\\\\.\\pipe\\{3}\" -thread_queue_size 512 -f s16le -ar {4} -ac {5} -i \"\\\\.\\pipe\\{6}\" -map 0:v:0 -map 1:a:0 -vf \"{7}\" -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.1 -g {2} -keyint_min {2} -sc_threshold 0 -b:v {8} -maxrate {8} -bufsize {9} -pix_fmt yuv420p -c:a aac -b:a {10} -ar 48000 -ac 2 -af aresample=async=1:first_pts=0:min_hard_comp=0.100 -f hls -hls_time {11:0.###} -hls_list_size {12} -hls_flags delete_segments+append_list+independent_segments+split_by_time+omit_endlist -hls_segment_filename \"{13}\" \"{14}\"",
+                frame.Width,
+                frame.Height,
+                PrimaryRendition.FrameRate,
+                videoPipeName,
+                audioFormat.SampleRate,
+                audioFormat.Channels,
+                audioPipeName,
+                BuildVideoFilter(PrimaryRendition.Resolution),
+                PrimaryRendition.VideoBitrate.ToString(CultureInfo.InvariantCulture),
+                (PrimaryRendition.VideoBitrate * 2).ToString(CultureInfo.InvariantCulture),
+                PrimaryRendition.AudioBitrate.ToString(CultureInfo.InvariantCulture),
+                SegmentDuration.TotalSeconds,
+                PlaylistSize,
+                segmentPattern,
+                playlistPath);
+        }
 
-            writer.Write(new[] { 'R', 'I', 'F', 'F' });
-            writer.Write(36 + pcmBytes.Length);
-            writer.Write(new[] { 'W', 'A', 'V', 'E' });
-            writer.Write(new[] { 'f', 'm', 't', ' ' });
-            writer.Write(16);
-            writer.Write((short)1);
-            writer.Write((short)channels);
-            writer.Write(sampleRate);
-            writer.Write(byteRate);
-            writer.Write((short)blockAlign);
-            writer.Write((short)bitsPerSample);
-            writer.Write(new[] { 'd', 'a', 't', 'a' });
-            writer.Write(pcmBytes.Length);
-            writer.Write(pcmBytes);
-            writer.Flush();
-            return stream.ToArray();
+        private static string BuildVideoFilter(string resolution)
+        {
+            var normalizedResolution = string.IsNullOrWhiteSpace(resolution) ? "854x480" : resolution.Trim();
+            var parts = normalizedResolution.Split('x');
+            if (parts.Length != 2)
+            {
+                return "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2";
+            }
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "scale={0}:{1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2",
+                parts[0],
+                parts[1]);
+        }
+
+        private static byte[] NormalizeAudioChunk(byte[] bytes, byte[] silence, int channels)
+        {
+            if (bytes is null || bytes.Length == 0)
+            {
+                return silence;
+            }
+
+            var alignedLength = AlignAudioBytes(bytes.Length, channels);
+            if (alignedLength <= 0)
+            {
+                return silence;
+            }
+
+            if (alignedLength >= silence.Length)
+            {
+                if (alignedLength == bytes.Length)
+                {
+                    return bytes;
+                }
+
+                var aligned = new byte[alignedLength];
+                Buffer.BlockCopy(bytes, 0, aligned, 0, Math.Min(bytes.Length, alignedLength));
+                return aligned;
+            }
+
+            var padded = new byte[silence.Length];
+            Buffer.BlockCopy(bytes, 0, padded, 0, alignedLength);
+            return padded;
+        }
+
+        private static int AlignAudioBytes(int byteCount, int channels)
+        {
+            var blockAlign = Math.Max(1, channels) * 2;
+            return byteCount - (byteCount % blockAlign);
+        }
+
+        private static byte[] BuildSyntheticPcmChunk(int sampleRate, int channels, int byteCount, int chunkIndex)
+        {
+            var blockAlign = Math.Max(1, channels) * 2;
+            var sampleCount = byteCount / blockAlign;
+            var buffer = new byte[sampleCount * blockAlign];
+            var phaseOffset = chunkIndex * sampleCount;
+
+            var writeIndex = 0;
+            for (var frameIndex = 0; frameIndex < sampleCount; frameIndex++)
+            {
+                var sample = (short)Math.Round(Math.Sin((2.0 * Math.PI * 440.0 * (phaseOffset + frameIndex)) / sampleRate) * (short.MaxValue * 0.2));
+                for (var channelIndex = 0; channelIndex < channels; channelIndex++)
+                {
+                    buffer[writeIndex++] = (byte)(sample & 0xFF);
+                    buffer[writeIndex++] = (byte)((sample >> 8) & 0xFF);
+                }
+            }
+
+            return buffer;
+        }
+    }
+
+    private sealed class RenditionProfile
+    {
+        public RenditionProfile(string name, string resolution, int videoBitrate, int audioBitrate, int frameRate)
+        {
+            Name = name;
+            Resolution = resolution;
+            VideoBitrate = videoBitrate;
+            AudioBitrate = audioBitrate;
+            FrameRate = frameRate;
+        }
+
+        public string Name { get; }
+
+        public string Resolution { get; }
+
+        public int VideoBitrate { get; }
+
+        public int AudioBitrate { get; }
+
+        public int FrameRate { get; }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
         }
     }
 }

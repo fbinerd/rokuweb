@@ -65,6 +65,19 @@ function registerDisplay(bridgeHost as string) as string
     return deviceId
 end function
 
+sub notifyDisplayReady(bridgeHost as string, deviceId as string)
+    if bridgeHost = invalid or bridgeHost = "" or deviceId = invalid or deviceId = ""
+        return
+    end if
+
+    readyUrl = "http://" + bridgeHost + "/api/display-ready"
+    readyUrl = readyUrl + "?deviceId=" + urlEncode(deviceId)
+
+    transfer = CreateObject("roUrlTransfer")
+    transfer.SetUrl(readyUrl)
+    ignored = transfer.GetToString()
+end sub
+
 function urlEncode(value as string) as string
     result = ""
     for i = 1 to Len(value)

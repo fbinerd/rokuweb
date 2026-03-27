@@ -29,6 +29,7 @@ sub init()
     m.firmwareVersion = deviceInfo.GetVersion()
     m.channelVersion = GetRokuChannelReleaseId()
     m.deviceId = "roku-" + m.deviceModel + "-" + m.firmwareVersion
+    m.displayReadySent = false
     m.audioSessionId = ""
     m.audioMode = ""
     m.audioChunkUrl = ""
@@ -36,6 +37,13 @@ sub init()
     m.audioUsesHls = false
     m.videoUsesStream = false
     m.videoStreamUrl = ""
+    m.fullscreenWindowId = ""
+    m.fullscreenAssignedStreamUrl = ""
+    m.pendingAutoFullscreenWindowId = ""
+    m.pendingAutoFullscreenStreamUrl = ""
+    m.pendingAutoFullscreenSeenCount = 0
+    m.fullscreenPlayRequestCount = 0
+    m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
 
@@ -43,6 +51,7 @@ sub init()
     m.statusLabel = m.top.findNode("statusLabel")
     m.subtitleLabel = m.top.findNode("subtitleLabel")
     m.versionLabel = m.top.findNode("versionLabel")
+    m.background = m.top.findNode("background")
     m.fullscreenToastGroup = m.top.findNode("fullscreenToastGroup")
     m.fullscreenToastLabel = m.top.findNode("fullscreenToastLabel")
     m.fullscreenPosterA = m.top.findNode("fullscreenPosterA")
@@ -96,6 +105,7 @@ sub init()
         m.top.findNode("panelPoster4")
         m.top.findNode("panelPoster5")
     ]
+    m.panelPosterWindowIds = ["", "", "", "", "", ""]
 
     m.panelLabels = [
         m.top.findNode("panelLabel0")
@@ -437,6 +447,8 @@ sub applyBridgeResponse()
         })
     end for
 
+    m.isAutoConnecting = false
+
     if m.windowEntries.Count() = 0
         m.statusLabel.text = "Bridge conectado, sem paineis disponiveis"
         m.subtitleLabel.text = "Nenhuma janela publicada ainda. Atualizando automaticamente..."
@@ -472,19 +484,55 @@ sub applyBridgeResponse()
     else
         m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
     end if
-    m.isAutoConnecting = false
-    startPanelRefresh()
-    refreshGrid()
-    if not m.isFullscreen and autoFullscreenIndex >= 0
-        m.selectedIndex = autoFullscreenIndex
-        showFullscreen()
+
+    if not m.displayReadySent
+        notifyDisplayReady()
+        m.displayReadySent = true
+        m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
+        m.subtitleLabel.text = "TV pronta. Solicitando stream na proxima atualizacao..."
+        startPanelRefresh()
+        if m.isFullscreen
+            hideGrid()
+        else
+            refreshGrid()
+        end if
         return
+    end if
+
+    startPanelRefresh()
+    if m.isFullscreen
+        hideGrid()
+    else
+        refreshGrid()
+    end if
+    if not m.isFullscreen and autoFullscreenIndex >= 0
+        autoEntry = m.windowEntries[autoFullscreenIndex]
+        autoWindowId = getString(autoEntry.id, "")
+        autoStreamUrl = getString(autoEntry.streamUrl, "")
+        if autoWindowId <> "" and autoStreamUrl <> ""
+            if m.pendingAutoFullscreenWindowId = autoWindowId and m.pendingAutoFullscreenStreamUrl = autoStreamUrl
+                m.pendingAutoFullscreenSeenCount = m.pendingAutoFullscreenSeenCount + 1
+            else
+                m.pendingAutoFullscreenWindowId = autoWindowId
+                m.pendingAutoFullscreenStreamUrl = autoStreamUrl
+                m.pendingAutoFullscreenSeenCount = 1
+            end if
+
+            if m.pendingAutoFullscreenSeenCount >= 2
+                ? "[HLS] auto fullscreen confirmado => "; autoWindowId; " seen="; m.pendingAutoFullscreenSeenCount
+                m.selectedIndex = autoFullscreenIndex
+                showFullscreen()
+                return
+            end if
+
+            ? "[HLS] auto fullscreen aguardando estabilidade => "; autoWindowId; " seen="; m.pendingAutoFullscreenSeenCount
+        end if
     end if
 
     if m.isFullscreen
         if autoFullscreenIndex >= 0
             nextFullscreenWindowId = getString(m.windowEntries[autoFullscreenIndex].id, "")
-            if nextFullscreenWindowId <> "" and nextFullscreenWindowId <> previousFullscreenWindowId
+            if nextFullscreenWindowId <> "" and nextFullscreenWindowId <> previousFullscreenWindowId and nextFullscreenWindowId <> m.fullscreenWindowId
                 m.selectedIndex = autoFullscreenIndex
                 showFullscreen()
                 return
@@ -588,10 +636,15 @@ sub refreshGrid()
 
         if absoluteIndex >= m.windowEntries.Count()
             group.visible = false
+            m.panelPosterWindowIds[slot] = ""
         else
             entry = m.windowEntries[absoluteIndex]
             group.visible = true
-            poster.uri = appendCacheBust(entry.thumbnailUrl)
+            entryId = getString(entry.id, "")
+            if m.panelPosterWindowIds[slot] <> entryId
+                poster.uri = appendCacheBust(entry.thumbnailUrl)
+                m.panelPosterWindowIds[slot] = entryId
+            end if
             label.text = trimTitle(entry.title)
 
             if absoluteIndex = m.selectedIndex
@@ -604,9 +657,21 @@ sub refreshGrid()
 end sub
 
 sub hideGrid()
-    for each group in m.panelGroups
-        group.visible = false
+    for i = 0 to m.panelGroups.Count() - 1
+        m.panelGroups[i].visible = false
+        m.panelPosterWindowIds[i] = ""
     end for
+end sub
+
+sub notifyDisplayReady()
+    if m.bridgeHost = invalid or m.bridgeHost = "" or m.deviceId = invalid or m.deviceId = ""
+        return
+    end if
+
+    readyUrl = "http://" + m.bridgeHost + "/api/display-ready?deviceId=" + m.deviceId
+    transfer = CreateObject("roUrlTransfer")
+    transfer.SetUrl(readyUrl)
+    ignored = transfer.GetToString()
 end sub
 
 sub moveSelection(offset as integer)
@@ -634,8 +699,13 @@ sub showFullscreen()
         return
     end if
 
+    stopPanelAudio()
+
     entry = m.windowEntries[m.selectedIndex]
-    if entry.thumbnailUrl = invalid or entry.thumbnailUrl = ""
+    entryId = getString(entry.id, "")
+    streamUrl = getString(entry.streamUrl, "")
+    thumbnailUrl = getString(entry.thumbnailUrl, "")
+    if (thumbnailUrl = invalid or thumbnailUrl = "") and streamUrl = ""
         m.statusLabel.text = "Preview indisponivel para o painel selecionado"
         return
     end if
@@ -648,27 +718,55 @@ sub showFullscreen()
     m.titleLabel.visible = false
     m.statusLabel.visible = false
     m.subtitleLabel.visible = false
+    if m.versionLabel <> invalid
+        m.versionLabel.visible = false
+    end if
+    if m.background <> invalid
+        m.background.visible = false
+    end if
     m.activeFullscreenPoster = m.fullscreenPosterA
     m.bufferFullscreenPoster = m.fullscreenPosterB
-    m.videoUsesStream = Instr(1, LCase(getString(entry.streamUrl, "")), ".m3u8") > 0
-    m.videoStreamUrl = getString(entry.streamUrl, "")
+    m.videoUsesStream = Instr(1, LCase(streamUrl), ".m3u8") > 0
+    m.videoStreamUrl = streamUrl
+    m.fullscreenWindowId = entryId
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     if m.videoUsesStream and m.fullscreenVideo <> invalid
+        currentVideoState = LCase(getString(m.fullscreenVideo.state, ""))
+        if m.fullscreenAssignedStreamUrl = m.videoStreamUrl and m.fullscreenWindowId = entryId and (currentVideoState = "playing" or currentVideoState = "buffering")
+            ? "[HLS] showFullscreen ignorado: stream ja ativo => "; m.videoStreamUrl; " state="; currentVideoState
+            m.fullscreenVideo.visible = true
+            startFullscreenStream()
+            m.top.setFocus(true)
+            return
+        end if
+
+        if thumbnailUrl <> ""
+            m.activeFullscreenPoster.uri = appendCacheBust(thumbnailUrl)
+            m.activeFullscreenPoster.visible = true
+            m.bufferFullscreenPoster.visible = false
+            m.bufferFullscreenPoster.uri = ""
+        else
+            m.activeFullscreenPoster.visible = false
+            m.bufferFullscreenPoster.visible = false
+        end if
+
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
         content.streamFormat = "hls"
         content.title = getString(entry.title, "Painel")
+        m.fullscreenPlayRequestCount = m.fullscreenPlayRequestCount + 1
+        ? "[HLS] assign #"; m.fullscreenPlayRequestCount; " via showFullscreen => "; content.url
         ? "[HLS] play => "; content.url
+        m.fullscreenVideoPendingRestart = true
+        m.fullscreenAssignedStreamUrl = m.videoStreamUrl
         m.fullscreenVideo.content = content
         m.fullscreenVideo.control = "stop"
         m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
-        m.activeFullscreenPoster.visible = false
-        m.bufferFullscreenPoster.visible = false
         m.statusLabel.text = "Iniciando stream HLS do painel..."
     else
-        m.activeFullscreenPoster.uri = appendCacheBust(entry.thumbnailUrl)
+        m.activeFullscreenPoster.uri = appendCacheBust(thumbnailUrl)
         m.activeFullscreenPoster.visible = true
         m.bufferFullscreenPoster.visible = false
         m.bufferFullscreenPoster.uri = ""
@@ -703,6 +801,12 @@ sub hideFullscreen()
     stopPanelAudio()
     m.videoUsesStream = false
     m.videoStreamUrl = ""
+    m.fullscreenWindowId = ""
+    m.fullscreenAssignedStreamUrl = ""
+    m.pendingAutoFullscreenWindowId = ""
+    m.pendingAutoFullscreenStreamUrl = ""
+    m.pendingAutoFullscreenSeenCount = 0
+    m.fullscreenVideoPendingRestart = false
     m.scrollModeEnabled = false
     if m.fullscreenVideo <> invalid
         m.fullscreenVideo.control = "stop"
@@ -727,6 +831,12 @@ sub hideFullscreen()
     m.titleLabel.visible = true
     m.statusLabel.visible = true
     m.subtitleLabel.visible = true
+    if m.versionLabel <> invalid
+        m.versionLabel.visible = true
+    end if
+    if m.background <> invalid
+        m.background.visible = true
+    end if
     startPanelRefresh()
     refreshGrid()
     m.top.setFocus(true)
@@ -745,6 +855,7 @@ sub startPanelAudio(entry as object)
 
     audioUrl = getString(entry.audioStreamUrl, "")
     if audioUrl = ""
+        ? "[AUDIO] startPanelAudio ignorado: sem audioUrl para "; getString(entry.id, "")
         return
     end if
 
@@ -760,6 +871,7 @@ sub startPanelAudio(entry as object)
     m.audioSessionId = getString(entry.id, "")
     m.audioChunkUrl = audioUrl
     m.audioMode = "scenegraph"
+    ? "[AUDIO] startPanelAudio => session="; m.audioSessionId; " mode=scenegraph usesHls="; m.audioUsesHls; " url="; content.url
     if m.audioUsesHls and m.panelAudioVideo <> invalid
         m.panelAudioVideo.content = content
         m.panelAudioVideo.control = "stop"
@@ -789,18 +901,27 @@ sub onFullscreenVideoStateChanged()
     ? "[HLS] video state => "; state
 
     if state = "playing"
+        m.fullscreenVideoPendingRestart = false
         m.fullscreenVideoStallCount = 0
+        m.activeFullscreenPoster.visible = false
+        m.bufferFullscreenPoster.visible = false
         m.statusLabel.text = "Stream HLS do painel em reproducao"
     else if state = "buffering"
         m.statusLabel.text = "Bufferizando stream HLS do painel..."
     else if state = "error"
+        m.fullscreenVideoPendingRestart = false
         m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
     else if state = "finished" or state = "stopped"
+        if m.fullscreenVideoPendingRestart
+            ? "[HLS] ignorando estado transitorio => "; state
+            return
+        end if
         if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
             content = CreateObject("roSGNode", "ContentNode")
             content.url = appendCacheBust(m.videoStreamUrl)
             content.streamFormat = "hls"
             content.title = "Painel"
+            m.fullscreenVideoPendingRestart = true
             m.fullscreenVideo.content = content
             m.fullscreenVideo.control = "stop"
             m.fullscreenVideo.control = "play"
@@ -818,6 +939,7 @@ sub stopPanelAudio()
         return
     end if
 
+    ? "[AUDIO] stopPanelAudio => session="; m.audioSessionId; " mode="; m.audioMode; " usesHls="; m.audioUsesHls; " chunkUrl="; m.audioChunkUrl; " videoUsesStream="; m.videoUsesStream
     m.audioSessionId = ""
     m.audioMode = ""
     m.audioChunkUrl = ""
@@ -845,6 +967,12 @@ sub stopPanelAudio()
 end sub
 
 sub onPanelAudioStateChanged()
+    if m.videoUsesStream
+        ? "[AUDIO] bloqueado em onPanelAudioStateChanged porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if m.panelAudioNode = invalid or m.audioUsesHls
         return
     end if
@@ -853,6 +981,8 @@ sub onPanelAudioStateChanged()
     if state = ""
         return
     end if
+
+    ? "[AUDIO] panelAudioNode state => "; state; " session="; m.audioSessionId; " mode="; m.audioMode
 
     if state = "playing"
         m.audioMode = "scenegraph"
@@ -876,6 +1006,12 @@ sub onPanelAudioStateChanged()
 end sub
 
 sub onPanelAudioVideoStateChanged()
+    if m.videoUsesStream
+        ? "[AUDIO] bloqueado em onPanelAudioVideoStateChanged porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if m.panelAudioVideo = invalid or not m.audioUsesHls
         return
     end if
@@ -884,6 +1020,8 @@ sub onPanelAudioVideoStateChanged()
     if state = ""
         return
     end if
+
+    ? "[AUDIO] panelAudioVideo state => "; state; " session="; m.audioSessionId; " mode="; m.audioMode
 
     if state = "playing"
         m.audioMode = "scenegraph"
@@ -912,6 +1050,12 @@ sub scheduleAudioHlsRestart()
 end sub
 
 sub onAudioHlsRestartTimerFire()
+    if m.videoUsesStream
+        ? "[AUDIO] onAudioHlsRestartTimerFire bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if not m.audioUsesHls
         return
     end if
@@ -930,6 +1074,12 @@ sub scheduleAudioRetry()
 end sub
 
 sub onAudioRetryTimerFire()
+    if m.videoUsesStream
+        ? "[AUDIO] onAudioRetryTimerFire bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if m.audioMode = "legacy"
         playLegacyPanelAudioChunk()
         return
@@ -944,6 +1094,12 @@ sub onAudioRetryTimerFire()
 end sub
 
 sub restartPanelAudio()
+    if m.videoUsesStream
+        ? "[AUDIO] restartPanelAudio bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if not m.isFullscreen or m.audioSessionId = ""
         return
     end if
@@ -961,6 +1117,12 @@ sub restartPanelAudio()
 end sub
 
 sub onAudioFallbackTimerFire()
+    if m.videoUsesStream
+        ? "[AUDIO] onAudioFallbackTimerFire bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if not m.isFullscreen or m.audioSessionId = ""
         return
     end if
@@ -984,12 +1146,19 @@ sub onAudioFallbackTimerFire()
 end sub
 
 sub startLegacyPanelAudio()
+    if m.videoUsesStream
+        ? "[AUDIO] startLegacyPanelAudio bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if m.audioChunkUrl = ""
         return
     end if
 
     m.audioMode = "legacy"
     m.audioUsesHls = false
+    ? "[AUDIO] startLegacyPanelAudio => session="; m.audioSessionId; " url="; m.audioChunkUrl
     if m.panelAudioNode <> invalid
         m.panelAudioNode.control = "stop"
         m.panelAudioNode.content = invalid
@@ -1003,6 +1172,12 @@ sub startLegacyPanelAudio()
 end sub
 
 sub playLegacyPanelAudioChunk()
+    if m.videoUsesStream
+        ? "[AUDIO] playLegacyPanelAudioChunk bloqueado porque videoUsesStream=true"
+        stopPanelAudio()
+        return
+    end if
+
     if not m.isFullscreen or m.audioSessionId = "" or m.audioChunkUrl = ""
         return
     end if
@@ -1011,6 +1186,7 @@ sub playLegacyPanelAudioChunk()
     audioItem.url = appendCacheBust(m.audioChunkUrl)
     audioItem.streamformat = "wav"
     audioItem.title = "Audio do painel"
+    ? "[AUDIO] playLegacyPanelAudioChunk => session="; m.audioSessionId; " url="; audioItem.url
 
     if m.audioPlayer <> invalid
         m.audioPlayer.Stop()
@@ -1237,7 +1413,9 @@ end sub
 
 sub onFullscreenStreamTimerFire()
     loadWindows(true)
-    refreshFullscreenPreview()
+    if not m.videoUsesStream
+        refreshFullscreenPreview()
+    end if
 end sub
 
 sub syncFullscreenStreamState(windowId as string)
@@ -1264,11 +1442,15 @@ sub syncFullscreenStreamState(windowId as string)
     end if
 
     if nextStreamUrl = m.videoStreamUrl
+        ? "[HLS] sync ignorado: mesmo stream => "; nextStreamUrl
         return
     end if
 
+    stopPanelAudio()
     m.videoUsesStream = true
     m.videoStreamUrl = nextStreamUrl
+    m.fullscreenVideoPendingRestart = true
+    m.fullscreenAssignedStreamUrl = nextStreamUrl
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
 
@@ -1276,6 +1458,8 @@ sub syncFullscreenStreamState(windowId as string)
     content.url = appendCacheBust(m.videoStreamUrl)
     content.streamFormat = "hls"
     content.title = getString(currentEntry.title, "Painel")
+    m.fullscreenPlayRequestCount = m.fullscreenPlayRequestCount + 1
+    ? "[HLS] assign #"; m.fullscreenPlayRequestCount; " via sync => "; content.url
     m.fullscreenVideo.content = content
     m.fullscreenVideo.control = "stop"
     m.fullscreenVideo.control = "play"

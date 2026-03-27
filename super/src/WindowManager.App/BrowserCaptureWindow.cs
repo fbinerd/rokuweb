@@ -112,7 +112,7 @@ public sealed class BrowserCaptureWindow : Window
 })();";
     private bool _isNavigationBarEnabled;
 
-    public BrowserCaptureWindow(Guid windowId, Uri? initialUri, BrowserAudioCaptureService audioCaptureService, string? browserProfileName = null)
+    public BrowserCaptureWindow(Guid windowId, Uri? initialUri, BrowserAudioCaptureService audioCaptureService, string? browserProfileName = null, bool enableAudioCapture = true)
     {
         Width = 1280;
         Height = 720;
@@ -127,7 +127,10 @@ public sealed class BrowserCaptureWindow : Window
         Browser = new ChromiumWebBrowser();
         ConfigureRequestContext(Browser, browserProfileName);
         Browser.Address = initialUri?.ToString() ?? "about:blank";
-        Browser.AudioHandler = audioCaptureService.CreateHandler(windowId);
+        if (enableAudioCapture)
+        {
+            Browser.AudioHandler = audioCaptureService.CreateHandler(windowId);
+        }
         Browser.FrameLoadEnd += OnBrowserFrameLoadEnd;
 
         Content = Browser;

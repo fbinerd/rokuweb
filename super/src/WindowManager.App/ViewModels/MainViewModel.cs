@@ -3616,6 +3616,40 @@ public sealed class MainViewModel : ViewModelBase
         var tvReachable = activeProbe is not null;
         var registeredDisplay = FindRegisteredDisplayForBinding(resolvedTarget, binding);
         var registrationFresh = IsRegisteredDisplayFresh(registeredDisplay, TimeSpan.FromSeconds(8));
+        var recentlyStreaming = _webRtcPublisherService.IsDisplayStreamingRecently(resolvedTarget, TimeSpan.FromSeconds(20));
+
+        if (resolvedTarget.TransportKind == DisplayTransportKind.LanStreaming && recentlyStreaming)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' esta consumindo HLS recentemente.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
+
+        if (resolvedTarget.TransportKind == DisplayTransportKind.LanStreaming && registeredDisplay is not null && tvReachable)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' ja esta registrada e alcancavel.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
+
+        if (registrationFresh)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' se registrou recentemente.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
 
         if (tvReachable && registrationFresh)
         {
