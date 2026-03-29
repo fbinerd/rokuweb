@@ -21,7 +21,8 @@ $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
 $desktopShortcutPath = Join-Path $env:USERPROFILE "Desktop\SuperPainel Local.lnk"
-$launchSuperBeforeSideload = $false
+$launchSuperBeforeSideload = [bool]$LaunchSuper
+$superReadyForSideload = $false
 
 function Invoke-Step {
     param(
@@ -306,7 +307,49 @@ function Start-SuperLocal {
         throw "Executavel do SuperPainel nao encontrado: $superExePath"
     }
 
-    Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath)
+    $process = Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath) -WindowStyle Normal -PassThru
+    Start-Sleep -Milliseconds 1200
+
+    try {
+        $process.Refresh()
+        if ($process.HasExited) {
+            throw "O SuperPainel encerrou logo apos a abertura. ExitCode=$($process.ExitCode)"
+        }
+    }
+    catch {
+        throw
+    }
+
+    return $process
+}
+
+function Wait-SuperWindowReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $Process.Refresh()
+            if ($Process.HasExited) {
+                throw "O SuperPainel encerrou antes de criar a janela principal. ExitCode=$($Process.ExitCode)"
+            }
+
+            if ($Process.MainWindowHandle -ne 0) {
+                return $true
+            }
+        }
+        catch {
+            throw
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    return $false
 }
 
 function Wait-SuperBridgeReady {
@@ -378,10 +421,17 @@ Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
 
 if ($launchSuperBeforeSideload) {
     Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        Start-SuperLocal
+        $superProcess = Start-SuperLocal
+        Write-Host ("SuperPainel iniciado => pid={0}" -f $superProcess.Id)
+        if (-not (Wait-SuperWindowReady -Process $superProcess)) {
+            throw "O SuperPainel nao criou a janela principal a tempo."
+        }
+        Write-Host "SuperPainel com janela principal ativa."
         if (-not (Wait-SuperBridgeReady)) {
             throw "O SuperPainel nao respondeu em /api/windows a tempo."
         }
+        $script:superReadyForSideload = $true
+        Write-Host "SuperPainel pronto para seguir com o sideload."
     }
 }
 
@@ -390,6 +440,10 @@ if (-not $LaunchSuper) {
 }
 
 if (-not $SkipSideload) {
+    if ($LaunchSuper -and -not $superReadyForSideload) {
+        throw "O sideload foi bloqueado porque o SuperPainel nao ficou pronto antes da etapa da Roku."
+    }
+
     if ([string]::IsNullOrWhiteSpace($RokuIp)) {
         throw "Informe -RokuIp para fazer sideload local, ou use -SkipSideload."
     }
@@ -412,16 +466,6 @@ if (-not $SkipSideload) {
             Send-RokuHome -RokuHost $RokuIp.Trim()
         }
         Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip -LaunchChannel:$LaunchRokuApp
-    }
-}
-
-if ($LaunchSuper -and -not $launchSuperBeforeSideload) {
-    Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        Start-Sleep -Milliseconds 1800
-        Start-SuperLocal
-        if (-not (Wait-SuperBridgeReady)) {
-            throw "O SuperPainel nao respondeu em /api/windows a tempo."
-        }
     }
 }
 

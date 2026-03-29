@@ -15,6 +15,8 @@ public sealed class BrowserPanelInteractionHlsService
 {
     private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2.0);
     private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(2000);
+    private static readonly TimeSpan PlaylistTtl = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan SegmentTtl = TimeSpan.FromSeconds(8);
     private const int PlaylistSize = 4;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
@@ -68,27 +70,30 @@ public sealed class BrowserPanelInteractionHlsService
         }
     }
 
-    public bool TryGetPlaylistPath(Guid windowId, out string path)
+    public bool HasPlaylist(Guid windowId)
     {
-        path = string.Empty;
         if (!IsAvailable)
         {
             return false;
         }
 
-        EnsureWindow(windowId);
+        return _streams.TryGetValue(windowId, out var stream) && stream.HasArtifact("index.m3u8");
+    }
+
+    public bool TryGetPlaylistBytes(Guid windowId, out byte[] payload)
+    {
+        payload = Array.Empty<byte>();
         if (!_streams.TryGetValue(windowId, out var stream))
         {
             return false;
         }
 
-        path = Path.Combine(stream.OutputDirectory, "index.m3u8");
-        return File.Exists(path);
+        return stream.TryReadArtifact("index.m3u8", out payload);
     }
 
-    public bool TryGetSegmentPath(Guid windowId, string fileName, out string path)
+    public bool TryGetSegmentBytes(Guid windowId, string fileName, out byte[] payload)
     {
-        path = string.Empty;
+        payload = Array.Empty<byte>();
         if (!_streams.TryGetValue(windowId, out var stream))
         {
             return false;
@@ -100,8 +105,7 @@ public sealed class BrowserPanelInteractionHlsService
             return false;
         }
 
-        path = Path.Combine(stream.OutputDirectory, safeName);
-        return File.Exists(path);
+        return stream.TryReadArtifact(safeName, out payload);
     }
 
     private static string ResolveFfmpegPath()
@@ -186,6 +190,7 @@ public sealed class BrowserPanelInteractionHlsService
         private readonly object _gate = new();
         private readonly Guid _windowId;
         private readonly List<SegmentEntry> _segments = new();
+        private readonly HlsInMemoryArtifactStore _artifactStore = new();
         private CancellationTokenSource? _cancellation;
         private Task? _worker;
         private DateTime _lastTouchedUtc;
@@ -306,6 +311,7 @@ public sealed class BrowserPanelInteractionHlsService
                     await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
                     if (process.ExitCode == 0 && File.Exists(segmentPath))
                     {
+                        _artifactStore.Put(segmentFileName, File.ReadAllBytes(segmentPath), SegmentTtl, removeAfterRead: true);
                         RegisterSegment(new SegmentEntry(segmentFileName, SegmentDuration));
                         WritePlaylist();
                         if (!_loggedPlaylistReady)
@@ -322,6 +328,7 @@ public sealed class BrowserPanelInteractionHlsService
 
                     TryDelete(imagePath);
                     TryDelete(audioPath);
+                    TryDelete(segmentPath);
                 }
                 catch (OperationCanceledException)
                 {
@@ -345,6 +352,7 @@ public sealed class BrowserPanelInteractionHlsService
                 {
                     var stale = _segments[0];
                     _segments.RemoveAt(0);
+                    _artifactStore.Remove(stale.FileName);
                     TryDelete(Path.Combine(OutputDirectory, stale.FileName));
                 }
             }
@@ -377,7 +385,17 @@ public sealed class BrowserPanelInteractionHlsService
                 builder.AppendLine(segment.FileName);
             }
 
-            File.WriteAllText(Path.Combine(OutputDirectory, "index.m3u8"), builder.ToString(), Encoding.ASCII);
+            _artifactStore.Put("index.m3u8", Encoding.ASCII.GetBytes(builder.ToString()), PlaylistTtl, removeAfterRead: false);
+        }
+
+        public bool HasArtifact(string fileName)
+        {
+            return _artifactStore.Has(fileName);
+        }
+
+        public bool TryReadArtifact(string fileName, out byte[] payload)
+        {
+            return _artifactStore.TryRead(fileName, out payload);
         }
 
         public void Dispose()
@@ -385,6 +403,25 @@ public sealed class BrowserPanelInteractionHlsService
             try
             {
                 _cancellation?.Cancel();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                lock (_gate)
+                {
+                    _segments.Clear();
+                    _sequence = 0;
+                    _loggedPlaylistReady = false;
+                    _artifactStore.Clear();
+                    TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
+                    foreach (var stale in Directory.GetFiles(OutputDirectory, "segment-*.ts"))
+                    {
+                        TryDelete(stale);
+                    }
+                }
             }
             catch
             {

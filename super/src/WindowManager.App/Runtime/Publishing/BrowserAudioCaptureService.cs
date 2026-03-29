@@ -14,8 +14,6 @@ public sealed class BrowserAudioCaptureService
     private static readonly StreamingTuning Tuning = StreamingTuning.Current;
     private static readonly TimeSpan AudioFreshnessWindow = TimeSpan.FromMilliseconds(Tuning.AudioFreshnessMs);
     private static readonly TimeSpan MaxBufferedAudio = TimeSpan.FromMilliseconds(Tuning.AudioMaxBufferMs);
-    private static readonly TimeSpan MaxLiveReadLag = TimeSpan.FromMilliseconds(Tuning.AudioMaxLiveReadLagMs);
-    private static readonly TimeSpan AudioSyncOffset = TimeSpan.FromMilliseconds(Tuning.AudioSyncOffsetMs);
     private static readonly TimeSpan AudioRestartCoalesceWindow = TimeSpan.FromSeconds(5);
     private readonly ConcurrentDictionary<Guid, WindowAudioBuffer> _buffers = new ConcurrentDictionary<Guid, WindowAudioBuffer>();
 
@@ -336,41 +334,6 @@ public sealed class BrowserAudioCaptureService
                     normalizedCursor = availableEnd;
                 }
 
-                var maxLagBytes = AlignToFrameBoundary(
-                    (int)Math.Round(_sampleRate * _channels * 2 * MaxLiveReadLag.TotalSeconds),
-                    bytesPerFrame);
-                if (maxLagBytes > 0)
-                {
-                    var liveCursorFloor = Math.Max(availableStart, availableEnd - maxLagBytes);
-                    var syncOffsetBytes = AlignToFrameBoundary(
-                        (int)Math.Round(_sampleRate * _channels * 2 * Math.Abs(AudioSyncOffset.TotalSeconds)),
-                        bytesPerFrame);
-                    if (syncOffsetBytes > 0)
-                    {
-                        if (AudioSyncOffset > TimeSpan.Zero)
-                        {
-                            liveCursorFloor = Math.Max(availableStart, liveCursorFloor - syncOffsetBytes);
-                        }
-                        else if (AudioSyncOffset < TimeSpan.Zero)
-                        {
-                            liveCursorFloor = Math.Min(availableEnd, liveCursorFloor + syncOffsetBytes);
-                        }
-                    }
-
-                    if (normalizedCursor < liveCursorFloor)
-                    {
-                        var droppedBytes = liveCursorFloor - normalizedCursor;
-                        AppLog.Write(
-                            "BrowserAudio",
-                            string.Format(
-                                "Backlog de audio descartado para manter tempo real: bytes={0}, lagMs~={1:0}, generation={2}",
-                                droppedBytes,
-                                _sampleRate > 0 && _channels > 0 ? (droppedBytes * 1000.0) / (_sampleRate * _channels * 2) : 0,
-                                _streamGeneration));
-                        normalizedCursor = liveCursorFloor;
-                    }
-                }
-
                 var availableBytes = (int)Math.Min(maxBytes, availableEnd - normalizedCursor);
                 availableBytes -= availableBytes % bytesPerFrame;
                 if (availableBytes <= 0)
@@ -408,17 +371,6 @@ public sealed class BrowserAudioCaptureService
             _pcmBytes = combined;
             _totalBytesWritten += packetBytes.Length;
         }
-
-        private static int AlignToFrameBoundary(int byteCount, int bytesPerFrame)
-        {
-            if (byteCount <= 0 || bytesPerFrame <= 0)
-            {
-                return 0;
-            }
-
-            return byteCount - (byteCount % bytesPerFrame);
-        }
-
         private byte[] SliceRecentPcmBytes(TimeSpan maxDuration)
         {
             if (maxDuration <= TimeSpan.Zero)

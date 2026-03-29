@@ -9,6 +9,7 @@
   <children>
     <BridgeRequestTask id="bridgeRequestTask" />
     <InputLogTask id="inputLogTask" />
+    <ModeSwitchNotifyTask id="modeSwitchNotifyTask" />
     <ControlTask id="controlTask" />
     <ControlTask id="clickControlTask" />
     <ControlTask id="textControlTask" />
@@ -110,7 +111,19 @@
       visible="false"
       loadDisplayMode="zoomToFill" />
     <Video
-      id="fullscreenVideo"
+      id="fullscreenInteractionVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
+    <Video
+      id="fullscreenVideoModeVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
+    <Video
+      id="fullscreenVideoStage"
       width="1280"
       height="720"
       translation="[0,0]"

@@ -4,31 +4,20 @@ end sub
 
 sub execute()
     bridgeHost = m.top.bridgeHost
-    keyName = m.top.keyName
+    deviceId = m.top.deviceId
+    windowId = m.top.windowId
+    previousMode = m.top.previousMode
+    targetMode = m.top.targetMode
 
-    if bridgeHost = invalid or bridgeHost = "" or keyName = invalid or keyName = ""
+    if bridgeHost = invalid or bridgeHost = "" or deviceId = invalid or deviceId = "" or windowId = invalid or windowId = ""
         return
     end if
 
-    fullscreenValue = "false"
-    if m.top.fullscreen
-        fullscreenValue = "true"
-    end if
-
-    selectedValue = m.top.selectedIndex.ToStr()
-    deviceId = m.top.deviceId
-    deviceModel = m.top.deviceModel
-    firmwareVersion = m.top.firmwareVersion
-    channelVersion = m.top.channelVersion
-
-    url = "http://" + bridgeHost + "/api/input-log"
-    url = url + "?key=" + urlEncode(keyName)
-    url = url + "&fullscreen=" + fullscreenValue
-    url = url + "&selected=" + urlEncode(selectedValue)
-    url = url + "&deviceId=" + urlEncode(deviceId)
-    url = url + "&deviceModel=" + urlEncode(deviceModel)
-    url = url + "&firmwareVersion=" + urlEncode(firmwareVersion)
-    url = url + "&channelVersion=" + urlEncode(channelVersion)
+    url = "http://" + bridgeHost + "/api/mode-switch-applied"
+    url = url + "?deviceId=" + urlEncode(deviceId)
+    url = url + "&windowId=" + urlEncode(windowId)
+    url = url + "&previousMode=" + urlEncode(previousMode)
+    url = url + "&targetMode=" + urlEncode(targetMode)
 
     transfer = CreateObject("roUrlTransfer")
     transfer.SetUrl(url)

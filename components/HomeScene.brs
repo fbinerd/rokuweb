@@ -40,13 +40,26 @@ sub init()
     m.fullscreenStreamingMode = "Interacao"
     m.fullscreenWindowId = ""
     m.fullscreenAssignedStreamUrl = ""
+    m.modeSwitchState = "idle"
+    m.pendingModeSwitchWindowId = ""
+    m.pendingModeSwitchCurrentMode = ""
+    m.pendingModeSwitchTargetMode = ""
+    m.pendingModeSwitchAckSent = false
     m.pendingAutoFullscreenWindowId = ""
     m.pendingAutoFullscreenStreamUrl = ""
+    m.pendingAutoFullscreenMode = ""
     m.pendingAutoFullscreenSeenCount = 0
     m.fullscreenPlayRequestCount = 0
     m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.lastVideoDiagEvent = ""
+    m.lastVideoDiagHeartbeat = invalid
+    m.fullscreenPosterWindowId = ""
+    m.fullscreenPosterSourceUrl = ""
+    m.lastBridgeCompletedToken = ""
+    m.bridgeDiagnosticsCount = 0
+    m.showFullscreenDiagnosticsCount = 0
 
     m.titleLabel = m.top.findNode("titleLabel")
     m.statusLabel = m.top.findNode("statusLabel")
@@ -62,6 +75,7 @@ sub init()
     m.cursorMarker = m.top.findNode("cursorMarker")
     m.bridgeRequestTask = m.top.findNode("bridgeRequestTask")
     m.inputLogTask = m.top.findNode("inputLogTask")
+    m.modeSwitchNotifyTask = m.top.findNode("modeSwitchNotifyTask")
     m.controlTask = m.top.findNode("controlTask")
     m.clickControlTask = m.top.findNode("clickControlTask")
     m.textControlTask = m.top.findNode("textControlTask")
@@ -78,7 +92,12 @@ sub init()
     m.audioHlsRestartTimer = m.top.findNode("audioHlsRestartTimer")
     m.panelAudioNode = m.top.findNode("panelAudioNode")
     m.panelAudioVideo = m.top.findNode("panelAudioVideo")
-    m.fullscreenVideo = m.top.findNode("fullscreenVideo")
+    m.fullscreenVideo = m.top.findNode("fullscreenInteractionVideo")
+    m.fullscreenVideoMode = m.top.findNode("fullscreenVideoModeVideo")
+    m.fullscreenVideoStage = m.top.findNode("fullscreenVideoStage")
+    m.stagingVideoTargetMode = ""
+    m.stagingVideoWindowId = ""
+    m.stagingVideoStreamUrl = ""
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -118,6 +137,7 @@ sub init()
     ]
 
     m.bridgeRequestTask.observeField("responseCode", "onBridgeResponseCodeChanged")
+    m.bridgeRequestTask.observeField("completedToken", "onBridgeRequestCompleted")
     m.panelRefreshTimer.observeField("fire", "onPanelRefreshTimerFire")
     m.previewRefreshTimer.observeField("fire", "onPreviewRefreshTimerFire")
     m.autoConnectTimer.observeField("fire", "onAutoConnectTimerFire")
@@ -143,7 +163,13 @@ sub init()
         m.panelAudioVideo.observeField("state", "onPanelAudioVideoStateChanged")
     end if
     if m.fullscreenVideo <> invalid
-        m.fullscreenVideo.observeField("state", "onFullscreenVideoStateChanged")
+        m.fullscreenVideo.observeField("state", "onFullscreenInteractionVideoStateChanged")
+    end if
+    if m.fullscreenVideoMode <> invalid
+        m.fullscreenVideoMode.observeField("state", "onFullscreenVideoModeStateChanged")
+    end if
+    if m.fullscreenVideoStage <> invalid
+        m.fullscreenVideoStage.observeField("state", "onFullscreenVideoStageStateChanged")
     end if
     m.top.setFocus(true)
     m.pendingEditableActivation = false
@@ -369,6 +395,74 @@ sub reportInputKey(key as string)
     m.inputLogTask.control = "RUN"
 end sub
 
+sub reportVideoDiag(eventName as string, extra = "" as string)
+    if not m.isFullscreen
+        return
+    end if
+
+    streamUrl = getString(m.videoStreamUrl, "")
+    rv = ""
+    queryIndex = Instr(1, streamUrl, "rv=")
+    if queryIndex > 0
+        rv = Mid(streamUrl, queryIndex + 3)
+        ampIndex = Instr(1, rv, "&")
+        if ampIndex > 0
+            rv = Left(rv, ampIndex - 1)
+        end if
+    end if
+
+    payload = "diag:" + eventName + ":mode=" + normalizeStreamingMode(m.fullscreenStreamingMode)
+    if rv <> ""
+        payload = payload + ":rv=" + rv
+    end if
+    if extra <> ""
+        payload = payload + ":" + extra
+    end if
+
+    if payload = m.lastVideoDiagEvent
+        return
+    end if
+
+    m.lastVideoDiagEvent = payload
+    reportInputKey(payload)
+end sub
+
+sub reportVideoDiagHeartbeat()
+    if not m.isFullscreen or normalizeStreamingMode(m.fullscreenStreamingMode) <> "Video"
+        return
+    end if
+
+    if m.lastVideoDiagHeartbeat = invalid
+        m.lastVideoDiagHeartbeat = CreateObject("roTimespan")
+        m.lastVideoDiagHeartbeat.Mark()
+    else if m.lastVideoDiagHeartbeat.TotalMilliseconds() < 5000
+        return
+    else
+        m.lastVideoDiagHeartbeat.Mark()
+    end if
+
+    if m.fullscreenVideoMode = invalid
+        reportVideoDiag("video-heartbeat", "state=invalid-node")
+        return
+    end if
+
+    currentState = LCase(getString(m.fullscreenVideoMode.state, ""))
+    currentUrl = getString(m.videoStreamUrl, "")
+    positionValue = m.fullscreenVideoMode.position
+    if positionValue = invalid
+        positionValue = -1
+    end if
+
+    extra = "state=" + currentState + ":pos=" + positionValue.ToStr()
+    if currentUrl = ""
+        extra = extra + ":url=empty"
+    else
+        extra = extra + ":url=set"
+    end if
+
+    reportVideoDiag("video-heartbeat", extra)
+end sub
+
 sub loadWindows(silent = false as boolean)
     if not silent and m.isAutoConnecting
         m.statusLabel.text = "Tentando conectar em " + m.bridgeHost
@@ -385,6 +479,20 @@ sub loadWindows(silent = false as boolean)
 end sub
 
 sub onBridgeResponseCodeChanged()
+    if m.bridgeRequestTask.responseCode < 0
+        return
+    end if
+
+    applyBridgeResponse()
+end sub
+
+sub onBridgeRequestCompleted()
+    token = getString(m.bridgeRequestTask.completedToken, "")
+    if token = "" or token = m.lastBridgeCompletedToken
+        return
+    end if
+
+    m.lastBridgeCompletedToken = token
     if m.bridgeRequestTask.responseCode < 0
         return
     end if
@@ -445,14 +553,20 @@ sub applyBridgeResponse()
             initialUrl: getString(window.initialUrl, "")
             audioStreamUrl: getString(window.audioStreamUrl, "")
             audioAvailable: getBool(window.audioAvailable, false)
-            streamingMode: normalizeStreamingMode(getString(window.streamingMode, "Interacao"))
+            streamingMode: resolveWindowEntryStreamingMode(window)
+            requestedStreamingMode: normalizeOptionalStreamingMode(getString(window.requestedStreamingMode, ""))
+            modeSwitchPending: getBool(window.modeSwitchPending, false)
             autoOpenFullscreen: getBool(window.autoOpenFullscreen, false)
         })
     end for
 
     for each entry in m.windowEntries
-        ? "[MODE] bridge entry => id="; getString(entry.id, ""); " modo="; getString(entry.streamingMode, ""); " autoOpen="; getBool(entry.autoOpenFullscreen, false); " stream="; getString(entry.streamUrl, "")
+        ? "[MODE] bridge entry => id="; getString(entry.id, ""); " modo="; getString(entry.streamingMode, ""); " pendente="; getBool(entry.modeSwitchPending, false); " alvo="; getString(entry.requestedStreamingMode, ""); " autoOpen="; getBool(entry.autoOpenFullscreen, false); " stream="; getString(entry.streamUrl, "")
     end for
+    m.bridgeDiagnosticsCount = m.bridgeDiagnosticsCount + 1
+    if m.bridgeDiagnosticsCount <= 3
+        ? "[BOOT] bridge payload #"; m.bridgeDiagnosticsCount; " windows="; m.windowEntries.Count(); " autoIndex="; autoFullscreenIndex
+    end if
 
     m.isAutoConnecting = false
 
@@ -527,30 +641,31 @@ sub applyBridgeResponse()
         autoWindowId = getString(autoEntry.id, "")
         autoStreamUrl = getString(autoEntry.streamUrl, "")
         autoStreamingMode = normalizeStreamingMode(getString(autoEntry.streamingMode, "Interacao"))
-        if autoStreamingMode = "Interacao"
-            m.selectedIndex = autoFullscreenIndex
-            showFullscreen()
-            return
-        end if
 
         if autoWindowId <> "" and autoStreamUrl <> ""
-            if m.pendingAutoFullscreenWindowId = autoWindowId and m.pendingAutoFullscreenStreamUrl = autoStreamUrl
+            if m.pendingAutoFullscreenWindowId = autoWindowId and m.pendingAutoFullscreenStreamUrl = autoStreamUrl and m.pendingAutoFullscreenMode = autoStreamingMode
                 m.pendingAutoFullscreenSeenCount = m.pendingAutoFullscreenSeenCount + 1
             else
                 m.pendingAutoFullscreenWindowId = autoWindowId
                 m.pendingAutoFullscreenStreamUrl = autoStreamUrl
+                m.pendingAutoFullscreenMode = autoStreamingMode
                 m.pendingAutoFullscreenSeenCount = 1
             end if
 
             if m.pendingAutoFullscreenSeenCount >= 2
-                ? "[HLS] auto fullscreen confirmado => "; autoWindowId; " seen="; m.pendingAutoFullscreenSeenCount
+                ? "[HLS] auto fullscreen confirmado => "; autoWindowId; " modo="; autoStreamingMode; " seen="; m.pendingAutoFullscreenSeenCount
                 m.selectedIndex = autoFullscreenIndex
                 showFullscreen()
                 return
             end if
 
-            ? "[HLS] auto fullscreen aguardando estabilidade => "; autoWindowId; " seen="; m.pendingAutoFullscreenSeenCount
+            ? "[HLS] auto fullscreen aguardando estabilidade => "; autoWindowId; " modo="; autoStreamingMode; " seen="; m.pendingAutoFullscreenSeenCount
         end if
+    else if not m.isFullscreen
+        m.pendingAutoFullscreenWindowId = ""
+        m.pendingAutoFullscreenStreamUrl = ""
+        m.pendingAutoFullscreenMode = ""
+        m.pendingAutoFullscreenSeenCount = 0
     end if
 
     if m.isFullscreen
@@ -760,12 +875,21 @@ sub showFullscreen()
     m.videoUsesStream = Instr(1, LCase(streamUrl), ".m3u8") > 0
     m.videoStreamUrl = streamUrl
     m.fullscreenStreamingMode = normalizeStreamingMode(getString(entry.streamingMode, "Interacao"))
+    m.showFullscreenDiagnosticsCount = m.showFullscreenDiagnosticsCount + 1
+    if m.showFullscreenDiagnosticsCount <= 3
+        ? "[BOOT] showFullscreen #"; m.showFullscreenDiagnosticsCount; " id="; entryId; " modo="; m.fullscreenStreamingMode; " usesStream="; m.videoUsesStream; " stream="; m.videoStreamUrl
+    end if
     ? "[MODE] showFullscreen => id="; entryId; " modo="; m.fullscreenStreamingMode; " usesStream="; m.videoUsesStream; " stream="; m.videoStreamUrl
     m.fullscreenWindowId = entryId
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
-    if m.videoUsesStream and m.fullscreenVideo <> invalid
+    stopStagingFullscreenVideo()
+    stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
+    if m.videoUsesStream
         if m.fullscreenStreamingMode = "Interacao"
+            if m.fullscreenVideo = invalid
+                return
+            end if
             content = CreateObject("roSGNode", "ContentNode")
             content.url = appendCacheBust(m.videoStreamUrl)
             content.streamFormat = "hls"
@@ -793,20 +917,21 @@ sub showFullscreen()
             return
         end if
 
-        currentVideoState = LCase(getString(m.fullscreenVideo.state, ""))
+        if m.fullscreenVideoMode = invalid
+            return
+        end if
+
+        currentVideoState = LCase(getString(m.fullscreenVideoMode.state, ""))
         if m.fullscreenAssignedStreamUrl = m.videoStreamUrl and m.fullscreenWindowId = entryId and (currentVideoState = "playing" or currentVideoState = "buffering")
             ? "[HLS] showFullscreen ignorado: stream ja ativo => "; m.videoStreamUrl; " state="; currentVideoState
-            m.fullscreenVideo.visible = true
+            m.fullscreenVideoMode.visible = true
             startFullscreenStream()
             m.top.setFocus(true)
             return
         end if
 
         if thumbnailUrl <> ""
-            m.activeFullscreenPoster.uri = appendCacheBust(thumbnailUrl)
-            m.activeFullscreenPoster.visible = true
-            m.bufferFullscreenPoster.visible = false
-            m.bufferFullscreenPoster.uri = ""
+            setFullscreenPoster(thumbnailUrl, entryId, true)
         else
             m.activeFullscreenPoster.visible = false
             m.bufferFullscreenPoster.visible = false
@@ -821,16 +946,25 @@ sub showFullscreen()
         ? "[HLS] play => "; content.url
         m.fullscreenVideoPendingRestart = true
         m.fullscreenAssignedStreamUrl = m.videoStreamUrl
-        m.fullscreenVideo.content = content
-        m.fullscreenVideo.control = "stop"
-        m.fullscreenVideo.visible = true
-        m.fullscreenVideo.control = "play"
+        m.fullscreenVideoMode.content = content
+        m.fullscreenVideoMode.control = "stop"
+        m.fullscreenVideoMode.visible = true
+        m.fullscreenVideoMode.control = "play"
         m.statusLabel.text = "Iniciando stream HLS do painel..."
     else
-        m.activeFullscreenPoster.uri = appendCacheBust(thumbnailUrl)
-        m.activeFullscreenPoster.visible = true
-        m.bufferFullscreenPoster.visible = false
-        m.bufferFullscreenPoster.uri = ""
+        if m.fullscreenVideo <> invalid
+            m.fullscreenVideo.control = "stop"
+            m.fullscreenVideo.content = invalid
+            m.fullscreenVideo.visible = false
+        end if
+        if m.fullscreenVideoMode <> invalid
+            m.fullscreenVideoMode.control = "stop"
+            m.fullscreenVideoMode.content = invalid
+            m.fullscreenVideoMode.visible = false
+        end if
+        m.fullscreenAssignedStreamUrl = ""
+        m.fullscreenVideoPendingRestart = false
+        setFullscreenPoster(thumbnailUrl, entryId, m.fullscreenStreamingMode <> "Video")
     end if
     m.cursorMarker.visible = true
     if m.fullscreenToastGroup <> invalid
@@ -842,11 +976,38 @@ sub showFullscreen()
     m.isFullscreenRefreshInFlight = false
     stopPanelRefresh()
     updateCursorMarker()
-    if not m.videoUsesStream
+    if not m.videoUsesStream and m.fullscreenStreamingMode = "Interacao"
         startPanelAudio(entry)
+    else if not m.videoUsesStream and m.fullscreenStreamingMode = "Video"
+        m.statusLabel.text = "Carregando modo Video..."
     end if
     startFullscreenStream()
     m.top.setFocus(true)
+end sub
+
+sub stopVideoNode(node as object)
+    if node <> invalid
+        node.control = "stop"
+        node.content = invalid
+        node.visible = false
+    end if
+end sub
+
+sub stopInactiveModePlayback(activeMode as string, reason as string)
+    if normalizeStreamingMode(activeMode) = "Interacao"
+        if m.fullscreenVideoMode <> invalid
+            ? "[MODE] stop video-mode player => reason="; reason
+            stopVideoNode(m.fullscreenVideoMode)
+        end if
+        stopStagingFullscreenVideo()
+        return
+    end if
+
+    if m.fullscreenVideo <> invalid
+        ? "[MODE] stop interaction player => reason="; reason
+        stopVideoNode(m.fullscreenVideo)
+    end if
+    stopPanelAudio()
 end sub
 
 sub hideFullscreen()
@@ -859,22 +1020,20 @@ sub hideFullscreen()
     stopHeldDirection()
     stopHeldRemoteCommand()
     stopFullscreenStream()
-    stopPanelAudio()
-    m.videoUsesStream = false
-    m.videoStreamUrl = ""
+    teardownFullscreenPlayback("hideFullscreen")
     m.fullscreenStreamingMode = "Interacao"
     m.fullscreenWindowId = ""
-    m.fullscreenAssignedStreamUrl = ""
+    m.modeSwitchState = "idle"
+    m.pendingModeSwitchWindowId = ""
+    m.pendingModeSwitchCurrentMode = ""
+    m.pendingModeSwitchTargetMode = ""
+    m.pendingModeSwitchAckSent = false
     m.pendingAutoFullscreenWindowId = ""
     m.pendingAutoFullscreenStreamUrl = ""
     m.pendingAutoFullscreenSeenCount = 0
-    m.fullscreenVideoPendingRestart = false
     m.scrollModeEnabled = false
-    if m.fullscreenVideo <> invalid
-        m.fullscreenVideo.control = "stop"
-        m.fullscreenVideo.content = invalid
-        m.fullscreenVideo.visible = false
-    end if
+    m.fullscreenPosterWindowId = ""
+    m.fullscreenPosterSourceUrl = ""
     if m.fullscreenVideoWatchTimer <> invalid
         m.fullscreenVideoWatchTimer.control = "stop"
     end if
@@ -950,19 +1109,34 @@ sub startPanelAudio(entry as object)
     end if
 end sub
 
-sub onFullscreenVideoStateChanged()
-    if m.fullscreenVideo = invalid or not m.videoUsesStream
+sub onFullscreenInteractionVideoStateChanged()
+    handleFullscreenVideoStateChanged("Interacao")
+end sub
+
+sub onFullscreenVideoModeStateChanged()
+    handleFullscreenVideoStateChanged("Video")
+end sub
+
+sub handleFullscreenVideoStateChanged(mode as string)
+    node = invalid
+    if normalizeStreamingMode(mode) = "Interacao"
+        node = m.fullscreenVideo
+    else
+        node = m.fullscreenVideoMode
+    end if
+
+    if node = invalid or not m.videoUsesStream or normalizeStreamingMode(m.fullscreenStreamingMode) <> normalizeStreamingMode(mode)
         return
     end if
 
-    state = LCase(getString(m.fullscreenVideo.state, ""))
+    state = LCase(getString(node.state, ""))
     if state = ""
         return
     end if
 
-    ? "[HLS] video state => "; state
+    ? "[HLS] video state => "; mode; " => "; state
 
-    if m.fullscreenStreamingMode = "Interacao"
+    if normalizeStreamingMode(mode) = "Interacao"
         if state = "playing"
             m.fullscreenVideoStallCount = 0
             m.statusLabel.text = "Stream HLS do painel em reproducao"
@@ -976,14 +1150,20 @@ sub onFullscreenVideoStateChanged()
                 content.url = appendCacheBust(m.videoStreamUrl)
                 content.streamFormat = "hls"
                 content.title = "Painel"
-                m.fullscreenVideo.content = content
-                m.fullscreenVideo.control = "stop"
-                m.fullscreenVideo.control = "play"
+                node.content = content
+                node.control = "stop"
+                node.control = "play"
                 m.statusLabel.text = "Reiniciando stream HLS do painel..."
             end if
         end if
         return
     end if
+
+    positionValue = node.position
+    if positionValue = invalid
+        positionValue = -1
+    end if
+    reportVideoDiag("video-state", "state=" + state + ":pos=" + positionValue.ToStr())
 
     if state = "playing"
         m.fullscreenVideoPendingRestart = false
@@ -997,26 +1177,157 @@ sub onFullscreenVideoStateChanged()
         m.fullscreenVideoPendingRestart = false
         m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
     else if state = "finished" or state = "stopped"
-        if m.fullscreenVideoPendingRestart
-            ? "[HLS] ignorando estado transitorio => "; state
-            return
-        end if
-        if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
-            content = CreateObject("roSGNode", "ContentNode")
-            content.url = appendCacheBust(m.videoStreamUrl)
-            content.streamFormat = "hls"
-            content.title = "Painel"
-            m.fullscreenVideoPendingRestart = true
-            m.fullscreenVideo.content = content
-            m.fullscreenVideo.control = "stop"
-            m.fullscreenVideo.control = "play"
-            m.statusLabel.text = "Reiniciando stream HLS do painel..."
-        end if
+        ? "[HLS] estado final/transitorio em Video => "; state
+        m.statusLabel.text = "Aguardando retomada do stream HLS..."
     end if
 end sub
 
 sub onFullscreenVideoWatchTimerFire()
-    return
+    if not m.isFullscreen or not m.videoUsesStream
+        return
+    end if
+
+    node = invalid
+    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video"
+        node = m.fullscreenVideoMode
+    else
+        node = m.fullscreenVideo
+    end if
+
+    if node = invalid
+        return
+    end if
+
+    state = LCase(getString(node.state, ""))
+    position = node.position
+    if position = invalid
+        position = -1
+    end if
+
+    if state = "playing"
+        if position > m.fullscreenVideoLastPosition
+            m.fullscreenVideoLastPosition = position
+            m.fullscreenVideoStallCount = 0
+        end if
+        return
+    end if
+
+    if state = "buffering"
+        if position <= m.fullscreenVideoLastPosition
+            m.fullscreenVideoStallCount = m.fullscreenVideoStallCount + 1
+        else
+            m.fullscreenVideoLastPosition = position
+            m.fullscreenVideoStallCount = 0
+        end if
+    else
+        m.fullscreenVideoStallCount = 0
+        return
+    end if
+
+    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video" and m.fullscreenVideoStallCount >= 5
+        restartFullscreenVideoAtLiveEdge("stall")
+    end if
+end sub
+
+sub restartFullscreenVideoAtLiveEdge(reason as string)
+    if not m.isFullscreen or not m.videoUsesStream or m.videoStreamUrl = ""
+        return
+    end if
+
+    node = invalid
+    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video"
+        node = m.fullscreenVideoMode
+    else
+        node = m.fullscreenVideo
+    end if
+
+    if node = invalid
+        return
+    end if
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(m.videoStreamUrl)
+    content.streamFormat = "hls"
+    content.title = "Painel"
+    ? "[HLS] restart live-edge => reason="; reason; " url="; content.url
+    m.fullscreenVideoPendingRestart = true
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
+    reportVideoDiag("video-restart", "reason=" + reason)
+    node.content = content
+    node.control = "stop"
+    node.visible = true
+    node.control = "play"
+    m.statusLabel.text = "Atualizando stream ao vivo..."
+end sub
+
+sub startStagingFullscreenVideo(entry as object, streamUrl as string, targetMode as string)
+    if m.fullscreenVideoMode = invalid or streamUrl = ""
+        return
+    end if
+
+    if m.stagingVideoStreamUrl = streamUrl and m.stagingVideoTargetMode = targetMode
+        return
+    end if
+
+    stopInactiveModePlayback("Video", "startStagingFullscreenVideo")
+    m.stagingVideoTargetMode = targetMode
+    m.stagingVideoWindowId = getString(entry.id, "")
+    m.stagingVideoStreamUrl = streamUrl
+    windowId = m.stagingVideoWindowId
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(streamUrl)
+    content.streamFormat = "hls"
+    content.title = getString(entry.title, "Painel")
+    ? "[HLS] direct video play => "; content.url
+    m.fullscreenVideoPendingRestart = true
+    m.fullscreenVideoMode.content = content
+    m.fullscreenVideoMode.control = "stop"
+    m.fullscreenVideoMode.visible = true
+    m.fullscreenVideoMode.control = "play"
+    stopStagingFullscreenVideo()
+    m.videoUsesStream = true
+    m.videoStreamUrl = streamUrl
+    m.fullscreenAssignedStreamUrl = streamUrl
+    m.fullscreenStreamingMode = targetMode
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
+    m.modeSwitchState = "idle"
+    m.pendingModeSwitchWindowId = ""
+    m.pendingModeSwitchCurrentMode = ""
+    m.pendingModeSwitchTargetMode = ""
+    m.pendingModeSwitchAckSent = false
+    notifyPendingModeSwitchReady(windowId, targetMode)
+    reportVideoDiag("video-assign", "target=" + targetMode)
+    m.statusLabel.text = "Iniciando stream HLS do painel..."
+end sub
+
+sub stopStagingFullscreenVideo()
+    m.stagingVideoTargetMode = ""
+    m.stagingVideoWindowId = ""
+    m.stagingVideoStreamUrl = ""
+    if m.fullscreenVideoStage <> invalid
+        m.fullscreenVideoStage.control = "stop"
+        m.fullscreenVideoStage.content = invalid
+        m.fullscreenVideoStage.visible = false
+    end if
+end sub
+
+sub teardownFullscreenPlayback(reason as string)
+    ? "[MODE] teardown => reason="; reason; " currentMode="; m.fullscreenStreamingMode; " pendingState="; m.modeSwitchState; " videoUsesStream="; m.videoUsesStream; " videoUrl="; m.videoStreamUrl; " assigned="; m.fullscreenAssignedStreamUrl; " audioSession="; m.audioSessionId
+
+    stopPanelAudio()
+    stopStagingFullscreenVideo()
+    stopVideoNode(m.fullscreenVideo)
+    stopVideoNode(m.fullscreenVideoMode)
+
+    m.fullscreenAssignedStreamUrl = ""
+    m.fullscreenVideoPendingRestart = false
+    m.videoUsesStream = false
+    m.videoStreamUrl = ""
+    m.fullscreenVideoLastPosition = -1
+    m.fullscreenVideoStallCount = 0
 end sub
 
 sub stopPanelAudio()
@@ -1497,11 +1808,83 @@ sub onPreviewRefreshTimerFire()
 end sub
 
 sub onFullscreenStreamTimerFire()
+    reportVideoDiagHeartbeat()
+
+    if m.fullscreenStreamingMode = "Video" and m.videoUsesStream and m.fullscreenVideoMode <> invalid
+        videoState = LCase(getString(m.fullscreenVideoMode.state, ""))
+        if videoState = "playing"
+            return
+        end if
+    end if
+
     loadWindows(true)
     if m.fullscreenStreamingMode = "Interacao"
         refreshFullscreenPreview()
-    else if not m.videoUsesStream
-        refreshFullscreenPreview()
+    end if
+end sub
+
+sub onFullscreenVideoStageStateChanged()
+    if m.fullscreenVideoStage = invalid
+        return
+    end if
+
+    if m.stagingVideoStreamUrl = ""
+        if m.fullscreenVideoStage.state <> invalid and LCase(getString(m.fullscreenVideoStage.state, "")) <> ""
+            m.fullscreenVideoStage.control = "stop"
+            m.fullscreenVideoStage.content = invalid
+            m.fullscreenVideoStage.visible = false
+        end if
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenVideoStage.state, ""))
+    if state = ""
+        return
+    end if
+
+    ? "[HLS] stage video state => "; state
+
+    if state = "playing"
+        ? "[MODE] stage pronto, promovendo => "; m.stagingVideoTargetMode; " url="; m.stagingVideoStreamUrl
+        notifyPendingModeSwitchReady(m.stagingVideoWindowId, m.stagingVideoTargetMode)
+        if m.fullscreenVideoMode <> invalid
+            content = CreateObject("roSGNode", "ContentNode")
+            content.url = appendCacheBust(m.stagingVideoStreamUrl)
+            content.streamFormat = "hls"
+            content.title = "Painel"
+            m.fullscreenVideoPendingRestart = true
+            m.fullscreenVideoMode.content = content
+            m.fullscreenVideoMode.control = "stop"
+            m.fullscreenVideoMode.visible = true
+            m.fullscreenVideoMode.control = "play"
+        end if
+
+        m.fullscreenVideoStage.control = "stop"
+        m.fullscreenVideoStage.content = invalid
+        m.fullscreenVideoStage.visible = false
+
+        m.videoUsesStream = true
+        m.videoStreamUrl = m.stagingVideoStreamUrl
+        m.fullscreenAssignedStreamUrl = m.stagingVideoStreamUrl
+        m.fullscreenStreamingMode = m.stagingVideoTargetMode
+        m.fullscreenVideoLastPosition = -1
+        m.fullscreenVideoStallCount = 0
+        m.modeSwitchState = "idle"
+        m.pendingModeSwitchWindowId = ""
+        m.pendingModeSwitchCurrentMode = ""
+        m.pendingModeSwitchTargetMode = ""
+        m.pendingModeSwitchAckSent = false
+        m.stagingVideoTargetMode = ""
+        m.stagingVideoWindowId = ""
+        m.stagingVideoStreamUrl = ""
+        m.statusLabel.text = "Iniciando stream HLS do painel..."
+        return
+    end if
+
+    if state = "error" or state = "finished" or state = "stopped"
+        m.statusLabel.text = "Carregando modo Video..."
+    else if state = "buffering"
+        m.statusLabel.text = "Bufferizando modo Video..."
     end if
 end sub
 
@@ -1522,19 +1905,106 @@ sub syncFullscreenStreamState(windowId as string)
         return
     end if
 
+    nextStreamingMode = normalizeStreamingMode(getString(currentEntry.streamingMode, "Interacao"))
+    previousStreamingMode = normalizeStreamingMode(m.fullscreenStreamingMode)
+    requestedStreamingMode = normalizeOptionalStreamingMode(getString(currentEntry.requestedStreamingMode, ""))
+    modeSwitchPending = getBool(currentEntry.modeSwitchPending, false)
     nextStreamUrl = getString(currentEntry.streamUrl, "")
     nextUsesStream = Instr(1, LCase(nextStreamUrl), ".m3u8") > 0
-    if not nextUsesStream or m.fullscreenVideo = invalid
+    ? "[MODE] syncFullscreenStreamState => id="; windowId; " modo="; nextStreamingMode; " pendente="; modeSwitchPending; " alvo="; requestedStreamingMode; " nextStream="; nextStreamUrl
+
+    if m.fullscreenVideo = invalid and m.fullscreenVideoMode = invalid
         return
     end if
 
-    nextStreamingMode = normalizeStreamingMode(getString(currentEntry.streamingMode, "Interacao"))
-    ? "[MODE] syncFullscreenStreamState => id="; windowId; " modo="; nextStreamingMode; " nextStream="; nextStreamUrl
-    if nextStreamingMode = "Interacao"
-        if nextStreamUrl = m.videoStreamUrl
+    if modeSwitchPending and requestedStreamingMode <> "" and requestedStreamingMode <> previousStreamingMode
+        if m.pendingModeSwitchWindowId <> windowId or m.pendingModeSwitchTargetMode <> requestedStreamingMode
+            ? "[MODE] interrompendo atual para troca => "; previousStreamingMode; " -> "; requestedStreamingMode
+            teardownFullscreenPlayback("mode-switch-pending:" + previousStreamingMode + "->" + requestedStreamingMode)
+            m.modeSwitchState = "waiting_ack"
+            m.pendingModeSwitchWindowId = windowId
+            m.pendingModeSwitchCurrentMode = previousStreamingMode
+            m.pendingModeSwitchTargetMode = requestedStreamingMode
+            m.pendingModeSwitchAckSent = false
+            thumbnailUrl = getString(currentEntry.thumbnailUrl, "")
+            if thumbnailUrl <> ""
+                setFullscreenPoster(thumbnailUrl, windowId, true)
+            end if
+            m.statusLabel.text = "Trocando para modo " + requestedStreamingMode + "..."
+        end if
+        return
+    end if
+
+    if m.pendingModeSwitchWindowId = windowId
+        if modeSwitchPending
+            if m.modeSwitchState <> "waiting_ack"
+                m.modeSwitchState = "waiting_ack"
+            end if
+            m.statusLabel.text = "Trocando para modo " + m.pendingModeSwitchTargetMode + "..."
             return
         end if
 
+        if m.modeSwitchState = "waiting_ack"
+            ? "[MODE] troca confirmada, aguardando stream => "; m.pendingModeSwitchCurrentMode; " -> "; nextStreamingMode
+            m.modeSwitchState = "waiting_stream"
+        end if
+
+        if m.modeSwitchState = "waiting_stream"
+            if not nextUsesStream
+                ? "[MODE] aguardando stream do novo modo => "; nextStreamingMode; " url=<sem-stream>"
+                m.statusLabel.text = "Carregando modo " + nextStreamingMode + "..."
+                return
+            end if
+
+            if nextStreamingMode = "Video"
+                ? "[MODE] stream do modo Video detectado, iniciando staging => "; nextStreamUrl
+                startStagingFullscreenVideo(currentEntry, nextStreamUrl, nextStreamingMode)
+                return
+            end if
+
+            ? "[MODE] stream pronto para troca => "; m.pendingModeSwitchCurrentMode; " -> "; nextStreamingMode; " url="; nextStreamUrl
+        end if
+    end if
+
+    if previousStreamingMode <> nextStreamingMode
+        ? "[MODE] transicao => "; previousStreamingMode; " -> "; nextStreamingMode
+        if previousStreamingMode = "Interacao" and nextStreamingMode = "Video" and not nextUsesStream
+            m.statusLabel.text = "Preparando modo Video..."
+            return
+        end if
+
+        teardownFullscreenPlayback("mode-transition:" + previousStreamingMode + "->" + nextStreamingMode)
+        m.fullscreenStreamingMode = nextStreamingMode
+        thumbnailUrl = getString(currentEntry.thumbnailUrl, "")
+        if thumbnailUrl <> ""
+            setFullscreenPoster(thumbnailUrl, windowId, nextStreamingMode <> "Video")
+        end if
+        if nextStreamingMode = "Video" and not nextUsesStream
+            m.statusLabel.text = "Aguardando stream HLS do painel..."
+            return
+        end if
+    end if
+
+    if not nextUsesStream
+        if nextStreamingMode = "Video"
+            stopInactiveModePlayback("Video", "video-without-stream")
+            teardownFullscreenPlayback("video-without-stream")
+            thumbnailUrl = getString(currentEntry.thumbnailUrl, "")
+            if thumbnailUrl <> ""
+                setFullscreenPoster(thumbnailUrl, windowId, false)
+            end if
+        end if
+        return
+    end if
+
+    if nextStreamingMode = "Interacao"
+        if nextStreamUrl = m.videoStreamUrl
+            ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl
+            return
+        end if
+
+        ? "[MODE] iniciando pipeline Interacao => "; nextStreamUrl
+        stopInactiveModePlayback("Interacao", "syncFullscreenStreamState")
         m.videoUsesStream = true
         m.videoStreamUrl = nextStreamUrl
         m.fullscreenStreamingMode = nextStreamingMode
@@ -1547,9 +2017,16 @@ sub syncFullscreenStreamState(windowId as string)
         content.title = getString(currentEntry.title, "Painel")
         m.fullscreenVideo.content = content
         m.fullscreenVideo.control = "stop"
+        m.fullscreenVideo.visible = true
         m.fullscreenVideo.control = "play"
+        notifyPendingModeSwitchReady(windowId, nextStreamingMode)
         m.statusLabel.text = "Recarregando stream do painel..."
         ? "[HLS] reload => "; content.url
+        return
+    end if
+
+    if m.pendingModeSwitchWindowId = windowId and not m.videoUsesStream and previousStreamingMode = "Video"
+        startStagingFullscreenVideo(currentEntry, nextStreamUrl, nextStreamingMode)
         return
     end if
 
@@ -1558,7 +2035,8 @@ sub syncFullscreenStreamState(windowId as string)
         return
     end if
 
-    stopPanelAudio()
+    ? "[MODE] iniciando pipeline Video => "; nextStreamUrl
+    stopInactiveModePlayback("Video", "syncFullscreenStreamState")
     m.videoUsesStream = true
     m.videoStreamUrl = nextStreamUrl
     m.fullscreenStreamingMode = normalizeStreamingMode(getString(currentEntry.streamingMode, "Interacao"))
@@ -1573,11 +2051,36 @@ sub syncFullscreenStreamState(windowId as string)
     content.title = getString(currentEntry.title, "Painel")
     m.fullscreenPlayRequestCount = m.fullscreenPlayRequestCount + 1
     ? "[HLS] assign #"; m.fullscreenPlayRequestCount; " via sync => "; content.url
-    m.fullscreenVideo.content = content
-    m.fullscreenVideo.control = "stop"
-    m.fullscreenVideo.control = "play"
+    if m.fullscreenVideoMode <> invalid
+        m.fullscreenVideoMode.content = content
+        m.fullscreenVideoMode.control = "stop"
+        m.fullscreenVideoMode.visible = true
+        m.fullscreenVideoMode.control = "play"
+    end if
     m.statusLabel.text = "Recarregando stream do painel..."
     ? "[HLS] reload => "; content.url
+end sub
+
+sub setFullscreenPoster(thumbnailUrl as string, windowId as string, forceRefresh as boolean)
+    if thumbnailUrl = invalid or thumbnailUrl = ""
+        return
+    end if
+
+    resolvedUrl = thumbnailUrl
+    if forceRefresh
+        resolvedUrl = appendCacheBust(thumbnailUrl)
+    else if m.fullscreenPosterWindowId = windowId and m.fullscreenPosterSourceUrl = thumbnailUrl
+        m.activeFullscreenPoster.visible = true
+        m.bufferFullscreenPoster.visible = false
+        return
+    end if
+
+    m.activeFullscreenPoster.uri = resolvedUrl
+    m.activeFullscreenPoster.visible = true
+    m.bufferFullscreenPoster.visible = false
+    m.bufferFullscreenPoster.uri = ""
+    m.fullscreenPosterWindowId = windowId
+    m.fullscreenPosterSourceUrl = thumbnailUrl
 end sub
 
 sub onClickControlTaskCompleted()
@@ -1641,6 +2144,66 @@ function normalizeStreamingMode(value as dynamic) as string
 
     return "Interacao"
 end function
+
+function normalizeOptionalStreamingMode(value as dynamic) as string
+    rawValue = getString(value, "")
+    if rawValue = ""
+        return ""
+    end if
+
+    return normalizeStreamingMode(rawValue)
+end function
+
+function resolveWindowEntryStreamingMode(window as object) as string
+    streamUrl = LCase(getString(window.streamUrl, ""))
+    if streamUrl <> ""
+        if Instr(1, streamUrl, "/panel-roll/") > 0
+            return "Video"
+        end if
+
+        if Instr(1, streamUrl, "/panel-interaction/") > 0
+            return "Interacao"
+        end if
+    end if
+
+    return normalizeStreamingMode(getString(window.streamingMode, "Interacao"))
+end function
+
+sub notifyModeSwitchApplied(windowId as string, previousMode as string, targetMode as string)
+    if m.bridgeHost = invalid or m.bridgeHost = "" or m.deviceId = invalid or m.deviceId = "" or windowId = invalid or windowId = ""
+        return
+    end if
+
+    if m.modeSwitchNotifyTask = invalid
+        return
+    end if
+
+    ? "[MODE] enviando ACK de troca => "; previousMode; " -> "; targetMode; " janela="; windowId
+    m.modeSwitchNotifyTask.bridgeHost = m.bridgeHost
+    m.modeSwitchNotifyTask.deviceId = m.deviceId
+    m.modeSwitchNotifyTask.windowId = windowId
+    m.modeSwitchNotifyTask.previousMode = previousMode
+    m.modeSwitchNotifyTask.targetMode = targetMode
+    m.modeSwitchNotifyTask.control = "RUN"
+end sub
+
+sub notifyPendingModeSwitchReady(windowId as string, reachedMode as string)
+    if m.pendingModeSwitchWindowId <> windowId
+        return
+    end if
+
+    if m.pendingModeSwitchAckSent
+        return
+    end if
+
+    targetMode = normalizeStreamingMode(m.pendingModeSwitchTargetMode)
+    if targetMode = "" or targetMode <> normalizeStreamingMode(reachedMode)
+        return
+    end if
+
+    m.pendingModeSwitchAckSent = true
+    notifyModeSwitchApplied(windowId, m.pendingModeSwitchCurrentMode, targetMode)
+end sub
 
 sub openKeyboardDialog(initialValue as string, multiline as boolean)
     if m.isKeyboardOpen
@@ -1798,12 +2361,21 @@ sub startFullscreenStream()
 
     m.fullscreenStreamTimer.control = "stop"
     m.fullscreenStreamTimer.control = "start"
+    if m.fullscreenVideoWatchTimer <> invalid
+        m.fullscreenVideoWatchTimer.control = "stop"
+        if m.videoUsesStream
+            m.fullscreenVideoWatchTimer.control = "start"
+        end if
+    end if
 end sub
 
 sub stopFullscreenStream()
     m.isFullscreenRefreshInFlight = false
     if m.fullscreenStreamTimer <> invalid
         m.fullscreenStreamTimer.control = "stop"
+    end if
+    if m.fullscreenVideoWatchTimer <> invalid
+        m.fullscreenVideoWatchTimer.control = "stop"
     end if
 end sub
 

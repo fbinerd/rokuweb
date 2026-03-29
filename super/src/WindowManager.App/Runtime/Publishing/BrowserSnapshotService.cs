@@ -205,8 +205,6 @@ public sealed class BrowserSnapshotService
             var height = Math.Max(1, (int)Math.Ceiling(browser.ActualHeight));
             var cursor = _cursorStates.GetOrAdd(windowId, _ => new RemoteCursorState());
             cursor.UpdateFromClient(x, y, width, height);
-            AppLog.Write("RokuControl", string.Format("Recebido comando '{0}' para janela {1}", normalizedCommand, windowId.ToString("N")));
-
             switch (normalizedCommand)
             {
                 case "move":
@@ -221,7 +219,6 @@ public sealed class BrowserSnapshotService
                     catch (OperationCanceledException)
                     {
                     }
-                    AppLog.Write("RokuControl", string.Format("Mouse move => x={0}, y={1}", cursor.X, cursor.Y));
                     return RemoteCommandResult.Success();
                 case "click":
                 case "ok":
@@ -236,83 +233,67 @@ public sealed class BrowserSnapshotService
                     }
 
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Mouse click => x={0}, y={1}, ok={2}, editable={3}, tag={4}, type={5}, target={6}, clickable={7}, nav={8}", cursor.X, cursor.Y, clickResult.Ok, clickResult.Editable, clickResult.TagName, clickResult.InputType, clickResult.TargetPath, clickResult.ClickablePath, clickResult.NavigationUrl));
                     return clickResult;
                 case "set-text":
                     var setTextResult = await SetTextAtFocusedElementAsync(frame, cursor.X, cursor.Y, text ?? string.Empty).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Texto aplicado ao CEF. ok={0}, editable={1}, tag={2}, type={3}, valueLength={4}, finalValue={5}", setTextResult.Ok, setTextResult.Editable, setTextResult.TagName, setTextResult.InputType, (text ?? string.Empty).Length, setTextResult.Value));
                     return setTextResult;
                 case "back":
                     SendKey(host, 0x1B);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", "Escape enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "reload":
                     browser.Reload();
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", "Reload enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "history-back":
                     if (cefBrowser.CanGoBack)
                     {
                         cefBrowser.GoBack();
                         InvalidateCapture(windowId);
-                        AppLog.Write("RokuControl", "Historico voltar enviado ao CEF.");
                         return RemoteCommandResult.Success();
                     }
 
-                    AppLog.Write("RokuControl", "Historico voltar ignorado; navegador sem pagina anterior.");
                     return RemoteCommandResult.Success();
                 case "history-forward":
                     if (cefBrowser.CanGoForward)
                     {
                         cefBrowser.GoForward();
                         InvalidateCapture(windowId);
-                        AppLog.Write("RokuControl", "Historico avancar enviado ao CEF.");
                         return RemoteCommandResult.Success();
                     }
 
-                    AppLog.Write("RokuControl", "Historico avancar ignorado; navegador sem pagina seguinte.");
                     return RemoteCommandResult.Success();
                 case "scroll-up":
                     var scrollUpResult = await ScrollPageAsync(frame, host, cursor.ToMouseEvent(), -420).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Scroll para cima enviado ao CEF. ok={0}", scrollUpResult.Ok));
                     return scrollUpResult;
                 case "scroll-down":
                     var scrollDownResult = await ScrollPageAsync(frame, host, cursor.ToMouseEvent(), 420).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Scroll para baixo enviado ao CEF. ok={0}", scrollDownResult.Ok));
                     return scrollDownResult;
                 case "media-seek-backward":
                     var seekBackwardResult = await SeekMediaAsync(frame, host, -10).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Voltar video enviado ao CEF. ok={0}", seekBackwardResult.Ok));
                     return seekBackwardResult;
                 case "media-seek-forward":
                     var seekForwardResult = await SeekMediaAsync(frame, host, 10).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Avancar video enviado ao CEF. ok={0}", seekForwardResult.Ok));
                     return seekForwardResult;
                 case "enter":
                     SendKey(host, 0x0D);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", "Enter enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "media-play-pause":
                     var mediaToggleResult = await ToggleMediaPlayPauseAsync(frame, host).ConfigureAwait(true);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", string.Format("Play/Pause enviado ao CEF. ok={0}", mediaToggleResult.Ok));
                     return mediaToggleResult;
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);
                     InvalidateCapture(windowId);
-                    AppLog.Write("RokuControl", "Tab enviado ao CEF.");
                     return RemoteCommandResult.Success();
                 case "open-fullscreen":
-                    AppLog.Write("RokuControl", "Solicitacao de fullscreen recebida da Roku.");
                     return RemoteCommandResult.Success();
                 default:
                     AppLog.Write("RokuControl", string.Format("Comando desconhecido: {0}", normalizedCommand));

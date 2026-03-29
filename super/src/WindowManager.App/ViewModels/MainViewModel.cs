@@ -1159,11 +1159,32 @@ public sealed class MainViewModel : ViewModelBase
 
         SelectedWindowProfile = windowProfile;
         NormalizeWindowProfilesInMemory();
-        if (browserProfileChanged || streamingModeChanged)
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Salvar stream '{0}': browserProfileChanged={1}, streamingModeChanged={2}",
+                windowProfile.Name,
+                browserProfileChanged,
+                streamingModeChanged));
+        if (browserProfileChanged)
         {
+            AppLog.Write("StreamingMode", string.Format("Reset runtime do stream '{0}' por troca de perfil do navegador.", windowProfile.Name));
             await ResetWindowProfileRuntimeAsync(windowProfile);
+            await SyncWindowProfileRuntimeAsync(windowProfile);
         }
-        await SyncWindowProfileRuntimeAsync(windowProfile);
+        else if (streamingModeChanged)
+        {
+            await ApplyWindowProfileStreamingModeRuntimeAsync(windowProfile);
+            AppLog.Write("StreamingMode", string.Format("Republish do stream '{0}' apos sincronizar novo modo.", windowProfile.Name));
+            await RepublishWindowProfileRuntimeAsync(windowProfile);
+        }
+        else
+        {
+            await SyncWindowProfileRuntimeAsync(windowProfile);
+        }
+        RebuildActiveSessionsFromWindows();
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
         await SaveProfileInternalAsync(updateStatus: false);
         StatusMessage = string.Format(
             "Stream '{0}' salvo e vinculado ao perfil de TV '{1}'.",
@@ -3779,6 +3800,73 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         RebuildActiveSessionsFromWindows();
+    }
+
+    private async Task RepublishWindowProfileRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        var liveWindows = Windows
+            .Where(x => x.ActiveSessionId == windowProfile.Id)
+            .ToList();
+
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "RepublishWindowProfileRuntimeAsync: stream='{0}', janelas={1}",
+                windowProfile.Name,
+                liveWindows.Count));
+
+        foreach (var liveWindow in liveWindows)
+        {
+            try
+            {
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "Republish janela={0}, titulo='{1}', modoAtual={2}",
+                        liveWindow.Id,
+                        liveWindow.Title,
+                        liveWindow.StreamingMode));
+                await PublishWindowWebRtcAsync(liveWindow, false);
+            }
+            catch
+            {
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "Republish falhou para janela={0}, titulo='{1}'",
+                        liveWindow.Id,
+                        liveWindow.Title));
+            }
+        }
+
+        UpdateBridgeSnapshot();
+    }
+
+    private Task ApplyWindowProfileStreamingModeRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        foreach (var item in windowProfile.Windows)
+        {
+            var liveWindow = Windows.FirstOrDefault(x => x.Id == item.Id);
+            if (liveWindow is null)
+            {
+                continue;
+            }
+
+            liveWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
+            liveWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
+            liveWindow.StreamingMode = StreamingModeOptions.Normalize(item.StreamingMode);
+
+            AppLog.Write(
+                "StreamingMode",
+                string.Format(
+                    "Aplicando modo na runtime sem reroute: janela={0}, titulo='{1}', novoModo={2}",
+                    liveWindow.Id,
+                    liveWindow.Title,
+                    liveWindow.StreamingMode));
+        }
+
+        UpdateBridgeSnapshot();
+        return Task.CompletedTask;
     }
 
     private async Task ApplyStreamWindowRuntimeStateAsync(WindowProfileViewModel stream, WindowProfileItemViewModel item)
