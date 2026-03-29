@@ -311,7 +311,7 @@ public sealed class BrowserPanelInteractionHlsService
                     await Task.Run(() => process.WaitForExit(), cancellationToken).ConfigureAwait(false);
                     if (process.ExitCode == 0 && File.Exists(segmentPath))
                     {
-                        _artifactStore.Put(segmentFileName, File.ReadAllBytes(segmentPath), SegmentTtl, removeAfterRead: true);
+                        _artifactStore.Put(segmentFileName, File.ReadAllBytes(segmentPath), SegmentTtl, removeAfterRead: false);
                         RegisterSegment(new SegmentEntry(segmentFileName, SegmentDuration));
                         WritePlaylist();
                         if (!_loggedPlaylistReady)
