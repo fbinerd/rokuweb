@@ -2022,7 +2022,9 @@ public sealed class LocalWebRtcPublisherService
             DirectVideoNormalizedLeft = directVideoOverlay.NormalizedLeft,
             DirectVideoNormalizedTop = directVideoOverlay.NormalizedTop,
             DirectVideoNormalizedWidth = directVideoOverlay.NormalizedWidth,
-            DirectVideoNormalizedHeight = directVideoOverlay.NormalizedHeight
+            DirectVideoNormalizedHeight = directVideoOverlay.NormalizedHeight,
+            DirectVideoQualityLabel = directVideoOverlay.QualityLabel,
+            DirectVideoQualityOptions = directVideoOverlay.QualityOptions
         };
     }
 
@@ -2052,6 +2054,15 @@ public sealed class LocalWebRtcPublisherService
             SourceUrl = normalizedSourceUrl,
             StreamUrl = resolved.Result.StreamUrl,
             StreamFormat = resolved.Result.StreamFormat,
+            QualityLabel = resolved.Result.QualityLabel,
+            QualityOptions = resolved.Result.QualityOptions
+                .Select(x => new BridgeDirectVideoQualityOption
+                {
+                    Label = x.Label,
+                    StreamUrl = x.StreamUrl,
+                    StreamFormat = x.StreamFormat
+                })
+                .ToList(),
             NormalizedLeft = ClampNormalizedCoordinate(detected.NormalizedLeft),
             NormalizedTop = ClampNormalizedCoordinate(detected.NormalizedTop),
             NormalizedWidth = ClampNormalizedCoordinate(detected.NormalizedWidth),
@@ -2063,10 +2074,12 @@ public sealed class LocalWebRtcPublisherService
     {
         var message = overlay.Enabled
             ? string.Format(
-                "Overlay direto ativo => janela={0}, source={1}, format={2}, stream={3}, rect={4:0.000},{5:0.000},{6:0.000},{7:0.000}",
+                "Overlay direto ativo => janela={0}, source={1}, format={2}, quality={3}, qualities={4}, stream={5}, rect={6:0.000},{7:0.000},{8:0.000},{9:0.000}",
                 windowId.ToString("N"),
                 overlay.SourceUrl,
                 overlay.StreamFormat,
+                overlay.QualityLabel,
+                overlay.QualityOptions is null ? 0 : overlay.QualityOptions.Count,
                 overlay.StreamUrl,
                 overlay.NormalizedLeft,
                 overlay.NormalizedTop,
@@ -2307,7 +2320,9 @@ public sealed class LocalWebRtcPublisherService
             DirectVideoNormalizedLeft = source.DirectVideoNormalizedLeft,
             DirectVideoNormalizedTop = source.DirectVideoNormalizedTop,
             DirectVideoNormalizedWidth = source.DirectVideoNormalizedWidth,
-            DirectVideoNormalizedHeight = source.DirectVideoNormalizedHeight
+            DirectVideoNormalizedHeight = source.DirectVideoNormalizedHeight,
+            DirectVideoQualityLabel = source.DirectVideoQualityLabel,
+            DirectVideoQualityOptions = source.DirectVideoQualityOptions
         };
     }
 
@@ -2332,10 +2347,17 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var jsRuntime = string.Format("node:{0}", nodePath);
-        var mp4Url = RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"18\" \"{1}\"", jsRuntime, youtubeUrl));
-        if (!string.IsNullOrWhiteSpace(mp4Url) && !string.Equals(mp4Url, "NA", StringComparison.OrdinalIgnoreCase))
+        var qualityOptions = new List<YouTubeDirectQualityOption>();
+        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"22\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"59/78\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"18\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+
+        if (qualityOptions.Count > 0)
         {
-            return YouTubeDirectResolveResult.Success(mp4Url, "mp4");
+            var preferred = qualityOptions
+                .OrderByDescending(x => ParseQualityRank(x.Label))
+                .First();
+            return YouTubeDirectResolveResult.Success(preferred.StreamUrl, preferred.StreamFormat, preferred.Label, qualityOptions);
         }
 
         var compatibleHlsUrl = RunProcessCaptureFirstNonEmptyLine(
@@ -2346,10 +2368,34 @@ public sealed class LocalWebRtcPublisherService
             if (compatibleHlsUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 compatibleHlsUrl.IndexOf("manifest/hls_", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                return YouTubeDirectResolveResult.Success(compatibleHlsUrl, "hls");
+                return YouTubeDirectResolveResult.Success(
+                    compatibleHlsUrl,
+                    "hls",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = compatibleHlsUrl,
+                            StreamFormat = "hls"
+                        }
+                    });
             }
 
-            return YouTubeDirectResolveResult.Success(compatibleHlsUrl, "mp4");
+            return YouTubeDirectResolveResult.Success(
+                compatibleHlsUrl,
+                "mp4",
+                "Auto",
+                new List<YouTubeDirectQualityOption>
+                {
+                    new YouTubeDirectQualityOption
+                    {
+                        Label = "Auto",
+                        StreamUrl = compatibleHlsUrl,
+                        StreamFormat = "mp4"
+                    }
+                });
         }
 
         var manifestUrl = RunProcessCaptureFirstNonEmptyLine(
@@ -2360,16 +2406,76 @@ public sealed class LocalWebRtcPublisherService
             if (manifestUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 manifestUrl.IndexOf("manifest/hls_", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                return YouTubeDirectResolveResult.Success(manifestUrl, "hls");
+                return YouTubeDirectResolveResult.Success(
+                    manifestUrl,
+                    "hls",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = manifestUrl,
+                            StreamFormat = "hls"
+                        }
+                    });
             }
 
             if (manifestUrl.IndexOf(".mpd", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                return YouTubeDirectResolveResult.Success(manifestUrl, "dash");
+                return YouTubeDirectResolveResult.Success(
+                    manifestUrl,
+                    "dash",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = manifestUrl,
+                            StreamFormat = "dash"
+                        }
+                    });
             }
         }
 
         return YouTubeDirectResolveResult.Fail("sem_url_compativel");
+    }
+
+    private static void TryAppendDirectQualityOption(List<YouTubeDirectQualityOption> options, string label, string streamUrl, string streamFormat)
+    {
+        if (options is null || string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(streamUrl) || string.Equals(streamUrl, "NA", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (options.Any(x => string.Equals(x.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        options.Add(new YouTubeDirectQualityOption
+        {
+            Label = label,
+            StreamUrl = streamUrl,
+            StreamFormat = streamFormat
+        });
+    }
+
+    private static int ParseQualityRank(string label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return 0;
+        }
+
+        var digits = new string(label.Where(char.IsDigit).ToArray());
+        if (int.TryParse(digits, out var parsed))
+        {
+            return parsed;
+        }
+
+        return 0;
     }
 
     private static string RunProcessCaptureFirstNonEmptyLine(string fileName, string arguments)
@@ -2680,6 +2786,12 @@ public sealed class BridgeWindowSnapshot
 
     [DataMember(Name = "directVideoNormalizedHeight", Order = 29)]
     public double DirectVideoNormalizedHeight { get; set; }
+
+    [DataMember(Name = "directVideoQualityLabel", Order = 30)]
+    public string DirectVideoQualityLabel { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoQualityOptions", Order = 31)]
+    public List<BridgeDirectVideoQualityOption> DirectVideoQualityOptions { get; set; } = new List<BridgeDirectVideoQualityOption>();
 }
 
 internal sealed class DisplayModeSwitchState
@@ -2759,6 +2871,10 @@ internal sealed class DirectVideoOverlayBridgeSnapshot
 
     public string StreamFormat { get; set; } = string.Empty;
 
+    public string QualityLabel { get; set; } = string.Empty;
+
+    public List<BridgeDirectVideoQualityOption> QualityOptions { get; set; } = new List<BridgeDirectVideoQualityOption>();
+
     public double NormalizedLeft { get; set; }
 
     public double NormalizedTop { get; set; }
@@ -2766,6 +2882,19 @@ internal sealed class DirectVideoOverlayBridgeSnapshot
     public double NormalizedWidth { get; set; }
 
     public double NormalizedHeight { get; set; }
+}
+
+[DataContract]
+public sealed class BridgeDirectVideoQualityOption
+{
+    [DataMember(Name = "label", Order = 1)]
+    public string Label { get; set; } = string.Empty;
+
+    [DataMember(Name = "streamUrl", Order = 2)]
+    public string StreamUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "streamFormat", Order = 3)]
+    public string StreamFormat { get; set; } = string.Empty;
 }
 
 internal sealed class CachedDirectPlaybackResolveResult
@@ -2783,15 +2912,21 @@ public sealed class YouTubeDirectResolveResult
 
     public string StreamFormat { get; set; } = string.Empty;
 
+    public string QualityLabel { get; set; } = string.Empty;
+
+    public List<YouTubeDirectQualityOption> QualityOptions { get; set; } = new List<YouTubeDirectQualityOption>();
+
     public string Error { get; set; } = string.Empty;
 
-    public static YouTubeDirectResolveResult Success(string streamUrl, string streamFormat)
+    public static YouTubeDirectResolveResult Success(string streamUrl, string streamFormat, string qualityLabel, List<YouTubeDirectQualityOption> qualityOptions)
     {
         return new YouTubeDirectResolveResult
         {
             Ok = true,
             StreamUrl = streamUrl ?? string.Empty,
-            StreamFormat = streamFormat ?? string.Empty
+            StreamFormat = streamFormat ?? string.Empty,
+            QualityLabel = qualityLabel ?? string.Empty,
+            QualityOptions = qualityOptions ?? new List<YouTubeDirectQualityOption>()
         };
     }
 
@@ -2803,6 +2938,15 @@ public sealed class YouTubeDirectResolveResult
             Error = error ?? string.Empty
         };
     }
+}
+
+public sealed class YouTubeDirectQualityOption
+{
+    public string Label { get; set; } = string.Empty;
+
+    public string StreamUrl { get; set; } = string.Empty;
+
+    public string StreamFormat { get; set; } = string.Empty;
 }
 
 public sealed class RokuPowerBatchResult

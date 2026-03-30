@@ -56,14 +56,24 @@ sub init()
     m.fullscreenPlayRequestCount = 0
     m.interactionOverlayControlsVisible = false
     m.interactionOverlayControlsFullscreen = false
-    m.interactionOverlayControlsHideDelayMs = 2200
+    m.interactionOverlayControlsHideDelayMs = 5000
     m.interactionOverlayControlsLastActivity = invalid
     m.interactionOverlayBaseRect = invalid
     m.interactionOverlayCurrentRect = invalid
     m.interactionOverlayPlayButtonRect = invalid
     m.interactionOverlayFullscreenButtonRect = invalid
     m.interactionOverlayProgressTrackRect = invalid
+    m.interactionOverlayQualityButtonRect = invalid
     m.lastInteractionOverlayState = ""
+    m.lastPointerMoveDispatch = invalid
+    m.pointerMoveDispatchIntervalMs = 120
+    m.heldDirectionRepeatCount = 0
+    m.interactionOverlayQualityOptions = []
+    m.interactionOverlaySelectedQualityIndex = 0
+    m.interactionOverlayPendingSeekPosition = invalid
+    m.lastHeldRemoteDispatch = invalid
+    m.heldRemoteDispatchIntervalMs = 140
+    m.interactionOverlaySeekStepSeconds = 6
     m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
@@ -113,9 +123,15 @@ sub init()
     m.interactionOverlayControlsBackground = m.top.findNode("interactionOverlayControlsBackground")
     m.interactionOverlayProgressTrack = m.top.findNode("interactionOverlayProgressTrack")
     m.interactionOverlayProgressFill = m.top.findNode("interactionOverlayProgressFill")
+    m.interactionOverlayLeftCapsule = m.top.findNode("interactionOverlayLeftCapsule")
+    m.interactionOverlayTitleCapsule = m.top.findNode("interactionOverlayTitleCapsule")
+    m.interactionOverlayRightCapsule = m.top.findNode("interactionOverlayRightCapsule")
     m.interactionOverlayTimeLabel = m.top.findNode("interactionOverlayTimeLabel")
     m.interactionOverlayPlayButton = m.top.findNode("interactionOverlayPlayButton")
     m.interactionOverlayPlayLabel = m.top.findNode("interactionOverlayPlayLabel")
+    m.interactionOverlayTitleLabel = m.top.findNode("interactionOverlayTitleLabel")
+    m.interactionOverlayQualityButton = m.top.findNode("interactionOverlayQualityButton")
+    m.interactionOverlayQualityLabel = m.top.findNode("interactionOverlayQualityLabel")
     m.interactionOverlayFullscreenButton = m.top.findNode("interactionOverlayFullscreenButton")
     m.interactionOverlayFullscreenLabel = m.top.findNode("interactionOverlayFullscreenLabel")
     m.fullscreenVideoMode = m.top.findNode("fullscreenVideoModeVideo")
@@ -240,6 +256,13 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 end if
                 m.backHoldTimespan = invalid
 
+                if heldMs < m.backLongPressThresholdMs and isInteractionOverlayActive() and m.interactionOverlayControlsFullscreen
+                    ? "[OVERLAY] back => minimize"
+                    toggleInteractionOverlayFullscreen()
+                    showInteractionOverlayControls("back")
+                    return true
+                end if
+
                 if heldMs >= m.backLongPressThresholdMs
                     if m.lockedFullscreen
                         autoFullscreenIndex = findAutoOpenFullscreenIndex()
@@ -283,6 +306,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isBlueKey(normalizedKey)
             m.scrollModeEnabled = not m.scrollModeEnabled
+            ? "[SCROLL] mode => "; m.scrollModeEnabled; " key="; normalizedKey
             if m.scrollModeEnabled
                 showScrollModeToast("Modo de rolagem ativado")
             else
@@ -306,6 +330,12 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 overlayHitTarget = getInteractionOverlayControlHitTarget()
                 if overlayHitTarget <> ""
                     handleInteractionOverlayControlHit(overlayHitTarget)
+                    return true
+                end if
+
+                if shouldCaptureInteractionOverlayPointerInput()
+                    showInteractionOverlayControls("ok")
+                    toggleInteractionOverlayPlayback()
                     return true
                 end if
 
@@ -363,6 +393,10 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isOptionsKey(normalizedKey)
             clearPendingEditableActivation()
+            if isInteractionOverlayActive()
+                cycleInteractionOverlayQuality()
+                return true
+            end if
             sendRemoteCommand("enter")
             scheduleFullscreenRefresh()
             return true
@@ -370,20 +404,24 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isRevKey(normalizedKey)
             clearPendingEditableActivation()
-            if handleInteractionOverlayTransportShortcut("backward")
+            if isInteractionOverlayActive()
+                handleInteractionOverlayTransportShortcut("backward")
+                startHeldRemoteCommand(normalizedKey, "overlay-seek-backward")
                 return true
             end if
-            sendRemoteCommand("media-seek-backward")
+            startHeldRemoteCommand(normalizedKey, "media-seek-backward")
             scheduleFullscreenRefresh()
             return true
         end if
 
         if isFwdKey(normalizedKey)
             clearPendingEditableActivation()
-            if handleInteractionOverlayTransportShortcut("forward")
+            if isInteractionOverlayActive()
+                handleInteractionOverlayTransportShortcut("forward")
+                startHeldRemoteCommand(normalizedKey, "overlay-seek-forward")
                 return true
             end if
-            sendRemoteCommand("media-seek-forward")
+            startHeldRemoteCommand(normalizedKey, "media-seek-forward")
             scheduleFullscreenRefresh()
             return true
         end if
@@ -640,6 +678,8 @@ sub applyBridgeResponse()
             directVideoNormalizedTop: getNumber(window.directVideoNormalizedTop, 0.0)
             directVideoNormalizedWidth: getNumber(window.directVideoNormalizedWidth, 0.0)
             directVideoNormalizedHeight: getNumber(window.directVideoNormalizedHeight, 0.0)
+            directVideoQualityLabel: getString(window.directVideoQualityLabel, "")
+            directVideoQualityOptions: getObjectArray(window.directVideoQualityOptions)
         })
     end for
 
@@ -1113,8 +1153,12 @@ sub stopInteractionDirectVideoOverlay()
     m.interactionOverlayPlayButtonRect = invalid
     m.interactionOverlayFullscreenButtonRect = invalid
     m.interactionOverlayProgressTrackRect = invalid
+    m.interactionOverlayQualityButtonRect = invalid
     m.lastInteractionOverlayState = ""
     m.interactionOverlayControlsLastActivity = invalid
+    m.interactionOverlayQualityOptions = []
+    m.interactionOverlaySelectedQualityIndex = 0
+    m.interactionOverlayPendingSeekPosition = invalid
 end sub
 
 sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
@@ -1130,6 +1174,7 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
     overlayEnabled = getBool(entry.directVideoOverlayEnabled, false)
     overlayStreamUrl = getString(entry.directVideoStreamUrl, "")
     overlayStreamFormat = LCase(getString(entry.directVideoStreamFormat, ""))
+    overlayQualityLabel = getString(entry.directVideoQualityLabel, "")
     if not overlayEnabled or overlayStreamUrl = "" or overlayStreamFormat = ""
         if forceReload
             ? "[OVERLAY] inativo => enabled="; overlayEnabled; " stream="; overlayStreamUrl; " format="; overlayStreamFormat
@@ -1165,6 +1210,8 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         width: targetWidth
         height: targetHeight
     }
+    m.interactionOverlayQualityOptions = normalizeDirectVideoQualityOptions(entry.directVideoQualityOptions, overlayStreamUrl, overlayStreamFormat, overlayQualityLabel)
+    m.interactionOverlaySelectedQualityIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, overlayStreamUrl, overlayQualityLabel)
     applyInteractionOverlayLayout()
 
     if forceReload or m.interactionOverlayAssignedStreamUrl <> overlayStreamUrl or m.fullscreenInteractionOverlayVideo.content = invalid
@@ -1214,9 +1261,9 @@ sub layoutInteractionOverlayControls()
     end if
 
     rect = m.interactionOverlayCurrentRect
-    panelHeight = 64
-    if rect.height < 140
-        panelHeight = 52
+    panelHeight = 82
+    if rect.height < 160
+        panelHeight = 68
     end if
 
     groupY = rect.y + rect.height - panelHeight
@@ -1229,24 +1276,66 @@ sub layoutInteractionOverlayControls()
     m.interactionOverlayControlsBackground.height = panelHeight
 
     trackX = 14
-    trackY = 10
+    trackY = 8
     trackWidth = rect.width - 28
     if trackWidth < 120
         trackWidth = 120
     end if
-    buttonY = panelHeight - 30
-    if buttonY < 18
-        buttonY = 18
+    buttonY = panelHeight - 54
+    if buttonY < 14
+        buttonY = 14
     end if
+
+    leftCapsuleWidth = 214
+    if rect.width < 700
+        leftCapsuleWidth = 182
+    end if
+
+    rightCapsuleWidth = 212
+    titleCapsuleX = trackX + leftCapsuleWidth + 10
+    titleCapsuleWidth = rect.width - leftCapsuleWidth - rightCapsuleWidth - 34
+    if titleCapsuleWidth < 160
+        titleCapsuleWidth = 160
+    end if
+    rightCapsuleX = rect.width - rightCapsuleWidth - 14
 
     m.interactionOverlayProgressTrack.translation = [trackX, trackY]
     m.interactionOverlayProgressTrack.width = trackWidth
     m.interactionOverlayProgressFill.translation = [trackX, trackY]
-    m.interactionOverlayTimeLabel.translation = [trackX, 18]
-    m.interactionOverlayPlayButton.translation = [trackX, buttonY]
-    m.interactionOverlayPlayLabel.translation = [trackX, buttonY]
-    m.interactionOverlayFullscreenButton.translation = [rect.width - 134, buttonY]
-    m.interactionOverlayFullscreenLabel.translation = [rect.width - 134, buttonY]
+
+    if m.interactionOverlayLeftCapsule <> invalid
+        m.interactionOverlayLeftCapsule.translation = [trackX, buttonY]
+        m.interactionOverlayLeftCapsule.width = leftCapsuleWidth
+        m.interactionOverlayLeftCapsule.height = 40
+    end if
+    if m.interactionOverlayTitleCapsule <> invalid
+        m.interactionOverlayTitleCapsule.translation = [titleCapsuleX, buttonY]
+        m.interactionOverlayTitleCapsule.width = titleCapsuleWidth
+        m.interactionOverlayTitleCapsule.height = 40
+        m.interactionOverlayTitleCapsule.visible = false
+    end if
+    if m.interactionOverlayRightCapsule <> invalid
+        m.interactionOverlayRightCapsule.translation = [rightCapsuleX, buttonY]
+        m.interactionOverlayRightCapsule.width = rightCapsuleWidth
+        m.interactionOverlayRightCapsule.height = 40
+    end if
+
+    m.interactionOverlayPlayButton.translation = [trackX + 10, buttonY + 6]
+    m.interactionOverlayPlayLabel.translation = [trackX + 10, buttonY + 6]
+    m.interactionOverlayTimeLabel.translation = [trackX + 70, buttonY + 10]
+    if m.interactionOverlayTitleLabel <> invalid
+        m.interactionOverlayTitleLabel.translation = [titleCapsuleX + 14, buttonY + 8]
+        m.interactionOverlayTitleLabel.width = titleCapsuleWidth - 28
+        m.interactionOverlayTitleLabel.visible = false
+    end if
+    if m.interactionOverlayQualityButton <> invalid
+        m.interactionOverlayQualityButton.translation = [rightCapsuleX + 12, buttonY + 6]
+    end if
+    if m.interactionOverlayQualityLabel <> invalid
+        m.interactionOverlayQualityLabel.translation = [rightCapsuleX + 12, buttonY + 6]
+    end if
+    m.interactionOverlayFullscreenButton.translation = [rightCapsuleX + 96, buttonY + 6]
+    m.interactionOverlayFullscreenLabel.translation = [rightCapsuleX + 96, buttonY + 6]
 
     m.interactionOverlayProgressTrackRect = {
         x: rect.x + trackX
@@ -1255,16 +1344,22 @@ sub layoutInteractionOverlayControls()
         height: 10
     }
     m.interactionOverlayPlayButtonRect = {
-        x: rect.x + trackX
-        y: groupY + buttonY
-        width: 108
-        height: 26
+        x: rect.x + trackX + 10
+        y: groupY + buttonY + 6
+        width: 52
+        height: 28
     }
     m.interactionOverlayFullscreenButtonRect = {
-        x: rect.x + rect.width - 134
-        y: groupY + buttonY
-        width: 120
-        height: 26
+        x: rect.x + rightCapsuleX + 96
+        y: groupY + buttonY + 6
+        width: 92
+        height: 28
+    }
+    m.interactionOverlayQualityButtonRect = {
+        x: rect.x + rightCapsuleX + 12
+        y: groupY + buttonY + 6
+        width: 74
+        height: 28
     }
 
     refreshInteractionOverlayControls()
@@ -1292,22 +1387,67 @@ sub refreshInteractionOverlayControls()
         m.interactionOverlayTimeLabel.text = formatOverlayTime(positionValue) + " / " + formatOverlayTime(durationValue)
     end if
 
+    if m.interactionOverlayTitleLabel <> invalid
+        m.interactionOverlayTitleLabel.text = ""
+    end if
+
     if m.interactionOverlayPlayLabel <> invalid
         if state = "playing" or state = "buffering"
-            m.interactionOverlayPlayLabel.text = "Pause"
+            m.interactionOverlayPlayLabel.text = "II"
         else
-            m.interactionOverlayPlayLabel.text = "Play"
+            m.interactionOverlayPlayLabel.text = ">"
         end if
     end if
 
     if m.interactionOverlayFullscreenLabel <> invalid
         if m.interactionOverlayControlsFullscreen
-            m.interactionOverlayFullscreenLabel.text = "Janela"
+            m.interactionOverlayFullscreenLabel.text = "< >"
         else
-            m.interactionOverlayFullscreenLabel.text = "Expandir"
+            m.interactionOverlayFullscreenLabel.text = "[ ]"
+        end if
+    end if
+
+    if m.interactionOverlayQualityLabel <> invalid
+        currentQuality = getCurrentInteractionOverlayQualityLabel()
+        if currentQuality = ""
+            currentQuality = "Auto"
+        end if
+        m.interactionOverlayQualityLabel.text = currentQuality
+    end if
+
+    playHover = isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayPlayButtonRect) and m.interactionOverlayControlsVisible
+    qualityHover = isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayQualityButtonRect) and m.interactionOverlayControlsVisible
+    fullscreenHover = isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayFullscreenButtonRect) and m.interactionOverlayControlsVisible
+    if m.interactionOverlayPlayButton <> invalid
+        if playHover
+            m.interactionOverlayPlayButton.color = "0xFF3B5C55"
+        else
+            m.interactionOverlayPlayButton.color = "0xFFFFFF18"
+        end if
+    end if
+    if m.interactionOverlayFullscreenButton <> invalid
+        if fullscreenHover
+            m.interactionOverlayFullscreenButton.color = "0xFF3B5C55"
+        else
+            m.interactionOverlayFullscreenButton.color = "0xFFFFFF18"
+        end if
+    end if
+    if m.interactionOverlayQualityButton <> invalid
+        if qualityHover
+            m.interactionOverlayQualityButton.color = "0xFF3B5C55"
+        else
+            m.interactionOverlayQualityButton.color = "0xFFFFFF18"
         end if
     end if
 end sub
+
+function fitOverlayTitle(textValue as string) as string
+    safeText = getString(textValue, "")
+    if Len(safeText) <= 52
+        return safeText
+    end if
+    return Left(safeText, 49) + "..."
+end function
 
 function formatOverlayTime(totalSeconds as dynamic) as string
     value = Int(getNumber(totalSeconds, 0.0))
@@ -1335,6 +1475,7 @@ sub showInteractionOverlayControls(reason as string)
     m.interactionOverlayControlsLastActivity.Mark()
     m.interactionOverlayControlsVisible = true
     m.interactionOverlayControlsGroup.visible = true
+    ? "[OVERLAY] controls => show reason="; reason
     refreshInteractionOverlayControls()
 
     if m.interactionOverlayControlsTimer <> invalid
@@ -1348,6 +1489,7 @@ sub hideInteractionOverlayControls()
     if m.interactionOverlayControlsGroup <> invalid
         m.interactionOverlayControlsGroup.visible = false
     end if
+    ? "[OVERLAY] controls => hide"
     if m.interactionOverlayControlsTimer <> invalid
         m.interactionOverlayControlsTimer.control = "stop"
     end if
@@ -1357,14 +1499,16 @@ function isInteractionOverlayActive() as boolean
     return normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao" and m.fullscreenInteractionOverlayVideo <> invalid and m.fullscreenInteractionOverlayVideo.content <> invalid and m.interactionOverlayAssignedStreamUrl <> ""
 end function
 
+function shouldCaptureInteractionOverlayPointerInput() as boolean
+    return isInteractionOverlayActive() and m.interactionOverlayCurrentRect <> invalid and isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayCurrentRect)
+end function
+
 sub notifyInteractionOverlayPointerActivity()
-    if not isInteractionOverlayActive() or m.interactionOverlayCurrentRect = invalid
+    if not shouldCaptureInteractionOverlayPointerInput()
         return
     end if
 
-    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayCurrentRect)
-        showInteractionOverlayControls("hover")
-    end if
+    showInteractionOverlayControls("hover")
 end sub
 
 function getInteractionOverlayControlHitTarget() as string
@@ -1377,6 +1521,9 @@ function getInteractionOverlayControlHitTarget() as string
     end if
     if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayFullscreenButtonRect)
         return "fullscreen"
+    end if
+    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayQualityButtonRect)
+        return "quality"
     end if
     if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayProgressTrackRect)
         return "progress"
@@ -1394,6 +1541,8 @@ end function
 sub handleInteractionOverlayControlHit(target as string)
     if target = "play"
         toggleInteractionOverlayPlayback()
+    else if target = "quality"
+        cycleInteractionOverlayQuality()
     else if target = "fullscreen"
         toggleInteractionOverlayFullscreen()
     else if target = "progress"
@@ -1431,6 +1580,45 @@ sub toggleInteractionOverlayFullscreen()
     showInteractionOverlayControls("fullscreen")
 end sub
 
+sub cycleInteractionOverlayQuality()
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    if m.interactionOverlayQualityOptions = invalid or m.interactionOverlayQualityOptions.Count() <= 1
+        ? "[OVERLAY] quality => unavailable"
+        showInteractionOverlayControls("quality-unavailable")
+        return
+    end if
+
+    nextIndex = m.interactionOverlaySelectedQualityIndex + 1
+    if nextIndex >= m.interactionOverlayQualityOptions.Count()
+        nextIndex = 0
+    end if
+
+    option = m.interactionOverlayQualityOptions[nextIndex]
+    streamUrl = getString(option.streamUrl, "")
+    streamFormat = LCase(getString(option.streamFormat, ""))
+    qualityLabel = getString(option.label, "")
+    if streamUrl = "" or streamFormat = ""
+        return
+    end if
+
+    m.interactionOverlaySelectedQualityIndex = nextIndex
+    m.interactionOverlayPendingSeekPosition = invalid
+    m.interactionOverlayAssignedStreamUrl = streamUrl
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = appendCacheBust(streamUrl)
+    content.streamFormat = streamFormat
+    content.title = qualityLabel
+    ? "[OVERLAY] quality => "; qualityLabel; " format="; streamFormat
+    m.fullscreenInteractionOverlayVideo.content = content
+    m.fullscreenInteractionOverlayVideo.control = "stop"
+    m.fullscreenInteractionOverlayVideo.visible = true
+    m.fullscreenInteractionOverlayVideo.control = "play"
+    showInteractionOverlayControls("quality")
+end sub
+
 sub seekInteractionOverlayFromCursor()
     if not isInteractionOverlayActive() or m.interactionOverlayProgressTrackRect = invalid
         return
@@ -1444,8 +1632,26 @@ sub seekInteractionOverlayFromCursor()
     ratio = clampNumber((m.cursorX - m.interactionOverlayProgressTrackRect.x) / m.interactionOverlayProgressTrackRect.width, 0.0, 1.0)
     targetPosition = durationValue * ratio
     ? "[OVERLAY] seek => "; targetPosition
-    m.fullscreenInteractionOverlayVideo.seek = targetPosition
+    applyInteractionOverlaySeek(targetPosition, "cursor")
     refreshInteractionOverlayControls()
+end sub
+
+sub applyInteractionOverlaySeek(targetPosition as double, reason as string)
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    shouldResume = state = "playing" or state = "buffering"
+    m.interactionOverlayPendingSeekPosition = targetPosition
+    ? "[OVERLAY] seek-apply => "; reason; " pos="; targetPosition; " resume="; shouldResume
+    if shouldResume
+        m.fullscreenInteractionOverlayVideo.control = "pause"
+    end if
+    m.fullscreenInteractionOverlayVideo.seek = targetPosition
+    if shouldResume
+        m.fullscreenInteractionOverlayVideo.control = "resume"
+    end if
 end sub
 
 function handleInteractionOverlayTransportShortcut(direction as string) as boolean
@@ -1457,19 +1663,24 @@ function handleInteractionOverlayTransportShortcut(direction as string) as boole
         toggleInteractionOverlayPlayback()
     else
         durationValue = getNumber(m.fullscreenInteractionOverlayVideo.duration, 0.0)
-        positionValue = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
-        if durationValue <= 0
-            return false
+        if m.interactionOverlayPendingSeekPosition <> invalid
+            positionValue = getNumber(m.interactionOverlayPendingSeekPosition, 0.0)
+        else
+            positionValue = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
         end if
 
         if direction = "backward"
-            targetPosition = positionValue - 10
+            targetPosition = positionValue - m.interactionOverlaySeekStepSeconds
         else
-            targetPosition = positionValue + 10
+            targetPosition = positionValue + m.interactionOverlaySeekStepSeconds
         end if
-        targetPosition = clampNumber(targetPosition, 0.0, durationValue)
+        if durationValue > 0
+            targetPosition = clampNumber(targetPosition, 0.0, durationValue)
+        else if targetPosition < 0
+            targetPosition = 0
+        end if
         ? "[OVERLAY] seek-shortcut => "; direction; " pos="; targetPosition
-        m.fullscreenInteractionOverlayVideo.seek = targetPosition
+        applyInteractionOverlaySeek(targetPosition, direction)
     end if
 
     showInteractionOverlayControls("transport")
@@ -1607,6 +1818,9 @@ sub onInteractionOverlayVideoStateChanged()
     end if
 
     state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    if state = "playing" or state = "finished" or state = "stopped"
+        m.interactionOverlayPendingSeekPosition = invalid
+    end if
     if state = "" or state = m.lastInteractionOverlayState
         return
     end if
@@ -2119,7 +2333,14 @@ sub playLegacyPanelAudioChunk()
 end sub
 
 sub moveCursor(command as string)
-    stepSize = 8
+    stepSize = 5
+    if m.heldDirectionKey <> ""
+        if m.heldDirectionRepeatCount >= 8
+            stepSize = 8
+        else if m.heldDirectionRepeatCount >= 3
+            stepSize = 6
+        end if
+    end if
 
     if command = "up"
         m.cursorY = m.cursorY - stepSize
@@ -2150,8 +2371,13 @@ end sub
 sub startHeldDirection(key as string)
     stopHeldRemoteCommand()
     m.heldDirectionKey = key
+    m.heldDirectionRepeatCount = 0
+    ? "[CURSOR] hold-start => "; key
     moveCursor(key)
-    sendPointerCommand("move")
+    if shouldCaptureInteractionOverlayPointerInput()
+        ? "[OVERLAY] pointer => hover"
+    end if
+    dispatchPointerMove(true)
 
     if m.cursorMoveTimer <> invalid
         m.cursorMoveTimer.control = "stop"
@@ -2160,7 +2386,11 @@ sub startHeldDirection(key as string)
 end sub
 
 sub stopHeldDirection()
+    if m.heldDirectionKey <> ""
+        ? "[CURSOR] hold-stop => "; m.heldDirectionKey
+    end if
     m.heldDirectionKey = ""
+    m.heldDirectionRepeatCount = 0
     if m.cursorMoveTimer <> invalid and m.heldRemoteCommand = ""
         m.cursorMoveTimer.control = "stop"
     end if
@@ -2170,7 +2400,23 @@ sub startHeldRemoteCommand(key as string, command as string)
     stopHeldDirection()
     m.heldRemoteKey = key
     m.heldRemoteCommand = command
-    sendRemoteCommand(command)
+    if m.lastHeldRemoteDispatch = invalid
+        m.lastHeldRemoteDispatch = CreateObject("roTimespan")
+    end if
+    m.lastHeldRemoteDispatch.Mark()
+    if command = "overlay-seek-backward"
+        ? "[OVERLAY] hold-seek-start => backward"
+    else if command = "overlay-seek-forward"
+        ? "[OVERLAY] hold-seek-start => forward"
+    end if
+
+    if command = "overlay-seek-backward"
+        handleInteractionOverlayTransportShortcut("backward")
+    else if command = "overlay-seek-forward"
+        handleInteractionOverlayTransportShortcut("forward")
+    else
+        sendRemoteCommand(command)
+    end if
 
     if m.cursorMoveTimer <> invalid
         m.cursorMoveTimer.control = "stop"
@@ -2179,8 +2425,14 @@ sub startHeldRemoteCommand(key as string, command as string)
 end sub
 
 sub stopHeldRemoteCommand()
+    if m.heldRemoteCommand = "overlay-seek-backward"
+        ? "[OVERLAY] hold-seek-stop => backward"
+    else if m.heldRemoteCommand = "overlay-seek-forward"
+        ? "[OVERLAY] hold-seek-stop => forward"
+    end if
     m.heldRemoteKey = ""
     m.heldRemoteCommand = ""
+    m.lastHeldRemoteDispatch = invalid
     if m.cursorMoveTimer <> invalid and m.heldDirectionKey = ""
         m.cursorMoveTimer.control = "stop"
     end if
@@ -2194,15 +2446,57 @@ sub onCursorMoveTimerFire()
     end if
 
     if m.heldDirectionKey <> ""
+        m.heldDirectionRepeatCount = m.heldDirectionRepeatCount + 1
         moveCursor(m.heldDirectionKey)
-        sendPointerCommand("move")
+        if shouldCaptureInteractionOverlayPointerInput()
+            ? "[OVERLAY] pointer => hover"
+        end if
+        dispatchPointerMove(false)
         return
     end if
 
     if m.heldRemoteCommand <> ""
-        sendRemoteCommand(m.heldRemoteCommand)
+        if m.lastHeldRemoteDispatch <> invalid and m.lastHeldRemoteDispatch.TotalMilliseconds() < m.heldRemoteDispatchIntervalMs
+            return
+        end if
+        if m.lastHeldRemoteDispatch = invalid
+            m.lastHeldRemoteDispatch = CreateObject("roTimespan")
+        end if
+        m.lastHeldRemoteDispatch.Mark()
+        if m.heldRemoteCommand = "overlay-seek-backward"
+            handleInteractionOverlayTransportShortcut("backward")
+        else if m.heldRemoteCommand = "overlay-seek-forward"
+            handleInteractionOverlayTransportShortcut("forward")
+        else
+            sendRemoteCommand(m.heldRemoteCommand)
+        end if
         scheduleFullscreenRefresh()
     end if
+end sub
+
+sub dispatchPointerMove(force as boolean)
+    if force
+        if m.lastPointerMoveDispatch = invalid
+            m.lastPointerMoveDispatch = CreateObject("roTimespan")
+        end if
+        m.lastPointerMoveDispatch.Mark()
+        sendPointerCommand("move")
+        return
+    end if
+
+    if m.lastPointerMoveDispatch = invalid
+        m.lastPointerMoveDispatch = CreateObject("roTimespan")
+        m.lastPointerMoveDispatch.Mark()
+        sendPointerCommand("move")
+        return
+    end if
+
+    if m.lastPointerMoveDispatch.TotalMilliseconds() < m.pointerMoveDispatchIntervalMs
+        return
+    end if
+
+    m.lastPointerMoveDispatch.Mark()
+    sendPointerCommand("move")
 end sub
 
 sub updateCursorMarker()
@@ -2985,6 +3279,80 @@ function getNumber(value as dynamic, fallback as double) as double
     return fallback
 end function
 
+function getObjectArray(value as dynamic) as object
+    if value = invalid
+        return []
+    end if
+
+    valueType = Type(value)
+    if valueType = "roArray" or valueType = "Array"
+        return value
+    end if
+
+    return []
+end function
+
+function normalizeDirectVideoQualityOptions(options as dynamic, fallbackStreamUrl as string, fallbackStreamFormat as string, fallbackLabel as string) as object
+    result = []
+    for each option in getObjectArray(options)
+        label = getString(option.label, "")
+        streamUrl = getString(option.streamUrl, "")
+        streamFormat = getString(option.streamFormat, "")
+        if label <> "" and streamUrl <> "" and streamFormat <> ""
+            result.Push({
+                label: label
+                streamUrl: streamUrl
+                streamFormat: streamFormat
+            })
+        end if
+    end for
+
+    if result.Count() = 0 and fallbackStreamUrl <> "" and fallbackStreamFormat <> ""
+        fallbackResolvedLabel = fallbackLabel
+        if fallbackResolvedLabel = ""
+            fallbackResolvedLabel = "Auto"
+        end if
+        result.Push({
+            label: fallbackResolvedLabel
+            streamUrl: fallbackStreamUrl
+            streamFormat: fallbackStreamFormat
+        })
+    end if
+
+    return result
+end function
+
+function findDirectVideoQualityOptionIndex(options as dynamic, streamUrl as string, qualityLabel as string) as integer
+    objectOptions = getObjectArray(options)
+    for i = 0 to objectOptions.Count() - 1
+        option = objectOptions[i]
+        if getString(option.streamUrl, "") = streamUrl
+            return i
+        end if
+    end for
+
+    for i = 0 to objectOptions.Count() - 1
+        option = objectOptions[i]
+        if getString(option.label, "") = qualityLabel
+            return i
+        end if
+    end for
+
+    return 0
+end function
+
+function getCurrentInteractionOverlayQualityLabel() as string
+    if m.interactionOverlayQualityOptions = invalid or m.interactionOverlayQualityOptions.Count() = 0
+        return ""
+    end if
+
+    if m.interactionOverlaySelectedQualityIndex < 0 or m.interactionOverlaySelectedQualityIndex >= m.interactionOverlayQualityOptions.Count()
+        return ""
+    end if
+
+    return getString(m.interactionOverlayQualityOptions[m.interactionOverlaySelectedQualityIndex].label, "")
+end function
+
 function clampNumber(value as double, minValue as double, maxValue as double) as double
     if value < minValue
         return minValue
@@ -3045,11 +3413,11 @@ function isFwdKey(key as string) as boolean
 end function
 
 function isPlusKey(key as string) as boolean
-    return key = "volumeup" or key = "channelup"
+    return key = "volumeup" or key = "channelup" or key = "plus" or key = "+"
 end function
 
 function isMinusKey(key as string) as boolean
-    return key = "volumedown" or key = "channeldown"
+    return key = "volumedown" or key = "channeldown" or key = "minus" or key = "-"
 end function
 
 function isOptionsKey(key as string) as boolean
@@ -3057,7 +3425,7 @@ function isOptionsKey(key as string) as boolean
 end function
 
 function isBlueKey(key as string) as boolean
-    return key = "blue"
+    return key = "blue" or key = "bluekey" or key = "functionblue"
 end function
 
 sub showScrollModeToast(message as string)

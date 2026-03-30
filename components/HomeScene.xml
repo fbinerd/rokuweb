@@ -127,60 +127,102 @@
       <Rectangle
         id="interactionOverlayControlsBackground"
         width="320"
-        height="64"
-        color="0x05070CDD" />
+        height="82"
+        color="0x00000000" />
       <Rectangle
         id="interactionOverlayProgressTrack"
         width="292"
-        height="6"
-        translation="[14,10]"
-        color="0x475569FF" />
+        height="4"
+        translation="[14,8]"
+        color="0x3A3A40DD" />
       <Rectangle
         id="interactionOverlayProgressFill"
         width="0"
-        height="6"
-        translation="[14,10]"
-        color="0xEAB308FF" />
+        height="4"
+        translation="[14,8]"
+        color="0xFF3B5CFF" />
+      <Rectangle
+        id="interactionOverlayLeftCapsule"
+        width="262"
+        height="40"
+        translation="[14,22]"
+        color="0x111111D8" />
+      <Rectangle
+        id="interactionOverlayTitleCapsule"
+        width="320"
+        height="40"
+        translation="[238,22]"
+        color="0x111111CC" />
+      <Rectangle
+        id="interactionOverlayRightCapsule"
+        width="126"
+        height="40"
+        translation="[572,22]"
+        color="0x111111D8" />
       <Label
         id="interactionOverlayTimeLabel"
-        width="150"
+        width="164"
         height="20"
-        translation="[14,18]"
+        translation="[94,32]"
         color="0xE2E8F0FF"
         font="font:SmallSystemFont"
         text="00:00 / 00:00" />
       <Rectangle
         id="interactionOverlayPlayButton"
-        width="108"
-        height="26"
-        translation="[14,34]"
-        color="0x1E293BEE" />
+        width="52"
+        height="28"
+        translation="[24,28]"
+        color="0xFFFFFF18" />
       <Label
         id="interactionOverlayPlayLabel"
-        width="108"
-        height="26"
-        translation="[14,34]"
+        width="52"
+        height="28"
+        translation="[24,28]"
         horizAlign="center"
         vertAlign="center"
         color="0xFFFFFFFF"
         font="font:SmallSystemFont"
-        text="Pause" />
+        text="II" />
+      <Label
+        id="interactionOverlayTitleLabel"
+        width="292"
+        height="24"
+        translation="[252,30]"
+        color="0xF8FAFCFF"
+        font="font:SmallSystemFont"
+        text="YouTube direto" />
+      <Rectangle
+        id="interactionOverlayQualityButton"
+        width="74"
+        height="28"
+        translation="[506,28]"
+        color="0xFFFFFF18" />
+      <Label
+        id="interactionOverlayQualityLabel"
+        width="74"
+        height="28"
+        translation="[506,28]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="Auto" />
       <Rectangle
         id="interactionOverlayFullscreenButton"
-        width="120"
-        height="26"
-        translation="[186,34]"
-        color="0x1E293BEE" />
+        width="92"
+        height="28"
+        translation="[590,28]"
+        color="0xFFFFFF18" />
       <Label
         id="interactionOverlayFullscreenLabel"
-        width="120"
-        height="26"
-        translation="[186,34]"
+        width="92"
+        height="28"
+        translation="[590,28]"
         horizAlign="center"
         vertAlign="center"
         color="0xFFFFFFFF"
         font="font:SmallSystemFont"
-        text="Expandir" />
+        text="[ ]" />
     </Group>
     <Video
       id="fullscreenVideoModeVideo"
