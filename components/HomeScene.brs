@@ -1384,7 +1384,8 @@ sub applyInteractionOverlayLayout()
 
     visibleRect = m.interactionOverlayBaseRect
     intrinsicRect = m.interactionOverlayBaseRect
-    cropOffsetY = 0
+    renderRect = visibleRect
+    useScreenViewport = false
     if m.interactionOverlayControlsFullscreen
         visibleRect = {
             x: 0
@@ -1393,32 +1394,47 @@ sub applyInteractionOverlayLayout()
             height: 720
         }
         intrinsicRect = visibleRect
+        renderRect = visibleRect
     else if m.interactionOverlayIntrinsicRect <> invalid
         intrinsicCandidate = m.interactionOverlayIntrinsicRect
-        sameWidth = Abs(intrinsicCandidate.width - visibleRect.width) <= 8
-        if visibleRect.y = 0 and sameWidth and intrinsicCandidate.height > visibleRect.height
+        sameWidth = Abs(intrinsicCandidate.width - visibleRect.width) <= 24
+        heightShrunkAtTop = intrinsicCandidate.height > (visibleRect.height + 8)
+        if heightShrunkAtTop and sameWidth
             intrinsicRect = {
-                x: visibleRect.x
-                y: visibleRect.y
-                width: visibleRect.width
+                x: intrinsicCandidate.x
+                y: intrinsicCandidate.y
+                width: intrinsicCandidate.width
                 height: intrinsicCandidate.height
             }
-            cropOffsetY = intrinsicCandidate.height - visibleRect.height
-            if cropOffsetY < 0
-                cropOffsetY = 0
-            end if
+            renderRect = {
+                x: intrinsicCandidate.x
+                y: visibleRect.y - (intrinsicCandidate.height - visibleRect.height)
+                width: intrinsicRect.width
+                height: intrinsicRect.height
+            }
+            useScreenViewport = true
+            ? "[OVERLAY] edge-illusion => visibleY="; visibleRect.y; " visibleH="; visibleRect.height; " intrinsicH="; intrinsicCandidate.height; " renderY="; renderRect.y
         end if
     end if
 
     m.interactionOverlayCurrentRect = visibleRect
     if m.interactionOverlayViewport <> invalid
-        m.interactionOverlayViewport.translation = [visibleRect.x, visibleRect.y]
+        if useScreenViewport
+            m.interactionOverlayViewport.translation = [0, 0]
+            m.interactionOverlayViewport.clippingRect = [0, 0, 1280, 720]
+        else
+            m.interactionOverlayViewport.translation = [renderRect.x, renderRect.y]
+            m.interactionOverlayViewport.clippingRect = [0, 0, renderRect.width, renderRect.height]
+        end if
         m.interactionOverlayViewport.visible = true
-        m.interactionOverlayViewport.clippingRect = [0, 0, visibleRect.width, visibleRect.height]
     end if
-    m.fullscreenInteractionOverlayVideo.translation = [0, -cropOffsetY]
-    m.fullscreenInteractionOverlayVideo.width = intrinsicRect.width
-    m.fullscreenInteractionOverlayVideo.height = intrinsicRect.height
+    if useScreenViewport
+        m.fullscreenInteractionOverlayVideo.translation = [renderRect.x, renderRect.y]
+    else
+        m.fullscreenInteractionOverlayVideo.translation = [0, 0]
+    end if
+    m.fullscreenInteractionOverlayVideo.width = renderRect.width
+    m.fullscreenInteractionOverlayVideo.height = renderRect.height
     m.fullscreenInteractionOverlayVideo.visible = true
     layoutInteractionOverlayControls()
 end sub
