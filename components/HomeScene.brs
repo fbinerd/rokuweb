@@ -49,6 +49,10 @@ sub init()
     m.pendingAutoFullscreenStreamUrl = ""
     m.pendingAutoFullscreenMode = ""
     m.pendingAutoFullscreenSeenCount = 0
+    m.lastInteractionOkTimespan = invalid
+    m.interactionOkDebounceMs = 1200
+    m.fullscreenOkActive = false
+    m.pendingInteractionAutoPlayWindowId = ""
     m.fullscreenPlayRequestCount = 0
     m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
@@ -194,6 +198,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
     if m.isFullscreen
         if not press
+            if normalizedKey = "ok"
+                m.fullscreenOkActive = false
+                return true
+            end if
+
             if isBlueKey(normalizedKey)
                 return true
             end if
@@ -257,10 +266,35 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
 
         if normalizedKey = "ok"
+            if m.fullscreenOkActive
+                return true
+            end if
+            m.fullscreenOkActive = true
+
             if m.pendingEditableActivation
                 openKeyboardDialog(m.pendingEditableValue, m.pendingEditableMultiline)
                 clearPendingEditableActivation()
                 return true
+            end if
+            if normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+                if m.lastInteractionOkTimespan = invalid
+                    m.lastInteractionOkTimespan = CreateObject("roTimespan")
+                    m.lastInteractionOkTimespan.Mark()
+                else if m.lastInteractionOkTimespan.TotalMilliseconds() < m.interactionOkDebounceMs
+                    return true
+                else
+                    m.lastInteractionOkTimespan.Mark()
+                end if
+
+                if m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
+                    currentEntry = m.windowEntries[m.selectedIndex]
+                    initialUrl = LCase(getString(currentEntry.initialUrl, ""))
+                    if Instr(1, initialUrl, "youtube.com") > 0 or Instr(1, initialUrl, "youtu.be") > 0 or Instr(1, initialUrl, "youtube-nocookie.com") > 0
+                        sendClickCommand()
+                        scheduleFullscreenRefresh()
+                        return true
+                    end if
+                end if
             end if
             sendClickCommand()
             return true
@@ -640,14 +674,27 @@ sub applyBridgeResponse()
         autoEntry = m.windowEntries[autoFullscreenIndex]
         autoWindowId = getString(autoEntry.id, "")
         autoStreamUrl = getString(autoEntry.streamUrl, "")
+        autoThumbnailUrl = getString(autoEntry.thumbnailUrl, "")
+        autoAudioUrl = getString(autoEntry.audioStreamUrl, "")
         autoStreamingMode = normalizeStreamingMode(getString(autoEntry.streamingMode, "Interacao"))
+        autoStabilityToken = autoStreamUrl
 
-        if autoWindowId <> "" and autoStreamUrl <> ""
-            if m.pendingAutoFullscreenWindowId = autoWindowId and m.pendingAutoFullscreenStreamUrl = autoStreamUrl and m.pendingAutoFullscreenMode = autoStreamingMode
+        if autoStreamingMode = "Interacao" and autoStabilityToken = ""
+            if autoThumbnailUrl <> ""
+                autoStabilityToken = autoThumbnailUrl
+            else if autoAudioUrl <> ""
+                autoStabilityToken = autoAudioUrl
+            else
+                autoStabilityToken = autoWindowId
+            end if
+        end if
+
+        if autoWindowId <> "" and autoStabilityToken <> ""
+            if m.pendingAutoFullscreenWindowId = autoWindowId and m.pendingAutoFullscreenStreamUrl = autoStabilityToken and m.pendingAutoFullscreenMode = autoStreamingMode
                 m.pendingAutoFullscreenSeenCount = m.pendingAutoFullscreenSeenCount + 1
             else
                 m.pendingAutoFullscreenWindowId = autoWindowId
-                m.pendingAutoFullscreenStreamUrl = autoStreamUrl
+                m.pendingAutoFullscreenStreamUrl = autoStabilityToken
                 m.pendingAutoFullscreenMode = autoStreamingMode
                 m.pendingAutoFullscreenSeenCount = 1
             end if
@@ -883,6 +930,7 @@ sub showFullscreen()
     m.fullscreenWindowId = entryId
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.pendingInteractionAutoPlayWindowId = ""
     stopStagingFullscreenVideo()
     stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
     if m.videoUsesStream
@@ -977,8 +1025,12 @@ sub showFullscreen()
     stopPanelRefresh()
     updateCursorMarker()
     if not m.videoUsesStream and m.fullscreenStreamingMode = "Interacao"
-        startPanelAudio(entry)
-    else if not m.videoUsesStream and m.fullscreenStreamingMode = "Video"
+        initialUrl = LCase(getString(entry.initialUrl, ""))
+        if Instr(1, initialUrl, "youtube.com") > 0 or Instr(1, initialUrl, "youtu.be") > 0 or Instr(1, initialUrl, "youtube-nocookie.com") > 0
+            m.pendingInteractionAutoPlayWindowId = entryId
+        end if
+    end if
+    if not m.videoUsesStream and m.fullscreenStreamingMode = "Video"
         m.statusLabel.text = "Carregando modo Video..."
     end if
     startFullscreenStream()
@@ -1031,6 +1083,9 @@ sub hideFullscreen()
     m.pendingAutoFullscreenWindowId = ""
     m.pendingAutoFullscreenStreamUrl = ""
     m.pendingAutoFullscreenSeenCount = 0
+    m.lastInteractionOkTimespan = invalid
+    m.fullscreenOkActive = false
+    m.pendingInteractionAutoPlayWindowId = ""
     m.scrollModeEnabled = false
     m.fullscreenPosterWindowId = ""
     m.fullscreenPosterSourceUrl = ""
@@ -1103,7 +1158,7 @@ sub startPanelAudio(entry as object)
         m.panelAudioNode.control = "stop"
         m.panelAudioNode.control = "play"
     end if
-    if m.audioFallbackTimer <> invalid
+    if not m.audioUsesHls and m.audioFallbackTimer <> invalid
         m.audioFallbackTimer.control = "stop"
         m.audioFallbackTimer.control = "start"
     end if
@@ -1184,6 +1239,10 @@ end sub
 
 sub onFullscreenVideoWatchTimerFire()
     if not m.isFullscreen or not m.videoUsesStream
+        return
+    end if
+
+    if normalizeStreamingMode(m.fullscreenStreamingMode) <> "Video"
         return
     end if
 
@@ -1519,6 +1578,10 @@ sub onAudioFallbackTimerFire()
         return
     end if
 
+    if m.audioUsesHls
+        return
+    end if
+
     if not m.isFullscreen or m.audioSessionId = ""
         return
     end if
@@ -1808,7 +1871,17 @@ sub onPreviewRefreshTimerFire()
 end sub
 
 sub onFullscreenStreamTimerFire()
-    reportVideoDiagHeartbeat()
+    if m.fullscreenStreamingMode = "Video"
+        reportVideoDiagHeartbeat()
+    end if
+
+    if m.isFullscreen and not m.videoUsesStream and normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+        if m.pendingInteractionAutoPlayWindowId <> "" and m.pendingInteractionAutoPlayWindowId = m.fullscreenWindowId
+            sendRemoteCommand("media-play")
+            scheduleFullscreenRefresh()
+            m.pendingInteractionAutoPlayWindowId = ""
+        end if
+    end if
 
     if m.fullscreenStreamingMode = "Video" and m.videoUsesStream and m.fullscreenVideoMode <> invalid
         videoState = LCase(getString(m.fullscreenVideoMode.state, ""))
@@ -2359,11 +2432,17 @@ sub startFullscreenStream()
         return
     end if
 
+    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+        m.fullscreenStreamTimer.duration = 0.20
+    else
+        m.fullscreenStreamTimer.duration = 0.75
+    end if
+
     m.fullscreenStreamTimer.control = "stop"
     m.fullscreenStreamTimer.control = "start"
     if m.fullscreenVideoWatchTimer <> invalid
         m.fullscreenVideoWatchTimer.control = "stop"
-        if m.videoUsesStream
+        if m.videoUsesStream and normalizeStreamingMode(m.fullscreenStreamingMode) = "Video"
             m.fullscreenVideoWatchTimer.control = "start"
         end if
     end if

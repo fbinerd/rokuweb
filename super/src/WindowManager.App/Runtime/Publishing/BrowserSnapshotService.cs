@@ -224,9 +224,18 @@ public sealed class BrowserSnapshotService
                 case "ok":
                 case "select":
                     host.SendMouseMoveEvent(cursor.ToMouseEvent(), false);
-                    host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, false, 1);
-                    host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, true, 1);
+                    if (await IsMediaControlAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true))
+                    {
+                        AppLog.Write("BrowserControl", string.Format("click(media) => janela={0}, x={1}, y={2}", windowId.ToString("N"), cursor.X, cursor.Y));
+                        host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, false, 1);
+                        host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, true, 1);
+                        await Task.Delay(120).ConfigureAwait(true);
+                        InvalidateCapture(windowId);
+                        return RemoteCommandResult.Success();
+                    }
+
                     var clickResult = await ClickElementAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true);
+                    AppLog.Write("BrowserControl", string.Format("click(dom) => janela={0}, x={1}, y={2}, ok={3}, nav={4}", windowId.ToString("N"), cursor.X, cursor.Y, clickResult.Ok, clickResult.NavigationUrl ?? string.Empty));
                     if (!string.IsNullOrWhiteSpace(clickResult.NavigationUrl))
                     {
                         browser.Load(clickResult.NavigationUrl);
@@ -286,8 +295,24 @@ public sealed class BrowserSnapshotService
                     return RemoteCommandResult.Success();
                 case "media-play-pause":
                     var mediaToggleResult = await ToggleMediaPlayPauseAsync(frame, host).ConfigureAwait(true);
+                    AppLog.Write("BrowserControl", string.Format("media-play-pause => janela={0}, ok={1}", windowId.ToString("N"), mediaToggleResult.Ok));
                     InvalidateCapture(windowId);
                     return mediaToggleResult;
+                case "media-play":
+                    var mediaPlayResult = await PlayMediaAsync(frame, host).ConfigureAwait(true);
+                    AppLog.Write("BrowserControl", string.Format("media-play => janela={0}, ok={1}", windowId.ToString("N"), mediaPlayResult.Ok));
+                    InvalidateCapture(windowId);
+                    return mediaPlayResult;
+                case "media-resume":
+                    var mediaResumeResult = await ResumeMediaWithNativeGestureAsync(frame, host).ConfigureAwait(true);
+                    AppLog.Write("BrowserControl", string.Format("media-resume => janela={0}, ok={1}", windowId.ToString("N"), mediaResumeResult.Ok));
+                    InvalidateCapture(windowId);
+                    return mediaResumeResult;
+                case "media-pause":
+                    var mediaPauseResult = await PauseMediaAsync(frame, host).ConfigureAwait(true);
+                    AppLog.Write("BrowserControl", string.Format("media-pause => janela={0}, ok={1}", windowId.ToString("N"), mediaPauseResult.Ok));
+                    InvalidateCapture(windowId);
+                    return mediaPauseResult;
                 case "play":
                 case "tab":
                     SendKey(host, 0x09);
@@ -526,6 +551,33 @@ public sealed class BrowserSnapshotService
         });
     }
 
+    private static void SendCharacterKey(IBrowserHost host, char character, int keyCode)
+    {
+        host.SendKeyEvent(new KeyEvent
+        {
+            Type = KeyEventType.RawKeyDown,
+            WindowsKeyCode = keyCode,
+            NativeKeyCode = keyCode,
+            FocusOnEditableField = true
+        });
+
+        host.SendKeyEvent(new KeyEvent
+        {
+            Type = KeyEventType.Char,
+            WindowsKeyCode = character,
+            NativeKeyCode = character,
+            FocusOnEditableField = true
+        });
+
+        host.SendKeyEvent(new KeyEvent
+        {
+            Type = KeyEventType.KeyUp,
+            WindowsKeyCode = keyCode,
+            NativeKeyCode = keyCode,
+            FocusOnEditableField = true
+        });
+    }
+
     private static async Task HighlightElementAtPointAsync(IFrame frame, int x, int y)
     {
         try
@@ -661,6 +713,52 @@ public sealed class BrowserSnapshotService
     }});
   }}
 
+  if (mediaControl) {{
+    const activeMedia = target.closest('video, audio') || document.querySelector('video, audio');
+    if (activeMedia && typeof activeMedia.paused === 'boolean') {{
+      if (activeMedia.paused) {{
+        const playResult = activeMedia.play && activeMedia.play();
+        if (playResult && typeof playResult.catch === 'function') {{
+          playResult.catch(function(){{}});
+        }}
+      }}
+
+      return JSON.stringify({{
+        ok: true,
+        editable: false,
+        multiline: false,
+        tagName: tag,
+        inputType: inputType,
+        value: '',
+        targetPath: describeNode(target),
+        clickablePath: describeNode(activeMedia),
+        navigationUrl: ''
+      }});
+    }}
+
+    const youtubeButton = target.closest('.ytp-play-button') || document.querySelector('.ytp-play-button');
+    if (youtubeButton && typeof youtubeButton.click === 'function') {{
+      const ariaLabel = ((youtubeButton.getAttribute && youtubeButton.getAttribute('aria-label')) || '').toLowerCase();
+      const title = ((youtubeButton.getAttribute && youtubeButton.getAttribute('title')) || '').toLowerCase();
+      const shouldPlay = ariaLabel.indexOf('play') >= 0 || title.indexOf('play') >= 0 || ariaLabel.indexOf('reprodu') >= 0 || title.indexOf('reprodu') >= 0;
+      if (shouldPlay) {{
+        if (typeof youtubeButton.focus === 'function') youtubeButton.focus();
+        youtubeButton.click();
+      }}
+      return JSON.stringify({{
+        ok: true,
+        editable: false,
+        multiline: false,
+        tagName: tag,
+        inputType: inputType,
+        value: '',
+        targetPath: describeNode(target),
+        clickablePath: describeNode(youtubeButton),
+        navigationUrl: ''
+      }});
+    }}
+  }}
+
   if (clickable && !mediaControl && typeof clickable.click === 'function') {{
     const clickableTag = (clickable.tagName || '').toUpperCase();
     const clickableHref = (clickable.getAttribute && clickable.getAttribute('href')) || '';
@@ -697,6 +795,24 @@ public sealed class BrowserSnapshotService
         var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
         await Task.Delay(120).ConfigureAwait(false);
         return ParseRemoteCommandResult(response?.Result as string);
+    }
+
+    private static async Task<bool> IsMediaControlAtPointAsync(IFrame frame, int x, int y)
+    {
+        var script = string.Format(@"
+(function() {{
+  try {{
+    const target = document.elementFromPoint({0}, {1});
+    if (!target) return 'false';
+    const mediaControl = target.closest('video, .html5-video-player, .ytp-chrome-controls, .ytp-play-button, .ytp-progress-bar');
+    return mediaControl ? 'true' : 'false';
+  }} catch (e) {{
+    return 'false';
+  }}
+}})();", x, y);
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        return string.Equals(response?.Result as string, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<RemoteCommandResult> SetTextAtFocusedElementAsync(IFrame frame, int x, int y, string text)
@@ -821,6 +937,141 @@ public sealed class BrowserSnapshotService
 
         await Task.Delay(120).ConfigureAwait(false);
         return result;
+    }
+
+    private static async Task<RemoteCommandResult> PlayMediaAsync(IFrame frame, IBrowserHost host)
+    {
+        var script = @"
+(function() {
+  try {
+    const activeMedia = Array.from(document.querySelectorAll('video, audio')).find(el => !!el && typeof el.paused === 'boolean');
+    if (activeMedia) {
+      if (activeMedia.paused) {
+        const playResult = activeMedia.play();
+        if (playResult && typeof playResult.catch === 'function') {
+          playResult.catch(function(){});
+        }
+      }
+      return JSON.stringify({ ok: true });
+    }
+
+    const youtubeButton = document.querySelector('.ytp-play-button');
+    if (youtubeButton && typeof youtubeButton.click === 'function') {
+      const ariaLabel = ((youtubeButton.getAttribute && youtubeButton.getAttribute('aria-label')) || '').toLowerCase();
+      const title = ((youtubeButton.getAttribute && youtubeButton.getAttribute('title')) || '').toLowerCase();
+      const shouldPlay = ariaLabel.indexOf('play') >= 0 || title.indexOf('play') >= 0 || ariaLabel.indexOf('reprodu') >= 0 || title.indexOf('reprodu') >= 0;
+      if (shouldPlay) {
+        youtubeButton.click();
+      }
+      return JSON.stringify({ ok: true });
+    }
+
+    return JSON.stringify({ ok: false });
+  } catch (e) {
+    return JSON.stringify({ ok: false });
+  }
+})();";
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        var result = ParseRemoteCommandResult(response?.Result as string);
+        if (!result.Ok)
+        {
+            SendKey(host, 0xB3);
+            result = RemoteCommandResult.Success();
+        }
+
+        await Task.Delay(120).ConfigureAwait(false);
+        return result;
+    }
+
+    private static async Task<RemoteCommandResult> PauseMediaAsync(IFrame frame, IBrowserHost host)
+    {
+        var script = @"
+(function() {
+  try {
+    const activeMedia = Array.from(document.querySelectorAll('video, audio')).find(el => !!el && typeof el.paused === 'boolean');
+    if (activeMedia) {
+      if (!activeMedia.paused && typeof activeMedia.pause === 'function') {
+        activeMedia.pause();
+      }
+      return JSON.stringify({ ok: true });
+    }
+
+    const youtubeButton = document.querySelector('.ytp-play-button');
+    if (youtubeButton && typeof youtubeButton.click === 'function') {
+      const ariaLabel = ((youtubeButton.getAttribute && youtubeButton.getAttribute('aria-label')) || '').toLowerCase();
+      const title = ((youtubeButton.getAttribute && youtubeButton.getAttribute('title')) || '').toLowerCase();
+      const shouldPause = ariaLabel.indexOf('pause') >= 0 || title.indexOf('pause') >= 0 || ariaLabel.indexOf('paus') >= 0 || title.indexOf('paus') >= 0;
+      if (shouldPause) {
+        youtubeButton.click();
+      }
+      return JSON.stringify({ ok: true });
+    }
+
+    return JSON.stringify({ ok: false });
+  } catch (e) {
+    return JSON.stringify({ ok: false });
+  }
+})();";
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        var result = ParseRemoteCommandResult(response?.Result as string);
+        if (!result.Ok)
+        {
+            SendKey(host, 0xB3);
+            result = RemoteCommandResult.Success();
+        }
+
+        await Task.Delay(120).ConfigureAwait(false);
+        return result;
+    }
+
+    private static async Task<RemoteCommandResult> ResumeMediaWithNativeGestureAsync(IFrame frame, IBrowserHost host)
+    {
+        var script = @"
+(function() {
+  try {
+    const activeMedia = Array.from(document.querySelectorAll('video, audio')).find(el => !!el && typeof el.paused === 'boolean');
+    if (activeMedia) {
+      return JSON.stringify({ ok: true, paused: !!activeMedia.paused });
+    }
+
+    const youtubeButton = document.querySelector('.ytp-play-button');
+    if (youtubeButton) {
+      const ariaLabel = ((youtubeButton.getAttribute && youtubeButton.getAttribute('aria-label')) || '').toLowerCase();
+      const title = ((youtubeButton.getAttribute && youtubeButton.getAttribute('title')) || '').toLowerCase();
+      const paused = ariaLabel.indexOf('play') >= 0 || title.indexOf('play') >= 0 || ariaLabel.indexOf('reprodu') >= 0 || title.indexOf('reprodu') >= 0;
+      return JSON.stringify({ ok: true, paused: paused });
+    }
+
+    return JSON.stringify({ ok: false, paused: false });
+  } catch (e) {
+    return JSON.stringify({ ok: false, paused: false });
+  }
+})();";
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        var result = ParseRemoteCommandResult(response?.Result as string);
+        var paused = false;
+        try
+        {
+            var json = response?.Result as string;
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                paused = json.IndexOf(@"""paused"":true", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+        }
+        catch
+        {
+        }
+
+        if (result.Ok && paused)
+        {
+            SendCharacterKey(host, 'k', 0x4B);
+        }
+
+        await Task.Delay(120).ConfigureAwait(false);
+        return result.Ok ? RemoteCommandResult.Success() : result;
     }
 
     private static async Task<RemoteCommandResult> SeekMediaAsync(IFrame frame, IBrowserHost host, int secondsDelta)

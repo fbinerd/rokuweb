@@ -1938,16 +1938,8 @@ public sealed class LocalWebRtcPublisherService
 
         if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
         {
-            unifiedPanelStreamUrl = _browserPanelInteractionHlsService.IsAvailable
-                ? string.Format("http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
-                : string.Empty;
-            panelHlsReady =
-                _browserPanelInteractionHlsService.IsAvailable &&
-                _browserPanelInteractionHlsService.HasPlaylist(window.Id);
-            if (!panelHlsReady)
-            {
-                unifiedPanelStreamUrl = string.Empty;
-            }
+            unifiedPanelStreamUrl = string.Empty;
+            panelHlsReady = true;
         }
         else
         {
