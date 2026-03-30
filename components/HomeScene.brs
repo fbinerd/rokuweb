@@ -54,6 +54,16 @@ sub init()
     m.fullscreenOkActive = false
     m.pendingInteractionAutoPlayWindowId = ""
     m.fullscreenPlayRequestCount = 0
+    m.interactionOverlayControlsVisible = false
+    m.interactionOverlayControlsFullscreen = false
+    m.interactionOverlayControlsHideDelayMs = 2200
+    m.interactionOverlayControlsLastActivity = invalid
+    m.interactionOverlayBaseRect = invalid
+    m.interactionOverlayCurrentRect = invalid
+    m.interactionOverlayPlayButtonRect = invalid
+    m.interactionOverlayFullscreenButtonRect = invalid
+    m.interactionOverlayProgressTrackRect = invalid
+    m.lastInteractionOverlayState = ""
     m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
@@ -91,6 +101,7 @@ sub init()
     m.fullscreenVideoWatchTimer = m.top.findNode("fullscreenVideoWatchTimer")
     m.scrollModeToastTimer = m.top.findNode("scrollModeToastTimer")
     m.cursorMoveTimer = m.top.findNode("cursorMoveTimer")
+    m.interactionOverlayControlsTimer = m.top.findNode("interactionOverlayControlsTimer")
     m.audioRetryTimer = m.top.findNode("audioRetryTimer")
     m.audioFallbackTimer = m.top.findNode("audioFallbackTimer")
     m.audioHlsRestartTimer = m.top.findNode("audioHlsRestartTimer")
@@ -98,6 +109,15 @@ sub init()
     m.panelAudioVideo = m.top.findNode("panelAudioVideo")
     m.fullscreenVideo = m.top.findNode("fullscreenInteractionVideo")
     m.fullscreenInteractionOverlayVideo = m.top.findNode("fullscreenInteractionOverlayVideo")
+    m.interactionOverlayControlsGroup = m.top.findNode("interactionOverlayControlsGroup")
+    m.interactionOverlayControlsBackground = m.top.findNode("interactionOverlayControlsBackground")
+    m.interactionOverlayProgressTrack = m.top.findNode("interactionOverlayProgressTrack")
+    m.interactionOverlayProgressFill = m.top.findNode("interactionOverlayProgressFill")
+    m.interactionOverlayTimeLabel = m.top.findNode("interactionOverlayTimeLabel")
+    m.interactionOverlayPlayButton = m.top.findNode("interactionOverlayPlayButton")
+    m.interactionOverlayPlayLabel = m.top.findNode("interactionOverlayPlayLabel")
+    m.interactionOverlayFullscreenButton = m.top.findNode("interactionOverlayFullscreenButton")
+    m.interactionOverlayFullscreenLabel = m.top.findNode("interactionOverlayFullscreenLabel")
     m.fullscreenVideoMode = m.top.findNode("fullscreenVideoModeVideo")
     m.fullscreenVideoStage = m.top.findNode("fullscreenVideoStage")
     m.stagingVideoTargetMode = ""
@@ -151,6 +171,7 @@ sub init()
     m.fullscreenVideoWatchTimer.observeField("fire", "onFullscreenVideoWatchTimerFire")
     m.scrollModeToastTimer.observeField("fire", "onScrollModeToastTimerFire")
     m.cursorMoveTimer.observeField("fire", "onCursorMoveTimerFire")
+    m.interactionOverlayControlsTimer.observeField("fire", "onInteractionOverlayControlsTimerFire")
     m.audioRetryTimer.observeField("fire", "onAudioRetryTimerFire")
     m.audioFallbackTimer.observeField("fire", "onAudioFallbackTimerFire")
     m.audioHlsRestartTimer.observeField("fire", "onAudioHlsRestartTimerFire")
@@ -170,6 +191,9 @@ sub init()
     end if
     if m.fullscreenVideo <> invalid
         m.fullscreenVideo.observeField("state", "onFullscreenInteractionVideoStateChanged")
+    end if
+    if m.fullscreenInteractionOverlayVideo <> invalid
+        m.fullscreenInteractionOverlayVideo.observeField("state", "onInteractionOverlayVideoStateChanged")
     end if
     if m.fullscreenVideoMode <> invalid
         m.fullscreenVideoMode.observeField("state", "onFullscreenVideoModeStateChanged")
@@ -279,6 +303,12 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 return true
             end if
             if normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+                overlayHitTarget = getInteractionOverlayControlHitTarget()
+                if overlayHitTarget <> ""
+                    handleInteractionOverlayControlHit(overlayHitTarget)
+                    return true
+                end if
+
                 if m.lastInteractionOkTimespan = invalid
                     m.lastInteractionOkTimespan = CreateObject("roTimespan")
                     m.lastInteractionOkTimespan.Mark()
@@ -340,6 +370,9 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isRevKey(normalizedKey)
             clearPendingEditableActivation()
+            if handleInteractionOverlayTransportShortcut("backward")
+                return true
+            end if
             sendRemoteCommand("media-seek-backward")
             scheduleFullscreenRefresh()
             return true
@@ -347,6 +380,9 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isFwdKey(normalizedKey)
             clearPendingEditableActivation()
+            if handleInteractionOverlayTransportShortcut("forward")
+                return true
+            end if
             sendRemoteCommand("media-seek-forward")
             scheduleFullscreenRefresh()
             return true
@@ -360,6 +396,9 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if normalizedKey = "play"
             clearPendingEditableActivation()
+            if handleInteractionOverlayTransportShortcut("toggle")
+                return true
+            end if
             sendRemoteCommand("media-play-pause")
             scheduleFullscreenRefresh()
             return true
@@ -1060,7 +1099,22 @@ sub stopInteractionDirectVideoOverlay()
         m.fullscreenInteractionOverlayVideo.content = invalid
         m.fullscreenInteractionOverlayVideo.visible = false
     end if
+    if m.interactionOverlayControlsTimer <> invalid
+        m.interactionOverlayControlsTimer.control = "stop"
+    end if
+    if m.interactionOverlayControlsGroup <> invalid
+        m.interactionOverlayControlsGroup.visible = false
+    end if
     m.interactionOverlayAssignedStreamUrl = ""
+    m.interactionOverlayControlsVisible = false
+    m.interactionOverlayControlsFullscreen = false
+    m.interactionOverlayBaseRect = invalid
+    m.interactionOverlayCurrentRect = invalid
+    m.interactionOverlayPlayButtonRect = invalid
+    m.interactionOverlayFullscreenButtonRect = invalid
+    m.interactionOverlayProgressTrackRect = invalid
+    m.lastInteractionOverlayState = ""
+    m.interactionOverlayControlsLastActivity = invalid
 end sub
 
 sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
@@ -1105,9 +1159,13 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         targetHeight = 2
     end if
 
-    m.fullscreenInteractionOverlayVideo.translation = [targetX, targetY]
-    m.fullscreenInteractionOverlayVideo.width = targetWidth
-    m.fullscreenInteractionOverlayVideo.height = targetHeight
+    m.interactionOverlayBaseRect = {
+        x: targetX
+        y: targetY
+        width: targetWidth
+        height: targetHeight
+    }
+    applyInteractionOverlayLayout()
 
     if forceReload or m.interactionOverlayAssignedStreamUrl <> overlayStreamUrl or m.fullscreenInteractionOverlayVideo.content = invalid
         content = CreateObject("roSGNode", "ContentNode")
@@ -1120,11 +1178,303 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         m.fullscreenInteractionOverlayVideo.visible = true
         m.fullscreenInteractionOverlayVideo.control = "play"
         m.interactionOverlayAssignedStreamUrl = overlayStreamUrl
+        showInteractionOverlayControls("play")
         return
     end if
 
     m.fullscreenInteractionOverlayVideo.visible = true
+    refreshInteractionOverlayControls()
 end sub
+
+sub applyInteractionOverlayLayout()
+    if m.fullscreenInteractionOverlayVideo = invalid or m.interactionOverlayBaseRect = invalid
+        return
+    end if
+
+    rect = m.interactionOverlayBaseRect
+    if m.interactionOverlayControlsFullscreen
+        rect = {
+            x: 0
+            y: 0
+            width: 1280
+            height: 720
+        }
+    end if
+
+    m.interactionOverlayCurrentRect = rect
+    m.fullscreenInteractionOverlayVideo.translation = [rect.x, rect.y]
+    m.fullscreenInteractionOverlayVideo.width = rect.width
+    m.fullscreenInteractionOverlayVideo.height = rect.height
+    layoutInteractionOverlayControls()
+end sub
+
+sub layoutInteractionOverlayControls()
+    if m.interactionOverlayControlsGroup = invalid or m.interactionOverlayCurrentRect = invalid
+        return
+    end if
+
+    rect = m.interactionOverlayCurrentRect
+    panelHeight = 64
+    if rect.height < 140
+        panelHeight = 52
+    end if
+
+    groupY = rect.y + rect.height - panelHeight
+    if groupY < rect.y
+        groupY = rect.y
+    end if
+
+    m.interactionOverlayControlsGroup.translation = [rect.x, groupY]
+    m.interactionOverlayControlsBackground.width = rect.width
+    m.interactionOverlayControlsBackground.height = panelHeight
+
+    trackX = 14
+    trackY = 10
+    trackWidth = rect.width - 28
+    if trackWidth < 120
+        trackWidth = 120
+    end if
+    buttonY = panelHeight - 30
+    if buttonY < 18
+        buttonY = 18
+    end if
+
+    m.interactionOverlayProgressTrack.translation = [trackX, trackY]
+    m.interactionOverlayProgressTrack.width = trackWidth
+    m.interactionOverlayProgressFill.translation = [trackX, trackY]
+    m.interactionOverlayTimeLabel.translation = [trackX, 18]
+    m.interactionOverlayPlayButton.translation = [trackX, buttonY]
+    m.interactionOverlayPlayLabel.translation = [trackX, buttonY]
+    m.interactionOverlayFullscreenButton.translation = [rect.width - 134, buttonY]
+    m.interactionOverlayFullscreenLabel.translation = [rect.width - 134, buttonY]
+
+    m.interactionOverlayProgressTrackRect = {
+        x: rect.x + trackX
+        y: groupY + trackY
+        width: trackWidth
+        height: 10
+    }
+    m.interactionOverlayPlayButtonRect = {
+        x: rect.x + trackX
+        y: groupY + buttonY
+        width: 108
+        height: 26
+    }
+    m.interactionOverlayFullscreenButtonRect = {
+        x: rect.x + rect.width - 134
+        y: groupY + buttonY
+        width: 120
+        height: 26
+    }
+
+    refreshInteractionOverlayControls()
+end sub
+
+sub refreshInteractionOverlayControls()
+    if m.interactionOverlayControlsGroup = invalid or m.fullscreenInteractionOverlayVideo = invalid or m.interactionOverlayCurrentRect = invalid
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    durationValue = getNumber(m.fullscreenInteractionOverlayVideo.duration, 0.0)
+    positionValue = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
+    fillWidth = 0
+    if durationValue > 0 and m.interactionOverlayProgressTrack <> invalid
+        ratio = clampNumber(positionValue / durationValue, 0.0, 1.0)
+        fillWidth = Int(m.interactionOverlayProgressTrack.width * ratio)
+    end if
+
+    if m.interactionOverlayProgressFill <> invalid
+        m.interactionOverlayProgressFill.width = fillWidth
+    end if
+
+    if m.interactionOverlayTimeLabel <> invalid
+        m.interactionOverlayTimeLabel.text = formatOverlayTime(positionValue) + " / " + formatOverlayTime(durationValue)
+    end if
+
+    if m.interactionOverlayPlayLabel <> invalid
+        if state = "playing" or state = "buffering"
+            m.interactionOverlayPlayLabel.text = "Pause"
+        else
+            m.interactionOverlayPlayLabel.text = "Play"
+        end if
+    end if
+
+    if m.interactionOverlayFullscreenLabel <> invalid
+        if m.interactionOverlayControlsFullscreen
+            m.interactionOverlayFullscreenLabel.text = "Janela"
+        else
+            m.interactionOverlayFullscreenLabel.text = "Expandir"
+        end if
+    end if
+end sub
+
+function formatOverlayTime(totalSeconds as dynamic) as string
+    value = Int(getNumber(totalSeconds, 0.0))
+    if value < 0
+        value = 0
+    end if
+    minutes = Int(value / 60)
+    seconds = value Mod 60
+    minuteText = minutes.ToStr()
+    secondText = seconds.ToStr()
+    if Len(secondText) < 2
+        secondText = "0" + secondText
+    end if
+    return minuteText + ":" + secondText
+end function
+
+sub showInteractionOverlayControls(reason as string)
+    if m.interactionOverlayControlsGroup = invalid or not isInteractionOverlayActive()
+        return
+    end if
+
+    if m.interactionOverlayControlsLastActivity = invalid
+        m.interactionOverlayControlsLastActivity = CreateObject("roTimespan")
+    end if
+    m.interactionOverlayControlsLastActivity.Mark()
+    m.interactionOverlayControlsVisible = true
+    m.interactionOverlayControlsGroup.visible = true
+    refreshInteractionOverlayControls()
+
+    if m.interactionOverlayControlsTimer <> invalid
+        m.interactionOverlayControlsTimer.control = "stop"
+        m.interactionOverlayControlsTimer.control = "start"
+    end if
+end sub
+
+sub hideInteractionOverlayControls()
+    m.interactionOverlayControlsVisible = false
+    if m.interactionOverlayControlsGroup <> invalid
+        m.interactionOverlayControlsGroup.visible = false
+    end if
+    if m.interactionOverlayControlsTimer <> invalid
+        m.interactionOverlayControlsTimer.control = "stop"
+    end if
+end sub
+
+function isInteractionOverlayActive() as boolean
+    return normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao" and m.fullscreenInteractionOverlayVideo <> invalid and m.fullscreenInteractionOverlayVideo.content <> invalid and m.interactionOverlayAssignedStreamUrl <> ""
+end function
+
+sub notifyInteractionOverlayPointerActivity()
+    if not isInteractionOverlayActive() or m.interactionOverlayCurrentRect = invalid
+        return
+    end if
+
+    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayCurrentRect)
+        showInteractionOverlayControls("hover")
+    end if
+end sub
+
+function getInteractionOverlayControlHitTarget() as string
+    if not isInteractionOverlayActive() or not m.interactionOverlayControlsVisible
+        return ""
+    end if
+
+    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayPlayButtonRect)
+        return "play"
+    end if
+    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayFullscreenButtonRect)
+        return "fullscreen"
+    end if
+    if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayProgressTrackRect)
+        return "progress"
+    end if
+    return ""
+end function
+
+function isPointInsideRect(x as integer, y as integer, rect as dynamic) as boolean
+    if rect = invalid
+        return false
+    end if
+    return x >= rect.x and x <= (rect.x + rect.width) and y >= rect.y and y <= (rect.y + rect.height)
+end function
+
+sub handleInteractionOverlayControlHit(target as string)
+    if target = "play"
+        toggleInteractionOverlayPlayback()
+    else if target = "fullscreen"
+        toggleInteractionOverlayFullscreen()
+    else if target = "progress"
+        seekInteractionOverlayFromCursor()
+    end if
+    showInteractionOverlayControls(target)
+end sub
+
+sub toggleInteractionOverlayPlayback()
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    if state = "playing" or state = "buffering"
+        ? "[OVERLAY] pause => state="; state
+        m.fullscreenInteractionOverlayVideo.control = "pause"
+    else if state = "paused"
+        ? "[OVERLAY] resume => state="; state
+        m.fullscreenInteractionOverlayVideo.control = "resume"
+    else
+        ? "[OVERLAY] play-toggle => state="; state
+        m.fullscreenInteractionOverlayVideo.control = "play"
+    end if
+end sub
+
+sub toggleInteractionOverlayFullscreen()
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    m.interactionOverlayControlsFullscreen = not m.interactionOverlayControlsFullscreen
+    ? "[OVERLAY] fullscreen => "; m.interactionOverlayControlsFullscreen
+    applyInteractionOverlayLayout()
+    showInteractionOverlayControls("fullscreen")
+end sub
+
+sub seekInteractionOverlayFromCursor()
+    if not isInteractionOverlayActive() or m.interactionOverlayProgressTrackRect = invalid
+        return
+    end if
+
+    durationValue = getNumber(m.fullscreenInteractionOverlayVideo.duration, 0.0)
+    if durationValue <= 0
+        return
+    end if
+
+    ratio = clampNumber((m.cursorX - m.interactionOverlayProgressTrackRect.x) / m.interactionOverlayProgressTrackRect.width, 0.0, 1.0)
+    targetPosition = durationValue * ratio
+    ? "[OVERLAY] seek => "; targetPosition
+    m.fullscreenInteractionOverlayVideo.seek = targetPosition
+    refreshInteractionOverlayControls()
+end sub
+
+function handleInteractionOverlayTransportShortcut(direction as string) as boolean
+    if not isInteractionOverlayActive()
+        return false
+    end if
+
+    if direction = "toggle"
+        toggleInteractionOverlayPlayback()
+    else
+        durationValue = getNumber(m.fullscreenInteractionOverlayVideo.duration, 0.0)
+        positionValue = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
+        if durationValue <= 0
+            return false
+        end if
+
+        if direction = "backward"
+            targetPosition = positionValue - 10
+        else
+            targetPosition = positionValue + 10
+        end if
+        targetPosition = clampNumber(targetPosition, 0.0, durationValue)
+        ? "[OVERLAY] seek-shortcut => "; direction; " pos="; targetPosition
+        m.fullscreenInteractionOverlayVideo.seek = targetPosition
+    end if
+
+    showInteractionOverlayControls("transport")
+    return true
+end function
 
 sub stopInactiveModePlayback(activeMode as string, reason as string)
     if normalizeStreamingMode(activeMode) = "Interacao"
@@ -1249,6 +1599,24 @@ end sub
 
 sub onFullscreenInteractionVideoStateChanged()
     handleFullscreenVideoStateChanged("Interacao")
+end sub
+
+sub onInteractionOverlayVideoStateChanged()
+    if m.fullscreenInteractionOverlayVideo = invalid
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    if state = "" or state = m.lastInteractionOverlayState
+        return
+    end if
+
+    m.lastInteractionOverlayState = state
+    ? "[OVERLAY] state => "; state; " pos="; getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
+    refreshInteractionOverlayControls()
+    if state <> "playing"
+        showInteractionOverlayControls("state")
+    end if
 end sub
 
 sub onFullscreenVideoModeStateChanged()
@@ -1776,6 +2144,7 @@ sub moveCursor(command as string)
     end if
 
     updateCursorMarker()
+    notifyInteractionOverlayPointerActivity()
 end sub
 
 sub startHeldDirection(key as string)
@@ -1972,6 +2341,34 @@ sub onFullscreenStreamTimerFire()
             syncInteractionDirectVideoOverlay(m.windowEntries[m.selectedIndex], false)
         end if
         refreshFullscreenPreview()
+    end if
+end sub
+
+sub onInteractionOverlayControlsTimerFire()
+    if not isInteractionOverlayActive()
+        hideInteractionOverlayControls()
+        if m.interactionOverlayControlsTimer <> invalid
+            m.interactionOverlayControlsTimer.control = "stop"
+        end if
+        return
+    end if
+
+    refreshInteractionOverlayControls()
+
+    if m.interactionOverlayControlsLastActivity = invalid
+        return
+    end if
+
+    state = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    if state <> "playing"
+        if not m.interactionOverlayControlsVisible
+            showInteractionOverlayControls("state")
+        end if
+        return
+    end if
+
+    if m.interactionOverlayControlsLastActivity.TotalMilliseconds() >= m.interactionOverlayControlsHideDelayMs
+        hideInteractionOverlayControls()
     end if
 end sub
 

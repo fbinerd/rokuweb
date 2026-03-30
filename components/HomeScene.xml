@@ -21,6 +21,7 @@
     <Timer id="fullscreenVideoWatchTimer" repeat="true" duration="1.0" />
     <Timer id="scrollModeToastTimer" repeat="false" duration="1.2" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
+    <Timer id="interactionOverlayControlsTimer" repeat="true" duration="0.25" />
     <Timer id="audioRetryTimer" repeat="false" duration="1.2" />
     <Timer id="audioFallbackTimer" repeat="false" duration="1.2" />
     <Timer id="audioHlsRestartTimer" repeat="false" duration="0.35" />
@@ -122,6 +123,65 @@
       height="1"
       translation="[0,0]"
       visible="false" />
+    <Group id="interactionOverlayControlsGroup" translation="[0,0]" visible="false">
+      <Rectangle
+        id="interactionOverlayControlsBackground"
+        width="320"
+        height="64"
+        color="0x05070CDD" />
+      <Rectangle
+        id="interactionOverlayProgressTrack"
+        width="292"
+        height="6"
+        translation="[14,10]"
+        color="0x475569FF" />
+      <Rectangle
+        id="interactionOverlayProgressFill"
+        width="0"
+        height="6"
+        translation="[14,10]"
+        color="0xEAB308FF" />
+      <Label
+        id="interactionOverlayTimeLabel"
+        width="150"
+        height="20"
+        translation="[14,18]"
+        color="0xE2E8F0FF"
+        font="font:SmallSystemFont"
+        text="00:00 / 00:00" />
+      <Rectangle
+        id="interactionOverlayPlayButton"
+        width="108"
+        height="26"
+        translation="[14,34]"
+        color="0x1E293BEE" />
+      <Label
+        id="interactionOverlayPlayLabel"
+        width="108"
+        height="26"
+        translation="[14,34]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="Pause" />
+      <Rectangle
+        id="interactionOverlayFullscreenButton"
+        width="120"
+        height="26"
+        translation="[186,34]"
+        color="0x1E293BEE" />
+      <Label
+        id="interactionOverlayFullscreenLabel"
+        width="120"
+        height="26"
+        translation="[186,34]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="Expandir" />
+    </Group>
     <Video
       id="fullscreenVideoModeVideo"
       width="1280"
