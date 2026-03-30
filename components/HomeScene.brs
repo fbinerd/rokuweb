@@ -60,6 +60,7 @@ sub init()
     m.interactionOverlayControlsLastActivity = invalid
     m.interactionOverlayBaseRect = invalid
     m.interactionOverlayCurrentRect = invalid
+    m.interactionOverlayIntrinsicRect = invalid
     m.interactionOverlayPlayButtonRect = invalid
     m.interactionOverlayFullscreenButtonRect = invalid
     m.interactionOverlayProgressTrackRect = invalid
@@ -130,6 +131,7 @@ sub init()
     m.fullscreenVideo = m.top.findNode("fullscreenInteractionVideo")
     m.fullscreenInteractionOverlayVideo = m.top.findNode("fullscreenInteractionOverlayVideo")
     m.interactionOverlayControlsGroup = m.top.findNode("interactionOverlayControlsGroup")
+    m.interactionOverlayViewport = m.top.findNode("fullscreenInteractionOverlayViewport")
     m.interactionOverlayControlsBackground = m.top.findNode("interactionOverlayControlsBackground")
     m.interactionOverlayProgressTrack = m.top.findNode("interactionOverlayProgressTrack")
     m.interactionOverlayProgressFill = m.top.findNode("interactionOverlayProgressFill")
@@ -1201,6 +1203,9 @@ sub stopInteractionDirectVideoOverlay()
         m.fullscreenInteractionOverlayVideo.content = invalid
         m.fullscreenInteractionOverlayVideo.visible = false
     end if
+    if m.interactionOverlayViewport <> invalid
+        m.interactionOverlayViewport.visible = false
+    end if
     if m.interactionOverlayControlsTimer <> invalid
         m.interactionOverlayControlsTimer.control = "stop"
     end if
@@ -1212,6 +1217,7 @@ sub stopInteractionDirectVideoOverlay()
     m.interactionOverlayControlsFullscreen = false
     m.interactionOverlayBaseRect = invalid
     m.interactionOverlayCurrentRect = invalid
+    m.interactionOverlayIntrinsicRect = invalid
     m.interactionOverlayPlayButtonRect = invalid
     m.interactionOverlayFullscreenButtonRect = invalid
     m.interactionOverlayProgressTrackRect = invalid
@@ -1223,6 +1229,27 @@ sub stopInteractionDirectVideoOverlay()
     m.interactionOverlayPendingSeekPosition = invalid
     m.interactionOverlaySourceUrl = ""
     hideInteractionOverlayQualityMenu()
+end sub
+
+sub parkInteractionDirectVideoOverlay(reason as string)
+    if m.fullscreenInteractionOverlayVideo = invalid
+        return
+    end if
+
+    if m.interactionOverlayViewport <> invalid
+        m.interactionOverlayViewport.visible = false
+    end if
+    if m.interactionOverlayControlsGroup <> invalid
+        m.interactionOverlayControlsGroup.visible = false
+    end if
+    m.interactionOverlayControlsVisible = false
+    m.interactionOverlayCurrentRect = invalid
+    m.interactionOverlayPlayButtonRect = invalid
+    m.interactionOverlayFullscreenButtonRect = invalid
+    m.interactionOverlayProgressTrackRect = invalid
+    m.interactionOverlayQualityButtonRect = invalid
+    hideInteractionOverlayQualityMenu()
+    ? "[OVERLAY] parked => reason="; reason
 end sub
 
 sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
@@ -1240,12 +1267,18 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
     overlayStreamUrl = getString(entry.directVideoStreamUrl, "")
     overlayStreamFormat = LCase(getString(entry.directVideoStreamFormat, ""))
     overlayQualityLabel = getString(entry.directVideoQualityLabel, "")
+    initialUrl = LCase(getString(entry.initialUrl, ""))
+    canPreserveOffscreenOverlay = m.interactionOverlayAssignedStreamUrl <> "" and (Instr(1, initialUrl, "youtube.com") > 0 or Instr(1, initialUrl, "youtu.be") > 0 or Instr(1, initialUrl, "youtube-nocookie.com") > 0)
     if overlaySourceUrl <> "" and overlaySourceUrl <> m.interactionOverlaySourceUrl
         m.interactionOverlayAutoMode = true
         m.interactionOverlayAutoDegradeLevel = 0
         m.interactionOverlayAutoBufferingCount = 0
     end if
     if not overlayEnabled or overlayStreamUrl = "" or overlayStreamFormat = ""
+        if canPreserveOffscreenOverlay
+            parkInteractionDirectVideoOverlay("overlay-disabled")
+            return
+        end if
         if forceReload
             ? "[OVERLAY] inativo => enabled="; overlayEnabled; " stream="; overlayStreamUrl; " format="; overlayStreamFormat
         end if
@@ -1258,6 +1291,10 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
     width = clampNumber(getNumber(entry.directVideoNormalizedWidth, 0.0), 0.0, 1.0 - left)
     height = clampNumber(getNumber(entry.directVideoNormalizedHeight, 0.0), 0.0, 1.0 - top)
     if width <= 0.01 or height <= 0.01
+        if canPreserveOffscreenOverlay
+            parkInteractionDirectVideoOverlay("offscreen")
+            return
+        end if
         ? "[OVERLAY] retangulo invalido => left="; left; " top="; top; " width="; width; " height="; height
         stopInteractionDirectVideoOverlay()
         return
@@ -1280,6 +1317,23 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         width: targetWidth
         height: targetHeight
     }
+    if not m.interactionOverlayControlsFullscreen
+        if targetY > 0 and targetWidth > 2 and targetHeight > 2
+            m.interactionOverlayIntrinsicRect = {
+                x: targetX
+                y: targetY
+                width: targetWidth
+                height: targetHeight
+            }
+        else if m.interactionOverlayIntrinsicRect = invalid
+            m.interactionOverlayIntrinsicRect = {
+                x: targetX
+                y: targetY
+                width: targetWidth
+                height: targetHeight
+            }
+        end if
+    end if
     m.interactionOverlayQualityOptions = normalizeDirectVideoQualityOptions(entry.directVideoQualityOptions, overlayStreamUrl, overlayStreamFormat, overlayQualityLabel)
     selectedQualityIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, overlayStreamUrl, overlayQualityLabel)
     if m.interactionOverlayAutoMode
@@ -1328,20 +1382,44 @@ sub applyInteractionOverlayLayout()
         return
     end if
 
-    rect = m.interactionOverlayBaseRect
+    visibleRect = m.interactionOverlayBaseRect
+    intrinsicRect = m.interactionOverlayBaseRect
+    cropOffsetY = 0
     if m.interactionOverlayControlsFullscreen
-        rect = {
+        visibleRect = {
             x: 0
             y: 0
             width: 1280
             height: 720
         }
+        intrinsicRect = visibleRect
+    else if m.interactionOverlayIntrinsicRect <> invalid
+        intrinsicCandidate = m.interactionOverlayIntrinsicRect
+        sameWidth = Abs(intrinsicCandidate.width - visibleRect.width) <= 8
+        if visibleRect.y = 0 and sameWidth and intrinsicCandidate.height > visibleRect.height
+            intrinsicRect = {
+                x: visibleRect.x
+                y: visibleRect.y
+                width: visibleRect.width
+                height: intrinsicCandidate.height
+            }
+            cropOffsetY = intrinsicCandidate.height - visibleRect.height
+            if cropOffsetY < 0
+                cropOffsetY = 0
+            end if
+        end if
     end if
 
-    m.interactionOverlayCurrentRect = rect
-    m.fullscreenInteractionOverlayVideo.translation = [rect.x, rect.y]
-    m.fullscreenInteractionOverlayVideo.width = rect.width
-    m.fullscreenInteractionOverlayVideo.height = rect.height
+    m.interactionOverlayCurrentRect = visibleRect
+    if m.interactionOverlayViewport <> invalid
+        m.interactionOverlayViewport.translation = [visibleRect.x, visibleRect.y]
+        m.interactionOverlayViewport.visible = true
+        m.interactionOverlayViewport.clippingRect = [0, 0, visibleRect.width, visibleRect.height]
+    end if
+    m.fullscreenInteractionOverlayVideo.translation = [0, -cropOffsetY]
+    m.fullscreenInteractionOverlayVideo.width = intrinsicRect.width
+    m.fullscreenInteractionOverlayVideo.height = intrinsicRect.height
+    m.fullscreenInteractionOverlayVideo.visible = true
     layoutInteractionOverlayControls()
 end sub
 

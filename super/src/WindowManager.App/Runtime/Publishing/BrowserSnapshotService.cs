@@ -779,10 +779,16 @@ public sealed class BrowserSnapshotService
     restoreHiddenNodes();
 
     const buildRect = (rect) => {{
-      const left = Math.max(0, Math.min(viewportWidth, rect.left || 0));
-      const top = Math.max(0, Math.min(viewportHeight, rect.top || 0));
-      const width = Math.max(0, Math.min(viewportWidth - left, rect.width || 0));
-      const height = Math.max(0, Math.min(viewportHeight - top, rect.height || 0));
+      const rawLeft = rect.left || 0;
+      const rawTop = rect.top || 0;
+      const rawRight = rawLeft + (rect.width || 0);
+      const rawBottom = rawTop + (rect.height || 0);
+      const left = Math.max(0, Math.min(viewportWidth, rawLeft));
+      const top = Math.max(0, Math.min(viewportHeight, rawTop));
+      const right = Math.max(0, Math.min(viewportWidth, rawRight));
+      const bottom = Math.max(0, Math.min(viewportHeight, rawBottom));
+      const width = Math.max(0, right - left);
+      const height = Math.max(0, bottom - top);
       return {{
         left,
         top,
@@ -982,10 +988,16 @@ public sealed class BrowserSnapshotService
       return rawUrl;
     }};
     const buildRect = (rect) => {{
-      const left = Math.max(0, Math.min(viewportWidth, rect.left || 0));
-      const top = Math.max(0, Math.min(viewportHeight, rect.top || 0));
-      const width = Math.max(0, Math.min(viewportWidth - left, rect.width || 0));
-      const height = Math.max(0, Math.min(viewportHeight - top, rect.height || 0));
+      const rawLeft = rect.left || 0;
+      const rawTop = rect.top || 0;
+      const rawRight = rawLeft + (rect.width || 0);
+      const rawBottom = rawTop + (rect.height || 0);
+      const left = Math.max(0, Math.min(viewportWidth, rawLeft));
+      const top = Math.max(0, Math.min(viewportHeight, rawTop));
+      const right = Math.max(0, Math.min(viewportWidth, rawRight));
+      const bottom = Math.max(0, Math.min(viewportHeight, rawBottom));
+      const width = Math.max(0, right - left);
+      const height = Math.max(0, bottom - top);
       return {{
         left,
         top,

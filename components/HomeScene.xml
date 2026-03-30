@@ -117,12 +117,17 @@
       height="720"
       translation="[0,0]"
       visible="false" />
-    <Video
-      id="fullscreenInteractionOverlayVideo"
-      width="1"
-      height="1"
+    <Group
+      id="fullscreenInteractionOverlayViewport"
       translation="[0,0]"
-      visible="false" />
+      visible="false">
+      <Video
+        id="fullscreenInteractionOverlayVideo"
+        width="1"
+        height="1"
+        translation="[0,0]"
+        visible="false" />
+    </Group>
     <Group id="interactionOverlayControlsGroup" translation="[0,0]" visible="false">
       <Rectangle
         id="interactionOverlayControlsBackground"
