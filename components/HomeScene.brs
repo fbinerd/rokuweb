@@ -71,6 +71,7 @@ sub init()
     m.interactionOverlayQualityOptions = []
     m.interactionOverlaySelectedQualityIndex = 0
     m.interactionOverlayPendingSeekPosition = invalid
+    m.interactionOverlaySourceUrl = ""
     m.lastHeldRemoteDispatch = invalid
     m.heldRemoteDispatchIntervalMs = 140
     m.interactionOverlaySeekStepSeconds = 6
@@ -371,6 +372,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isMinusKey(normalizedKey)
             clearPendingEditableActivation()
+            if isInteractionOverlayActive()
+                ? "[OVERLAY] quality-key => minus"
+                cycleInteractionOverlayQualityByDelta(-1, "minus")
+                return true
+            end if
             if m.scrollModeEnabled
                 startHeldRemoteCommand(normalizedKey, "scroll-down")
             else
@@ -382,6 +388,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isPlusKey(normalizedKey)
             clearPendingEditableActivation()
+            if isInteractionOverlayActive()
+                ? "[OVERLAY] quality-key => plus"
+                cycleInteractionOverlayQualityByDelta(1, "plus")
+                return true
+            end if
             if m.scrollModeEnabled
                 startHeldRemoteCommand(normalizedKey, "scroll-up")
             else
@@ -394,7 +405,8 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if isOptionsKey(normalizedKey)
             clearPendingEditableActivation()
             if isInteractionOverlayActive()
-                cycleInteractionOverlayQuality()
+                ? "[OVERLAY] quality-key => options"
+                cycleInteractionOverlayQualityByDelta(1, "options")
                 return true
             end if
             sendRemoteCommand("enter")
@@ -1159,6 +1171,7 @@ sub stopInteractionDirectVideoOverlay()
     m.interactionOverlayQualityOptions = []
     m.interactionOverlaySelectedQualityIndex = 0
     m.interactionOverlayPendingSeekPosition = invalid
+    m.interactionOverlaySourceUrl = ""
 end sub
 
 sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
@@ -1172,6 +1185,7 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
     end if
 
     overlayEnabled = getBool(entry.directVideoOverlayEnabled, false)
+    overlaySourceUrl = getString(entry.directVideoSourceUrl, "")
     overlayStreamUrl = getString(entry.directVideoStreamUrl, "")
     overlayStreamFormat = LCase(getString(entry.directVideoStreamFormat, ""))
     overlayQualityLabel = getString(entry.directVideoQualityLabel, "")
@@ -1211,25 +1225,47 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         height: targetHeight
     }
     m.interactionOverlayQualityOptions = normalizeDirectVideoQualityOptions(entry.directVideoQualityOptions, overlayStreamUrl, overlayStreamFormat, overlayQualityLabel)
-    m.interactionOverlaySelectedQualityIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, overlayStreamUrl, overlayQualityLabel)
+    selectedStreamUrl = overlayStreamUrl
+    selectedQualityLabel = overlayQualityLabel
+    selectedQualityIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, overlayStreamUrl, overlayQualityLabel)
+
+    if overlaySourceUrl <> "" and overlaySourceUrl = m.interactionOverlaySourceUrl and m.interactionOverlayAssignedStreamUrl <> ""
+        preservedIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, m.interactionOverlayAssignedStreamUrl, "")
+        if preservedIndex >= 0 and preservedIndex < m.interactionOverlayQualityOptions.Count()
+            preservedOption = m.interactionOverlayQualityOptions[preservedIndex]
+            preservedStreamUrl = getString(preservedOption.streamUrl, "")
+            preservedStreamFormat = LCase(getString(preservedOption.streamFormat, ""))
+            preservedQualityLabel = getString(preservedOption.label, "")
+            if preservedStreamUrl <> "" and preservedStreamFormat <> ""
+                selectedStreamUrl = preservedStreamUrl
+                overlayStreamFormat = preservedStreamFormat
+                selectedQualityLabel = preservedQualityLabel
+                selectedQualityIndex = preservedIndex
+            end if
+        end if
+    end if
+
+    m.interactionOverlaySelectedQualityIndex = selectedQualityIndex
     applyInteractionOverlayLayout()
 
-    if forceReload or m.interactionOverlayAssignedStreamUrl <> overlayStreamUrl or m.fullscreenInteractionOverlayVideo.content = invalid
+    if forceReload or m.interactionOverlayAssignedStreamUrl <> selectedStreamUrl or m.fullscreenInteractionOverlayVideo.content = invalid
         content = CreateObject("roSGNode", "ContentNode")
-        content.url = appendCacheBust(overlayStreamUrl)
+        content.url = appendCacheBust(selectedStreamUrl)
         content.streamFormat = overlayStreamFormat
         content.title = getString(entry.title, "YouTube direto")
-        ? "[OVERLAY] play => "; content.url; " format="; overlayStreamFormat; " rect="; targetX; ","; targetY; " "; targetWidth; "x"; targetHeight
+        ? "[OVERLAY] play => "; content.url; " format="; overlayStreamFormat; " quality="; selectedQualityLabel; " rect="; targetX; ","; targetY; " "; targetWidth; "x"; targetHeight
         m.fullscreenInteractionOverlayVideo.content = content
         m.fullscreenInteractionOverlayVideo.control = "stop"
         m.fullscreenInteractionOverlayVideo.visible = true
         m.fullscreenInteractionOverlayVideo.control = "play"
-        m.interactionOverlayAssignedStreamUrl = overlayStreamUrl
+        m.interactionOverlayAssignedStreamUrl = selectedStreamUrl
+        m.interactionOverlaySourceUrl = overlaySourceUrl
         showInteractionOverlayControls("play")
         return
     end if
 
     m.fullscreenInteractionOverlayVideo.visible = true
+    m.interactionOverlaySourceUrl = overlaySourceUrl
     refreshInteractionOverlayControls()
 end sub
 
@@ -1581,6 +1617,10 @@ sub toggleInteractionOverlayFullscreen()
 end sub
 
 sub cycleInteractionOverlayQuality()
+    cycleInteractionOverlayQualityByDelta(1, "cycle")
+end sub
+
+sub cycleInteractionOverlayQualityByDelta(delta as integer, reason as string)
     if not isInteractionOverlayActive()
         return
     end if
@@ -1591,10 +1631,17 @@ sub cycleInteractionOverlayQuality()
         return
     end if
 
-    nextIndex = m.interactionOverlaySelectedQualityIndex + 1
-    if nextIndex >= m.interactionOverlayQualityOptions.Count()
-        nextIndex = 0
+    nextIndex = m.interactionOverlaySelectedQualityIndex + delta
+    optionCount = m.interactionOverlayQualityOptions.Count()
+    if optionCount <= 0
+        return
     end if
+    while nextIndex < 0
+        nextIndex = nextIndex + optionCount
+    end while
+    while nextIndex >= optionCount
+        nextIndex = nextIndex - optionCount
+    end while
 
     option = m.interactionOverlayQualityOptions[nextIndex]
     streamUrl = getString(option.streamUrl, "")
@@ -1604,16 +1651,25 @@ sub cycleInteractionOverlayQuality()
         return
     end if
 
+    resumeState = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
+    currentPosition = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
+    shouldResume = resumeState = "playing" or resumeState = "buffering" or resumeState = "paused"
+
     m.interactionOverlaySelectedQualityIndex = nextIndex
-    m.interactionOverlayPendingSeekPosition = invalid
+    if currentPosition > 0
+        m.interactionOverlayPendingSeekPosition = currentPosition
+    else
+        m.interactionOverlayPendingSeekPosition = invalid
+    end if
     m.interactionOverlayAssignedStreamUrl = streamUrl
     content = CreateObject("roSGNode", "ContentNode")
     content.url = appendCacheBust(streamUrl)
     content.streamFormat = streamFormat
     content.title = qualityLabel
-    ? "[OVERLAY] quality => "; qualityLabel; " format="; streamFormat
-    m.fullscreenInteractionOverlayVideo.content = content
     m.fullscreenInteractionOverlayVideo.control = "stop"
+    m.fullscreenInteractionOverlayVideo.content = invalid
+    ? "[OVERLAY] quality => "; qualityLabel; " format="; streamFormat; " reason="; reason; " resume="; shouldResume; " pos="; currentPosition
+    m.fullscreenInteractionOverlayVideo.content = content
     m.fullscreenInteractionOverlayVideo.visible = true
     m.fullscreenInteractionOverlayVideo.control = "play"
     showInteractionOverlayControls("quality")
@@ -1730,6 +1786,7 @@ sub hideFullscreen()
     m.fullscreenOkActive = false
     m.pendingInteractionAutoPlayWindowId = ""
     m.interactionOverlayAssignedStreamUrl = ""
+    m.interactionOverlaySourceUrl = ""
     m.scrollModeEnabled = false
     m.fullscreenPosterWindowId = ""
     m.fullscreenPosterSourceUrl = ""

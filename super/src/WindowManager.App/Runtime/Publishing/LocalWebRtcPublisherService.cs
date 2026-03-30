@@ -13,6 +13,7 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using WindowManager.App.Runtime;
 using WindowManager.Core.Models;
 
@@ -2347,6 +2348,22 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var jsRuntime = string.Format("node:{0}", nodePath);
+        var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl);
+        if (scannedQualityOptions.Count > 0)
+        {
+            var preferred = scannedQualityOptions
+                .OrderByDescending(GetDirectQualityPreferenceScore)
+                .First();
+            AppLog.Write(
+                "DirectOverlay",
+                string.Format(
+                    "Quality scan => muxed={0}, selected={1} format={2}",
+                    string.Join(", ", scannedQualityOptions.Select(x => string.Format("{0}:{1}", x.Label, x.StreamFormat)).Distinct(StringComparer.OrdinalIgnoreCase)),
+                    preferred.Label,
+                    preferred.StreamFormat));
+            return YouTubeDirectResolveResult.Success(preferred.StreamUrl, preferred.StreamFormat, preferred.Label, scannedQualityOptions);
+        }
+
         var qualityOptions = new List<YouTubeDirectQualityOption>();
         TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"22\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
         TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"59/78\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
@@ -2478,6 +2495,134 @@ public sealed class LocalWebRtcPublisherService
         return 0;
     }
 
+    private static int GetDirectQualityPreferenceScore(YouTubeDirectQualityOption option)
+    {
+        if (option is null)
+        {
+            return 0;
+        }
+
+        var score = ParseQualityRank(option.Label) * 10;
+        if (option.Label.IndexOf("60", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            score += 1;
+        }
+
+        if (string.Equals(option.StreamFormat, "hls", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 2;
+        }
+
+        return score;
+    }
+
+    private static List<YouTubeDirectQualityOption> ScanYoutubeDirectQualityOptions(string ytDlpPath, string jsRuntime, string youtubeUrl)
+    {
+        var json = RunProcessCaptureOutput(
+            ytDlpPath,
+            string.Format("--no-warnings --no-playlist --js-runtimes \"{0}\" -J \"{1}\"", jsRuntime, youtubeUrl));
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            AppLog.Write("DirectOverlay", "Quality scan => yt-dlp nao retornou JSON");
+            return new List<YouTubeDirectQualityOption>();
+        }
+
+        try
+        {
+            var root = JObject.Parse(json);
+            var formats = root["formats"] as JArray;
+            if (formats is null || formats.Count == 0)
+            {
+                AppLog.Write("DirectOverlay", "Quality scan => JSON sem formats");
+                return new List<YouTubeDirectQualityOption>();
+            }
+
+            var options = new List<YouTubeDirectQualityOption>();
+            var adaptiveHeights = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var formatToken in formats.OfType<JObject>())
+            {
+                var vcodec = formatToken.Value<string>("vcodec") ?? string.Empty;
+                var acodec = formatToken.Value<string>("acodec") ?? string.Empty;
+                var protocol = formatToken.Value<string>("protocol") ?? string.Empty;
+                var ext = formatToken.Value<string>("ext") ?? string.Empty;
+                var height = formatToken.Value<int?>("height") ?? 0;
+                var fps = formatToken.Value<double?>("fps") ?? 0;
+
+                if (!string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(acodec, "none", StringComparison.OrdinalIgnoreCase) &&
+                    height > 0)
+                {
+                    adaptiveHeights.Add(BuildQualityLabel(height, fps));
+                }
+
+                if (string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(acodec, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (height <= 0)
+                {
+                    continue;
+                }
+
+                if (string.Equals(protocol, "m3u8_native", StringComparison.OrdinalIgnoreCase))
+                {
+                    var hlsUrl = formatToken.Value<string>("url") ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(hlsUrl))
+                    {
+                        hlsUrl = formatToken.Value<string>("manifest_url") ?? string.Empty;
+                    }
+
+                    TryAppendDirectQualityOption(options, BuildQualityLabel(height, fps), hlsUrl, "hls");
+                    continue;
+                }
+
+                if (string.Equals(protocol, "https", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ext, "mp4", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryAppendDirectQualityOption(options, BuildQualityLabel(height, fps), formatToken.Value<string>("url") ?? string.Empty, "mp4");
+                }
+            }
+
+            AppLog.Write(
+                "DirectOverlay",
+                string.Format(
+                    "Quality scan => muxed={0}, adaptiveOnly={1}",
+                    options.Count == 0 ? "<nenhuma>" : string.Join(", ", options.Select(x => string.Format("{0}:{1}", x.Label, x.StreamFormat)).Distinct(StringComparer.OrdinalIgnoreCase)),
+                    adaptiveHeights.Count == 0 ? "<nenhuma>" : string.Join(", ", adaptiveHeights)));
+            return options
+                .GroupBy(x => x.Label + "|" + x.StreamFormat, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(GetDirectQualityPreferenceScore)
+                    .First())
+                .OrderByDescending(GetDirectQualityPreferenceScore)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DirectOverlay", string.Format("Quality scan => falha ao processar JSON do yt-dlp: {0}", ex.Message));
+            return new List<YouTubeDirectQualityOption>();
+        }
+    }
+
+    private static string BuildQualityLabel(int height, double fps)
+    {
+        if (height <= 0)
+        {
+            return "Auto";
+        }
+
+        var roundedFps = (int)Math.Round(fps, MidpointRounding.AwayFromZero);
+        if (roundedFps >= 50)
+        {
+            return string.Format("{0}p60", height);
+        }
+
+        return string.Format("{0}p", height);
+    }
+
     private static string RunProcessCaptureFirstNonEmptyLine(string fileName, string arguments)
     {
         using (var process = new Process())
@@ -2506,6 +2651,36 @@ public sealed class LocalWebRtcPublisherService
 
             var lines = standardOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             return lines.FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static string RunProcessCaptureOutput(string fileName, string arguments)
+    {
+        using (var process = new Process())
+        {
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(fileName) ?? AppContext.BaseDirectory
+            };
+
+            process.Start();
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit(120000);
+
+            if (process.ExitCode != 0)
+            {
+                AppLog.Write("RokuDirect", string.Format("yt-dlp JSON falhou: exit={0}, stderr={1}", process.ExitCode, standardError));
+                return string.Empty;
+            }
+
+            return standardOutput.Trim();
         }
     }
 
