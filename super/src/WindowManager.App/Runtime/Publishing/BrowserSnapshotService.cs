@@ -19,6 +19,7 @@ public sealed class BrowserSnapshotService
     private static readonly StreamingTuning Tuning = StreamingTuning.Current;
     private static readonly TimeSpan CachedFrameLifetime = TimeSpan.FromMilliseconds(Tuning.SnapshotCacheLifetimeMs);
     private static readonly TimeSpan BackgroundCaptureInterval = TimeSpan.FromMilliseconds(Tuning.SnapshotBackgroundCaptureIntervalMs);
+    private static readonly TimeSpan DirectVideoOverlayProbeInterval = TimeSpan.FromMilliseconds(350);
     private readonly ConcurrentDictionary<Guid, ChromiumWebBrowser> _browsers = new ConcurrentDictionary<Guid, ChromiumWebBrowser>();
     private readonly ConcurrentDictionary<Guid, CachedBitmapFrame> _cachedBitmapFrames = new ConcurrentDictionary<Guid, CachedBitmapFrame>();
     private readonly ConcurrentDictionary<Guid, CachedJpegFrame> _cachedFrames = new ConcurrentDictionary<Guid, CachedJpegFrame>();
@@ -26,12 +27,21 @@ public sealed class BrowserSnapshotService
     private readonly ConcurrentDictionary<Guid, Task<CachedBitmapFrame?>> _bitmapCaptureTasks = new ConcurrentDictionary<Guid, Task<CachedBitmapFrame?>>();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _captureLoops = new ConcurrentDictionary<Guid, CancellationTokenSource>();
     private readonly ConcurrentDictionary<Guid, RemoteCursorState> _cursorStates = new ConcurrentDictionary<Guid, RemoteCursorState>();
+    private readonly ConcurrentDictionary<Guid, BrowserDirectVideoOverlayState> _directVideoOverlayStates = new ConcurrentDictionary<Guid, BrowserDirectVideoOverlayState>();
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastDirectVideoOverlayProbeUtc = new ConcurrentDictionary<Guid, DateTime>();
+    private readonly ConcurrentDictionary<Guid, bool> _directVideoSuppressionRequested = new ConcurrentDictionary<Guid, bool>();
+    private readonly ConcurrentDictionary<Guid, string> _lastDirectVideoOverlayLog = new ConcurrentDictionary<Guid, string>();
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastDirectVideoSuppressionLogUtc = new ConcurrentDictionary<Guid, DateTime>();
 
     public void Register(Guid windowId, ChromiumWebBrowser browser)
     {
         _browsers[windowId] = browser;
         _cachedBitmapFrames.TryRemove(windowId, out _);
         _cachedFrames.TryRemove(windowId, out _);
+        _directVideoOverlayStates.TryRemove(windowId, out _);
+        _lastDirectVideoOverlayProbeUtc.TryRemove(windowId, out _);
+        _lastDirectVideoOverlayLog.TryRemove(windowId, out _);
+        _lastDirectVideoSuppressionLogUtc.TryRemove(windowId, out _);
         StartCaptureLoop(windowId, browser);
         _cursorStates.TryAdd(windowId, new RemoteCursorState());
     }
@@ -43,6 +53,11 @@ public sealed class BrowserSnapshotService
         _cachedFrames.TryRemove(windowId, out _);
         _bitmapCaptureTasks.TryRemove(windowId, out _);
         _captureTasks.TryRemove(windowId, out _);
+        _directVideoOverlayStates.TryRemove(windowId, out _);
+        _lastDirectVideoOverlayProbeUtc.TryRemove(windowId, out _);
+        _directVideoSuppressionRequested.TryRemove(windowId, out _);
+        _lastDirectVideoOverlayLog.TryRemove(windowId, out _);
+        _lastDirectVideoSuppressionLogUtc.TryRemove(windowId, out _);
         if (_captureLoops.TryRemove(windowId, out var cancellation))
         {
             try
@@ -56,6 +71,112 @@ public sealed class BrowserSnapshotService
             cancellation.Dispose();
         }
         _cursorStates.TryRemove(windowId, out _);
+    }
+
+    public void SetDirectVideoSuppression(Guid windowId, bool enabled)
+    {
+        if (enabled)
+        {
+            _directVideoSuppressionRequested[windowId] = true;
+            _ = ApplyImmediateDirectVideoSuppressionAsync(windowId);
+            if (_browsers.TryGetValue(windowId, out var browser))
+            {
+                _ = RefreshDirectVideoOverlayStateAsync(windowId, browser, CancellationToken.None);
+            }
+            return;
+        }
+
+        _directVideoSuppressionRequested.TryRemove(windowId, out _);
+        _ = RestoreDirectVideoPresentationAsync(windowId);
+    }
+
+    public BrowserDirectVideoOverlayState GetDirectVideoOverlayState(Guid windowId)
+    {
+        return _directVideoOverlayStates.TryGetValue(windowId, out var state)
+            ? state
+            : BrowserDirectVideoOverlayState.None;
+    }
+
+    private Task ApplyImmediateDirectVideoSuppressionAsync(Guid windowId)
+    {
+        if (!_browsers.TryGetValue(windowId, out var browser))
+        {
+            return Task.CompletedTask;
+        }
+
+        return browser.Dispatcher.InvokeAsync(async () =>
+        {
+            var cefBrowser = browser.GetBrowser();
+            var frame = cefBrowser?.MainFrame;
+            if (frame is null)
+            {
+                return;
+            }
+
+            const string suppressionScript = @"
+(function() {
+  try {
+    const host = (window.location.hostname || '').toLowerCase();
+    const pageUrl = (window.location.href || '').toLowerCase();
+    const isYoutubePage =
+      host.indexOf('youtube.com') >= 0 ||
+      host.indexOf('youtu.be') >= 0 ||
+      host.indexOf('youtube-nocookie.com') >= 0 ||
+      pageUrl.indexOf('youtube.com') >= 0 ||
+      pageUrl.indexOf('youtu.be') >= 0 ||
+      pageUrl.indexOf('youtube-nocookie.com') >= 0;
+
+    let changed = false;
+    const mediaNodes = Array.from(document.querySelectorAll('video, audio'));
+    mediaNodes.forEach(function(node) {
+      try {
+        const src = ((node.currentSrc || node.src || '') + '').toLowerCase();
+        const parentFrame = node.closest('iframe');
+        const isYoutubeMedia =
+          isYoutubePage ||
+          src.indexOf('youtube') >= 0 ||
+          src.indexOf('googlevideo.com') >= 0 ||
+          !!document.querySelector('.html5-video-player, .ytp-play-button, ytd-player, #movie_player');
+        if (!isYoutubeMedia) return;
+        if (typeof node.pause === 'function') node.pause();
+        node.muted = true;
+        changed = true;
+      } catch (e) {
+      }
+    });
+
+    document.querySelectorAll('iframe').forEach(function(node) {
+      try {
+        const src = ((node.getAttribute && node.getAttribute('src')) || node.src || '').toLowerCase();
+        if (src.indexOf('youtube.com/embed/') >= 0 || src.indexOf('youtube-nocookie.com/embed/') >= 0) {
+          node.style.visibility = 'hidden';
+          node.style.pointerEvents = 'none';
+          node.setAttribute('data-super-direct-overlay-hidden', '1');
+          changed = true;
+        }
+      } catch (e) {
+      }
+    });
+
+    return JSON.stringify({ ok: true, changed: changed, youtube: isYoutubePage });
+  } catch (e) {
+    return JSON.stringify({ ok: false, changed: false, youtube: false });
+  }
+})();";
+
+            var response = await frame.EvaluateScriptAsync(suppressionScript).ConfigureAwait(true);
+            var json = response?.Result as string;
+            if (!string.IsNullOrWhiteSpace(json) && json.IndexOf(@"""changed"":true", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var nowUtc = DateTime.UtcNow;
+                if (!_lastDirectVideoSuppressionLogUtc.TryGetValue(windowId, out var lastLogUtc) ||
+                    nowUtc - lastLogUtc >= TimeSpan.FromSeconds(2))
+                {
+                    _lastDirectVideoSuppressionLogUtc[windowId] = nowUtc;
+                    AppLog.Write("BrowserVideoBlock", string.Format("Video local pausado/bloqueado no CEF => janela={0}", windowId.ToString("N")));
+                }
+            }
+        }).Task.Unwrap();
     }
 
     public bool IsRegistered(Guid windowId)
@@ -226,6 +347,7 @@ public sealed class BrowserSnapshotService
                     host.SendMouseMoveEvent(cursor.ToMouseEvent(), false);
                     if (await IsMediaControlAtPointAsync(frame, cursor.X, cursor.Y).ConfigureAwait(true))
                     {
+                        await CaptureDirectVideoOverlayFromPointAsync(windowId, frame, cursor.X, cursor.Y).ConfigureAwait(true);
                         AppLog.Write("BrowserControl", string.Format("click(media) => janela={0}, x={1}, y={2}", windowId.ToString("N"), cursor.X, cursor.Y));
                         host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, false, 1);
                         host.SendMouseClickEvent(cursor.ToMouseEvent(), MouseButtonType.Left, true, 1);
@@ -485,6 +607,8 @@ public sealed class BrowserSnapshotService
                         _cachedBitmapFrames[windowId] = bitmapFrame;
                     }
                 }
+
+                await RefreshDirectVideoOverlayStateAsync(windowId, browser, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
@@ -499,6 +623,505 @@ public sealed class BrowserSnapshotService
                 break;
             }
         }
+    }
+
+    private async Task RefreshDirectVideoOverlayStateAsync(Guid windowId, ChromiumWebBrowser browser, CancellationToken cancellationToken)
+    {
+        var nowUtc = DateTime.UtcNow;
+        if (_lastDirectVideoOverlayProbeUtc.TryGetValue(windowId, out var lastProbeUtc) &&
+            nowUtc - lastProbeUtc < DirectVideoOverlayProbeInterval)
+        {
+            return;
+        }
+
+        _lastDirectVideoOverlayProbeUtc[windowId] = nowUtc;
+        var suppress = _directVideoSuppressionRequested.ContainsKey(windowId);
+        var state = await EvaluateDirectVideoOverlayStateAsync(browser, suppress, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            _directVideoOverlayStates.TryRemove(windowId, out _);
+            MaybeLogDirectVideoOverlay(
+                windowId,
+                new BrowserDirectVideoOverlayState
+                {
+                    Detected = false,
+                    PageUrl = browser.Address ?? string.Empty,
+                    DetectionReason = "probe-returned-null"
+                });
+            return;
+        }
+
+        if (!state.Detected)
+        {
+            _directVideoOverlayStates.TryRemove(windowId, out _);
+            MaybeLogDirectVideoOverlay(windowId, state);
+            return;
+        }
+
+        state.UpdatedUtc = nowUtc;
+        _directVideoOverlayStates[windowId] = state;
+        MaybeLogDirectVideoOverlay(windowId, state);
+    }
+
+    private async Task CaptureDirectVideoOverlayFromPointAsync(Guid windowId, IFrame frame, int x, int y)
+    {
+        try
+        {
+            var suppress = _directVideoSuppressionRequested.ContainsKey(windowId);
+            var state = await EvaluateDirectVideoOverlayStateAtPointAsync(frame, x, y, suppress).ConfigureAwait(false);
+            if (state is null || !state.Detected || string.IsNullOrWhiteSpace(state.SourceUrl))
+            {
+                return;
+            }
+
+            state.UpdatedUtc = DateTime.UtcNow;
+            _directVideoOverlayStates[windowId] = state;
+            _lastDirectVideoOverlayProbeUtc[windowId] = state.UpdatedUtc;
+            MaybeLogDirectVideoOverlay(windowId, state);
+        }
+        catch
+        {
+        }
+    }
+
+    private void MaybeLogDirectVideoOverlay(Guid windowId, BrowserDirectVideoOverlayState state)
+    {
+        var message = !state.Detected
+            ? string.Format(
+                "Detector sem player YouTube => janela={0}, url={1}, host={2}, title={3}, reason={4}",
+                windowId.ToString("N"),
+                state.PageUrl,
+                state.PageHost,
+                state.PageTitle,
+                state.DetectionReason)
+            : string.Format(
+                "Detector YouTube => janela={0}, source={1}, ready={2}, blocked={3}, embedded={4}, title={5}, reason={6}, rect={7:0.000},{8:0.000},{9:0.000},{10:0.000}",
+                windowId.ToString("N"),
+                state.SourceUrl,
+                state.Ready,
+                state.Blocked,
+                state.Embedded,
+                state.PageTitle,
+                state.DetectionReason,
+                state.NormalizedLeft,
+                state.NormalizedTop,
+                state.NormalizedWidth,
+                state.NormalizedHeight);
+        if (_lastDirectVideoOverlayLog.TryGetValue(windowId, out var previous) &&
+            string.Equals(previous, message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDirectVideoOverlayLog[windowId] = message;
+        AppLog.Write("DirectOverlay", message);
+    }
+
+    private static async Task<BrowserDirectVideoOverlayState?> EvaluateDirectVideoOverlayStateAsync(ChromiumWebBrowser browser, bool suppress, CancellationToken cancellationToken)
+    {
+        return await browser.Dispatcher.InvokeAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var cefBrowser = browser.GetBrowser();
+            var frame = cefBrowser?.MainFrame;
+            if (frame is null)
+            {
+                return null;
+            }
+
+            var suppressLiteral = suppress ? "true" : "false";
+            var currentAddressLiteral = EscapeJavaScriptString(browser.Address ?? string.Empty);
+            var script = string.Format(@"
+(function() {{
+  try {{
+    const suppress = {0};
+    const currentAddress = '{1}';
+    const restoreHiddenNodes = () => {{
+      const hiddenNodes = document.querySelectorAll('[data-super-direct-overlay-hidden=""1""]');
+      hiddenNodes.forEach(node => {{
+        node.style.visibility = '';
+        node.style.pointerEvents = '';
+        node.removeAttribute('data-super-direct-overlay-hidden');
+      }});
+    }};
+    const normalizeYoutubeUrl = (rawUrl) => {{
+      if (!rawUrl) return '';
+      try {{
+        const parsed = new URL(rawUrl, window.location.href);
+        const host = (parsed.hostname || '').toLowerCase();
+        if (host.indexOf('youtu.be') >= 0) {{
+          const videoId = parsed.pathname.replace(/^\/+/, '').split('/')[0];
+          return videoId ? `https://www.youtube.com/watch?v=${{videoId}}` : rawUrl;
+        }}
+
+        if (host.indexOf('youtube.com') >= 0 || host.indexOf('youtube-nocookie.com') >= 0) {{
+          if (parsed.pathname.indexOf('/embed/') >= 0) {{
+            const parts = parsed.pathname.split('/');
+            const embedIndex = parts.indexOf('embed');
+            const videoId = embedIndex >= 0 && embedIndex + 1 < parts.length ? parts[embedIndex + 1] : '';
+            return videoId ? `https://www.youtube.com/watch?v=${{videoId}}` : rawUrl;
+          }}
+
+          if (parsed.pathname === '/watch' && parsed.searchParams.get('v')) {{
+            return `https://www.youtube.com/watch?v=${{parsed.searchParams.get('v')}}`;
+          }}
+        }}
+      }} catch (e) {{
+      }}
+
+      return rawUrl;
+    }};
+    const encodeResult = (result) => JSON.stringify(result);
+    const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement ? document.documentElement.clientWidth || 0 : 0, 1);
+    const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement ? document.documentElement.clientHeight || 0 : 0, 1);
+
+    restoreHiddenNodes();
+
+    const buildRect = (rect) => {{
+      const left = Math.max(0, Math.min(viewportWidth, rect.left || 0));
+      const top = Math.max(0, Math.min(viewportHeight, rect.top || 0));
+      const width = Math.max(0, Math.min(viewportWidth - left, rect.width || 0));
+      const height = Math.max(0, Math.min(viewportHeight - top, rect.height || 0));
+      return {{
+        left,
+        top,
+        width,
+        height,
+        normalizedLeft: left / viewportWidth,
+        normalizedTop: top / viewportHeight,
+        normalizedWidth: width / viewportWidth,
+        normalizedHeight: height / viewportHeight
+      }};
+    }};
+    const pageUrl = window.location.href || currentAddress || '';
+    const host = ((window.location && window.location.hostname) || '').toLowerCase();
+    const pageTitle = ((document && document.title) || '').trim();
+    const isYoutubeHost = host.indexOf('youtube.com') >= 0 || host.indexOf('youtu.be') >= 0 || host.indexOf('youtube-nocookie.com') >= 0;
+    const youtubePlayer = document.querySelector('.html5-video-player, #movie_player, ytd-player, #player');
+    const canonical = document.querySelector('link[rel=""canonical""]');
+    const pageYoutubeUrl = normalizeYoutubeUrl(canonical && canonical.href ? canonical.href : pageUrl);
+
+    if ((isYoutubeHost || pageUrl.toLowerCase().indexOf('youtube') >= 0) && youtubePlayer) {{
+      const rect = youtubePlayer.getBoundingClientRect();
+      if (rect.width >= 120 && rect.height >= 90) {{
+        const activeVideo = document.querySelector('video.html5-main-video, video.video-stream, video');
+        let blocked = false;
+        if (suppress && activeVideo) {{
+          try {{
+            activeVideo.muted = true;
+            if (typeof activeVideo.pause === 'function') {{
+              activeVideo.pause();
+            }}
+            blocked = true;
+          }} catch (e) {{
+          }}
+        }}
+
+        return encodeResult(Object.assign({{
+          detected: true,
+          ready: true,
+          provider: 'youtube',
+          sourceUrl: pageYoutubeUrl,
+          pageUrl: pageUrl,
+          pageHost: host,
+          pageTitle: pageTitle,
+          detectionReason: 'page-player',
+          blocked: blocked,
+          embedded: false
+        }}, buildRect(rect)));
+      }}
+    }}
+
+    const activeVideo = document.querySelector('video.html5-main-video, video.video-stream, video');
+    if (isYoutubeHost && activeVideo) {{
+      const rectSource = activeVideo.closest('.html5-video-player') || activeVideo;
+      const rect = rectSource.getBoundingClientRect();
+      if (rect.width >= 120 && rect.height >= 90) {{
+        const sourceUrl = pageYoutubeUrl;
+        let blocked = false;
+        if (suppress) {{
+          try {{
+            activeVideo.muted = true;
+            if (typeof activeVideo.pause === 'function') {{
+              activeVideo.pause();
+            }}
+            blocked = true;
+          }} catch (e) {{
+          }}
+        }}
+
+        return encodeResult(Object.assign({{
+          detected: true,
+          ready: !!(activeVideo.readyState >= 2 || activeVideo.currentSrc || activeVideo.src),
+          provider: 'youtube',
+          sourceUrl: sourceUrl,
+          pageUrl: pageUrl,
+          pageHost: host,
+          pageTitle: pageTitle,
+          detectionReason: 'page-video',
+          blocked: blocked,
+          embedded: false
+        }}, buildRect(rect)));
+      }}
+    }}
+
+    const iframe = Array.from(document.querySelectorAll('iframe')).find(node => {{
+      const src = ((node.getAttribute && node.getAttribute('src')) || node.src || '').toLowerCase();
+      return src.indexOf('youtube.com/embed/') >= 0 ||
+             src.indexOf('youtube-nocookie.com/embed/') >= 0 ||
+             src.indexOf('youtube.com/watch') >= 0 ||
+             src.indexOf('youtu.be/') >= 0;
+    }});
+    if (iframe) {{
+      const rect = iframe.getBoundingClientRect();
+      if (rect.width >= 120 && rect.height >= 90) {{
+        if (suppress) {{
+          iframe.style.visibility = 'hidden';
+          iframe.style.pointerEvents = 'none';
+          iframe.setAttribute('data-super-direct-overlay-hidden', '1');
+        }}
+
+        return encodeResult(Object.assign({{
+          detected: true,
+          ready: true,
+          provider: 'youtube',
+          sourceUrl: normalizeYoutubeUrl((iframe.getAttribute && iframe.getAttribute('src')) || iframe.src || ''),
+          pageUrl: pageUrl,
+          pageHost: host,
+          pageTitle: pageTitle,
+          detectionReason: 'page-iframe',
+          blocked: suppress,
+          embedded: true
+        }}, buildRect(rect)));
+      }}
+    }}
+
+    return encodeResult({{
+      detected: false,
+      ready: false,
+      provider: '',
+      sourceUrl: '',
+      pageUrl: pageUrl,
+      pageHost: host,
+      pageTitle: pageTitle,
+      detectionReason: youtubePlayer ? 'player-too-small' : (isYoutubeHost ? 'youtube-page-no-player' : 'not-youtube-page'),
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      normalizedLeft: 0,
+      normalizedTop: 0,
+      normalizedWidth: 0,
+      normalizedHeight: 0,
+      blocked: false,
+      embedded: false
+    }});
+  }} catch (error) {{
+    return JSON.stringify({{
+      detected: false,
+      ready: false,
+      provider: '',
+      sourceUrl: '',
+      pageUrl: currentAddress || '',
+      pageHost: '',
+      pageTitle: '',
+      detectionReason: 'script-error',
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+      normalizedLeft: 0,
+      normalizedTop: 0,
+      normalizedWidth: 0,
+      normalizedHeight: 0,
+      blocked: false,
+      embedded: false
+    }});
+  }}
+}})();", suppressLiteral, currentAddressLiteral);
+
+            var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(true);
+            return ParseJsonResult<BrowserDirectVideoOverlayState>(response?.Result as string);
+        }).Task.Unwrap().ConfigureAwait(false);
+    }
+
+    private static async Task<BrowserDirectVideoOverlayState?> EvaluateDirectVideoOverlayStateAtPointAsync(IFrame frame, int x, int y, bool suppress)
+    {
+        var suppressLiteral = suppress ? "true" : "false";
+        var script = string.Format(@"
+(function() {{
+  try {{
+    const x = {0};
+    const y = {1};
+    const suppress = {2};
+    const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement ? document.documentElement.clientWidth || 0 : 0, 1);
+    const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement ? document.documentElement.clientHeight || 0 : 0, 1);
+    const normalizeYoutubeUrl = (rawUrl) => {{
+      if (!rawUrl) return '';
+      try {{
+        const parsed = new URL(rawUrl, window.location.href);
+        const host = (parsed.hostname || '').toLowerCase();
+        if (host.indexOf('youtu.be') >= 0) {{
+          const videoId = parsed.pathname.replace(/^\/+/, '').split('/')[0];
+          return videoId ? `https://www.youtube.com/watch?v=${{videoId}}` : rawUrl;
+        }}
+        if (host.indexOf('youtube.com') >= 0 || host.indexOf('youtube-nocookie.com') >= 0) {{
+          if (parsed.pathname.indexOf('/embed/') >= 0) {{
+            const parts = parsed.pathname.split('/');
+            const embedIndex = parts.indexOf('embed');
+            const videoId = embedIndex >= 0 && embedIndex + 1 < parts.length ? parts[embedIndex + 1] : '';
+            return videoId ? `https://www.youtube.com/watch?v=${{videoId}}` : rawUrl;
+          }}
+          if (parsed.pathname === '/watch' && parsed.searchParams.get('v')) {{
+            return `https://www.youtube.com/watch?v=${{parsed.searchParams.get('v')}}`;
+          }}
+        }}
+      }} catch (e) {{
+      }}
+      return rawUrl;
+    }};
+    const buildRect = (rect) => {{
+      const left = Math.max(0, Math.min(viewportWidth, rect.left || 0));
+      const top = Math.max(0, Math.min(viewportHeight, rect.top || 0));
+      const width = Math.max(0, Math.min(viewportWidth - left, rect.width || 0));
+      const height = Math.max(0, Math.min(viewportHeight - top, rect.height || 0));
+      return {{
+        left,
+        top,
+        width,
+        height,
+        normalizedLeft: left / viewportWidth,
+        normalizedTop: top / viewportHeight,
+        normalizedWidth: width / viewportWidth,
+        normalizedHeight: height / viewportHeight
+      }};
+    }};
+
+    const target = document.elementFromPoint(x, y);
+    if (!target) return JSON.stringify({{ detected: false }});
+
+    const player = target.closest('.html5-video-player, ytd-player, #movie_player');
+    const video = target.closest('video') || document.querySelector('video.html5-main-video, video.video-stream, video');
+    const iframe = target.closest('iframe') || target;
+    const iframeSrc = iframe && ((iframe.getAttribute && iframe.getAttribute('src')) || iframe.src || '');
+
+    if (player) {{
+      const rect = player.getBoundingClientRect();
+      const sourceUrl = normalizeYoutubeUrl(window.location.href || '');
+      if (suppress && video && typeof video.pause === 'function') {{
+        try {{
+          video.pause();
+          video.muted = true;
+        }} catch (e) {{
+        }}
+      }}
+      return JSON.stringify(Object.assign({{
+        detected: rect.width >= 120 && rect.height >= 90,
+        ready: true,
+        provider: 'youtube',
+        sourceUrl: sourceUrl,
+        pageUrl: window.location.href || '',
+        pageHost: ((window.location && window.location.hostname) || '').toLowerCase(),
+        pageTitle: ((document && document.title) || '').trim(),
+        detectionReason: 'point-player',
+        blocked: !!suppress,
+        embedded: false
+      }}, buildRect(rect)));
+    }}
+
+    if (iframeSrc && (iframeSrc.toLowerCase().indexOf('youtube.com') >= 0 || iframeSrc.toLowerCase().indexOf('youtu.be') >= 0)) {{
+      const rect = iframe.getBoundingClientRect();
+      if (suppress) {{
+        iframe.style.visibility = 'hidden';
+        iframe.style.pointerEvents = 'none';
+        iframe.setAttribute('data-super-direct-overlay-hidden', '1');
+      }}
+      return JSON.stringify(Object.assign({{
+        detected: rect.width >= 120 && rect.height >= 90,
+        ready: true,
+        provider: 'youtube',
+        sourceUrl: normalizeYoutubeUrl(iframeSrc),
+        pageUrl: window.location.href || '',
+        pageHost: ((window.location && window.location.hostname) || '').toLowerCase(),
+        pageTitle: ((document && document.title) || '').trim(),
+        detectionReason: 'point-iframe',
+        blocked: !!suppress,
+        embedded: true
+      }}, buildRect(rect)));
+    }}
+
+    if (video) {{
+      const rectSource = video.closest('.html5-video-player') || video;
+      const rect = rectSource.getBoundingClientRect();
+      const sourceUrl = normalizeYoutubeUrl(window.location.href || '');
+      if (suppress) {{
+        try {{
+          video.pause();
+          video.muted = true;
+        }} catch (e) {{
+        }}
+      }}
+      return JSON.stringify(Object.assign({{
+        detected: rect.width >= 120 && rect.height >= 90,
+        ready: true,
+        provider: sourceUrl.toLowerCase().indexOf('youtube') >= 0 ? 'youtube' : 'html5',
+        sourceUrl: sourceUrl,
+        pageUrl: window.location.href || '',
+        pageHost: ((window.location && window.location.hostname) || '').toLowerCase(),
+        pageTitle: ((document && document.title) || '').trim(),
+        detectionReason: 'point-video',
+        blocked: !!suppress,
+        embedded: false
+      }}, buildRect(rect)));
+    }}
+
+    return JSON.stringify({{
+      detected: false,
+      pageUrl: window.location.href || '',
+      pageHost: ((window.location && window.location.hostname) || '').toLowerCase(),
+      pageTitle: ((document && document.title) || '').trim(),
+      detectionReason: 'point-no-player'
+    }});
+  }} catch (e) {{
+    return JSON.stringify({{ detected: false, detectionReason: 'point-script-error' }});
+  }}
+}})();", x, y, suppressLiteral);
+
+        var response = await frame.EvaluateScriptAsync(script).ConfigureAwait(false);
+        return ParseJsonResult<BrowserDirectVideoOverlayState>(response?.Result as string);
+    }
+
+    private Task RestoreDirectVideoPresentationAsync(Guid windowId)
+    {
+        if (!_browsers.TryGetValue(windowId, out var browser))
+        {
+            return Task.CompletedTask;
+        }
+
+        return browser.Dispatcher.InvokeAsync(async () =>
+        {
+            var cefBrowser = browser.GetBrowser();
+            var frame = cefBrowser?.MainFrame;
+            if (frame is null)
+            {
+                return;
+            }
+
+            const string restoreScript = @"
+(function() {
+  try {
+    document.querySelectorAll('[data-super-direct-overlay-hidden=""1""]').forEach(function(node) {
+      node.style.visibility = '';
+      node.style.pointerEvents = '';
+      node.removeAttribute('data-super-direct-overlay-hidden');
+    });
+  } catch (e) {
+  }
+})();";
+
+            await frame.EvaluateScriptAsync(restoreScript).ConfigureAwait(true);
+        }).Task.Unwrap();
     }
 
     private static Task<byte[]?> EncodeJpegAsync(Guid windowId, CachedBitmapFrame frame)
@@ -1178,16 +1801,33 @@ public sealed class BrowserSnapshotService
 
         try
         {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-            using (var stream = new MemoryStream(bytes))
-            {
-                var serializer = new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(RemoteCommandResult));
-                return serializer.ReadObject(stream) as RemoteCommandResult ?? RemoteCommandResult.Success();
-            }
+            return ParseJsonResult<RemoteCommandResult>(json) ?? RemoteCommandResult.Success();
         }
         catch
         {
             return RemoteCommandResult.Success();
+        }
+    }
+
+    private static T? ParseJsonResult<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            using (var stream = new MemoryStream(bytes))
+            {
+                var serializer = new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(T));
+                return serializer.ReadObject(stream) as T;
+            }
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -1267,6 +1907,68 @@ public sealed class RemoteCommandResult
     {
         return new RemoteCommandResult { Ok = false };
     }
+}
+
+[DataContract]
+public sealed class BrowserDirectVideoOverlayState
+{
+    public static BrowserDirectVideoOverlayState None => new BrowserDirectVideoOverlayState();
+
+    [DataMember(Name = "detected", Order = 1)]
+    public bool Detected { get; set; }
+
+    [DataMember(Name = "ready", Order = 2)]
+    public bool Ready { get; set; }
+
+    [DataMember(Name = "provider", Order = 3)]
+    public string Provider { get; set; } = string.Empty;
+
+    [DataMember(Name = "sourceUrl", Order = 4)]
+    public string SourceUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "left", Order = 5)]
+    public double Left { get; set; }
+
+    [DataMember(Name = "top", Order = 6)]
+    public double Top { get; set; }
+
+    [DataMember(Name = "width", Order = 7)]
+    public double Width { get; set; }
+
+    [DataMember(Name = "height", Order = 8)]
+    public double Height { get; set; }
+
+    [DataMember(Name = "normalizedLeft", Order = 9)]
+    public double NormalizedLeft { get; set; }
+
+    [DataMember(Name = "normalizedTop", Order = 10)]
+    public double NormalizedTop { get; set; }
+
+    [DataMember(Name = "normalizedWidth", Order = 11)]
+    public double NormalizedWidth { get; set; }
+
+    [DataMember(Name = "normalizedHeight", Order = 12)]
+    public double NormalizedHeight { get; set; }
+
+    [DataMember(Name = "blocked", Order = 13)]
+    public bool Blocked { get; set; }
+
+    [DataMember(Name = "embedded", Order = 14)]
+    public bool Embedded { get; set; }
+
+    [DataMember(Name = "pageUrl", Order = 15)]
+    public string PageUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "pageHost", Order = 16)]
+    public string PageHost { get; set; } = string.Empty;
+
+    [DataMember(Name = "pageTitle", Order = 17)]
+    public string PageTitle { get; set; } = string.Empty;
+
+    [DataMember(Name = "detectionReason", Order = 18)]
+    public string DetectionReason { get; set; } = string.Empty;
+
+    public DateTime UpdatedUtc { get; set; }
 }
 
 public sealed class RemoteCursorState

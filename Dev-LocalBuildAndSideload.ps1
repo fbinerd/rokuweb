@@ -19,10 +19,13 @@ $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
+$diagnosticsRoot = Join-Path $repoRoot "tmp\diagnostics"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
+$superLogPath = Join-Path $superDataRoot "logs\super.log"
 $desktopShortcutPath = Join-Path $env:USERPROFILE "Desktop\SuperPainel Local.lnk"
 $launchSuperBeforeSideload = [bool]$LaunchSuper
 $superReadyForSideload = $false
+$activeDiagnosticsSession = ""
 
 function Invoke-Step {
     param(
@@ -298,6 +301,56 @@ function Stop-ExistingSuperLaunchers {
         }
 }
 
+function Stop-ExistingLocalLogMonitors {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match 'powershell' -and
+            $_.CommandLine -match 'Dev-LocalLogMonitor\.ps1'
+        } |
+        ForEach-Object {
+            try {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+        }
+}
+
+function Start-LocalDiagnosticsMonitor {
+    param(
+        [string]$RokuHost
+    )
+
+    Stop-ExistingLocalLogMonitors
+    New-Item -ItemType Directory -Force -Path $diagnosticsRoot | Out-Null
+
+    $sessionName = Get-Date -Format "yyyyMMdd-HHmmss"
+    $sessionRoot = Join-Path $diagnosticsRoot $sessionName
+    New-Item -ItemType Directory -Force -Path $sessionRoot | Out-Null
+
+    $monitorScriptPath = Join-Path $repoRoot "scripts\Dev-LocalLogMonitor.ps1"
+    if (-not (Test-Path $monitorScriptPath)) {
+        throw "Script de monitor nao encontrado: $monitorScriptPath"
+    }
+
+    $argumentList = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", ('"{0}"' -f $monitorScriptPath),
+        "-SessionRoot", ('"{0}"' -f $sessionRoot),
+        "-SuperLogPath", ('"{0}"' -f $superLogPath),
+        "-DurationMinutes", "30"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RokuHost)) {
+        $argumentList += @("-RokuIp", ('"{0}"' -f $RokuHost))
+    }
+
+    Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
+    return $sessionRoot
+}
+
 function Start-SuperLocal {
     Stop-ExistingSuperLaunchers
     Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -379,6 +432,14 @@ if ($ResetLocalData) {
     Invoke-Step -Label "Resetar base local do SuperPainel" -Action {
         Reset-SuperLocalData -DataRoot $superDataRoot
     }
+}
+
+Invoke-Step -Label "Iniciar monitor de diagnostico local" -Action {
+    $script:activeDiagnosticsSession = Start-LocalDiagnosticsMonitor -RokuHost $RokuIp.Trim()
+    Write-Host ("Diagnostico: {0}" -f $script:activeDiagnosticsSession)
+    Write-Host ("Super bruto: {0}" -f (Join-Path $script:activeDiagnosticsSession "super-raw.log"))
+    Write-Host ("Telnet bruto: {0}" -f (Join-Path $script:activeDiagnosticsSession "telnet-raw.log"))
+    Write-Host ("Foco filtrado: {0}" -f (Join-Path $script:activeDiagnosticsSession "focus.log"))
 }
 
 Invoke-Step -Label "Compilar super em modo local" -Action {
@@ -473,3 +534,10 @@ Write-Host ""
 Write-Host "Fluxo local concluido."
 Write-Host "Super: $superExePath"
 Write-Host "Roku zip: $localRokuZip"
+if (-not [string]::IsNullOrWhiteSpace($activeDiagnosticsSession)) {
+    Write-Host "Diagnostico:"
+    Write-Host ("  Pasta: {0}" -f $activeDiagnosticsSession)
+    Write-Host ("  Super: {0}" -f (Join-Path $activeDiagnosticsSession "super-raw.log"))
+    Write-Host ("  Telnet: {0}" -f (Join-Path $activeDiagnosticsSession "telnet-raw.log"))
+    Write-Host ("  Foco: {0}" -f (Join-Path $activeDiagnosticsSession "focus.log"))
+}

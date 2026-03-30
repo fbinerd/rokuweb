@@ -97,11 +97,13 @@ sub init()
     m.panelAudioNode = m.top.findNode("panelAudioNode")
     m.panelAudioVideo = m.top.findNode("panelAudioVideo")
     m.fullscreenVideo = m.top.findNode("fullscreenInteractionVideo")
+    m.fullscreenInteractionOverlayVideo = m.top.findNode("fullscreenInteractionOverlayVideo")
     m.fullscreenVideoMode = m.top.findNode("fullscreenVideoModeVideo")
     m.fullscreenVideoStage = m.top.findNode("fullscreenVideoStage")
     m.stagingVideoTargetMode = ""
     m.stagingVideoWindowId = ""
     m.stagingVideoStreamUrl = ""
+    m.interactionOverlayAssignedStreamUrl = ""
 
     m.panelGroups = [
         m.top.findNode("panel0")
@@ -591,6 +593,14 @@ sub applyBridgeResponse()
             requestedStreamingMode: normalizeOptionalStreamingMode(getString(window.requestedStreamingMode, ""))
             modeSwitchPending: getBool(window.modeSwitchPending, false)
             autoOpenFullscreen: getBool(window.autoOpenFullscreen, false)
+            directVideoOverlayEnabled: getBool(window.directVideoOverlayEnabled, false)
+            directVideoSourceUrl: getString(window.directVideoSourceUrl, "")
+            directVideoStreamUrl: getString(window.directVideoStreamUrl, "")
+            directVideoStreamFormat: getString(window.directVideoStreamFormat, "")
+            directVideoNormalizedLeft: getNumber(window.directVideoNormalizedLeft, 0.0)
+            directVideoNormalizedTop: getNumber(window.directVideoNormalizedTop, 0.0)
+            directVideoNormalizedWidth: getNumber(window.directVideoNormalizedWidth, 0.0)
+            directVideoNormalizedHeight: getNumber(window.directVideoNormalizedHeight, 0.0)
         })
     end for
 
@@ -1025,10 +1035,9 @@ sub showFullscreen()
     stopPanelRefresh()
     updateCursorMarker()
     if not m.videoUsesStream and m.fullscreenStreamingMode = "Interacao"
-        initialUrl = LCase(getString(entry.initialUrl, ""))
-        if Instr(1, initialUrl, "youtube.com") > 0 or Instr(1, initialUrl, "youtu.be") > 0 or Instr(1, initialUrl, "youtube-nocookie.com") > 0
-            m.pendingInteractionAutoPlayWindowId = entryId
-        end if
+        syncInteractionDirectVideoOverlay(entry, true)
+    else
+        stopInteractionDirectVideoOverlay()
     end if
     if not m.videoUsesStream and m.fullscreenStreamingMode = "Video"
         m.statusLabel.text = "Carregando modo Video..."
@@ -1045,6 +1054,78 @@ sub stopVideoNode(node as object)
     end if
 end sub
 
+sub stopInteractionDirectVideoOverlay()
+    if m.fullscreenInteractionOverlayVideo <> invalid
+        m.fullscreenInteractionOverlayVideo.control = "stop"
+        m.fullscreenInteractionOverlayVideo.content = invalid
+        m.fullscreenInteractionOverlayVideo.visible = false
+    end if
+    m.interactionOverlayAssignedStreamUrl = ""
+end sub
+
+sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
+    if m.fullscreenInteractionOverlayVideo = invalid or entry = invalid
+        return
+    end if
+
+    if normalizeStreamingMode(m.fullscreenStreamingMode) <> "Interacao"
+        stopInteractionDirectVideoOverlay()
+        return
+    end if
+
+    overlayEnabled = getBool(entry.directVideoOverlayEnabled, false)
+    overlayStreamUrl = getString(entry.directVideoStreamUrl, "")
+    overlayStreamFormat = LCase(getString(entry.directVideoStreamFormat, ""))
+    if not overlayEnabled or overlayStreamUrl = "" or overlayStreamFormat = ""
+        if forceReload
+            ? "[OVERLAY] inativo => enabled="; overlayEnabled; " stream="; overlayStreamUrl; " format="; overlayStreamFormat
+        end if
+        stopInteractionDirectVideoOverlay()
+        return
+    end if
+
+    left = clampNumber(getNumber(entry.directVideoNormalizedLeft, 0.0), 0.0, 1.0)
+    top = clampNumber(getNumber(entry.directVideoNormalizedTop, 0.0), 0.0, 1.0)
+    width = clampNumber(getNumber(entry.directVideoNormalizedWidth, 0.0), 0.0, 1.0 - left)
+    height = clampNumber(getNumber(entry.directVideoNormalizedHeight, 0.0), 0.0, 1.0 - top)
+    if width <= 0.01 or height <= 0.01
+        ? "[OVERLAY] retangulo invalido => left="; left; " top="; top; " width="; width; " height="; height
+        stopInteractionDirectVideoOverlay()
+        return
+    end if
+
+    targetX = Int(1280 * left)
+    targetY = Int(720 * top)
+    targetWidth = Int(1280 * width)
+    targetHeight = Int(720 * height)
+    if targetWidth < 2
+        targetWidth = 2
+    end if
+    if targetHeight < 2
+        targetHeight = 2
+    end if
+
+    m.fullscreenInteractionOverlayVideo.translation = [targetX, targetY]
+    m.fullscreenInteractionOverlayVideo.width = targetWidth
+    m.fullscreenInteractionOverlayVideo.height = targetHeight
+
+    if forceReload or m.interactionOverlayAssignedStreamUrl <> overlayStreamUrl or m.fullscreenInteractionOverlayVideo.content = invalid
+        content = CreateObject("roSGNode", "ContentNode")
+        content.url = appendCacheBust(overlayStreamUrl)
+        content.streamFormat = overlayStreamFormat
+        content.title = getString(entry.title, "YouTube direto")
+        ? "[OVERLAY] play => "; content.url; " format="; overlayStreamFormat; " rect="; targetX; ","; targetY; " "; targetWidth; "x"; targetHeight
+        m.fullscreenInteractionOverlayVideo.content = content
+        m.fullscreenInteractionOverlayVideo.control = "stop"
+        m.fullscreenInteractionOverlayVideo.visible = true
+        m.fullscreenInteractionOverlayVideo.control = "play"
+        m.interactionOverlayAssignedStreamUrl = overlayStreamUrl
+        return
+    end if
+
+    m.fullscreenInteractionOverlayVideo.visible = true
+end sub
+
 sub stopInactiveModePlayback(activeMode as string, reason as string)
     if normalizeStreamingMode(activeMode) = "Interacao"
         if m.fullscreenVideoMode <> invalid
@@ -1059,6 +1140,7 @@ sub stopInactiveModePlayback(activeMode as string, reason as string)
         ? "[MODE] stop interaction player => reason="; reason
         stopVideoNode(m.fullscreenVideo)
     end if
+    stopInteractionDirectVideoOverlay()
     stopPanelAudio()
 end sub
 
@@ -1086,6 +1168,7 @@ sub hideFullscreen()
     m.lastInteractionOkTimespan = invalid
     m.fullscreenOkActive = false
     m.pendingInteractionAutoPlayWindowId = ""
+    m.interactionOverlayAssignedStreamUrl = ""
     m.scrollModeEnabled = false
     m.fullscreenPosterWindowId = ""
     m.fullscreenPosterSourceUrl = ""
@@ -1380,6 +1463,7 @@ sub teardownFullscreenPlayback(reason as string)
     stopStagingFullscreenVideo()
     stopVideoNode(m.fullscreenVideo)
     stopVideoNode(m.fullscreenVideoMode)
+    stopInteractionDirectVideoOverlay()
 
     m.fullscreenAssignedStreamUrl = ""
     m.fullscreenVideoPendingRestart = false
@@ -1875,14 +1959,6 @@ sub onFullscreenStreamTimerFire()
         reportVideoDiagHeartbeat()
     end if
 
-    if m.isFullscreen and not m.videoUsesStream and normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
-        if m.pendingInteractionAutoPlayWindowId <> "" and m.pendingInteractionAutoPlayWindowId = m.fullscreenWindowId
-            sendRemoteCommand("media-play")
-            scheduleFullscreenRefresh()
-            m.pendingInteractionAutoPlayWindowId = ""
-        end if
-    end if
-
     if m.fullscreenStreamingMode = "Video" and m.videoUsesStream and m.fullscreenVideoMode <> invalid
         videoState = LCase(getString(m.fullscreenVideoMode.state, ""))
         if videoState = "playing"
@@ -1892,6 +1968,9 @@ sub onFullscreenStreamTimerFire()
 
     loadWindows(true)
     if m.fullscreenStreamingMode = "Interacao"
+        if m.selectedIndex >= 0 and m.selectedIndex < m.windowEntries.Count()
+            syncInteractionDirectVideoOverlay(m.windowEntries[m.selectedIndex], false)
+        end if
         refreshFullscreenPreview()
     end if
 end sub
@@ -1988,6 +2067,12 @@ sub syncFullscreenStreamState(windowId as string)
 
     if m.fullscreenVideo = invalid and m.fullscreenVideoMode = invalid
         return
+    end if
+
+    if nextStreamingMode = "Interacao"
+        syncInteractionDirectVideoOverlay(currentEntry, false)
+    else
+        stopInteractionDirectVideoOverlay()
     end if
 
     if modeSwitchPending and requestedStreamingMode <> "" and requestedStreamingMode <> previousStreamingMode
@@ -2484,6 +2569,35 @@ function getBool(value as dynamic, fallback as boolean) as boolean
     end if
 
     return fallback
+end function
+
+function getNumber(value as dynamic, fallback as double) as double
+    if value = invalid
+        return fallback
+    end if
+
+    valueType = Type(value)
+    if valueType = "Double" or valueType = "Float" or valueType = "roFloat"
+        return value
+    end if
+
+    if valueType = "Integer" or valueType = "roInt" or valueType = "LongInteger"
+        return value
+    end if
+
+    return fallback
+end function
+
+function clampNumber(value as double, minValue as double, maxValue as double) as double
+    if value < minValue
+        return minValue
+    end if
+
+    if value > maxValue
+        return maxValue
+    end if
+
+    return value
 end function
 
 function appendCacheBust(url as string) as string

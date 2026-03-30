@@ -117,6 +117,12 @@
       translation="[0,0]"
       visible="false" />
     <Video
+      id="fullscreenInteractionOverlayVideo"
+      width="1"
+      height="1"
+      translation="[0,0]"
+      visible="false" />
+    <Video
       id="fullscreenVideoModeVideo"
       width="1280"
       height="720"
