@@ -772,6 +772,78 @@ public sealed class BrowserSnapshotService
 
       return rawUrl;
     }};
+    const buildYoutubeWatchUrl = (videoId) => {{
+      if (!videoId) return '';
+      return `https://www.youtube.com/watch?v=${{videoId}}`;
+    }};
+    const extractYoutubeVideoId = (value) => {{
+      if (!value) return '';
+      const normalized = normalizeYoutubeUrl(value);
+      if (!normalized) return '';
+      try {{
+        const parsed = new URL(normalized, window.location.href);
+        if (parsed.searchParams.get('v')) {{
+          return parsed.searchParams.get('v');
+        }}
+        const path = (parsed.pathname || '').replace(/^\/+/, '');
+        if (parsed.hostname.toLowerCase().indexOf('youtu.be') >= 0 && path) {{
+          return path.split('/')[0];
+        }}
+      }} catch (e) {{
+      }}
+      return '';
+    }};
+    const resolveYoutubeSourceUrl = (playerNode) => {{
+      const candidates = [];
+      const pushCandidate = (value) => {{
+        if (value) candidates.push(value);
+      }};
+
+      pushCandidate(window.location.href || '');
+      pushCandidate(currentAddress || '');
+      const canonicalNode = document.querySelector('link[rel=""canonical""]');
+      pushCandidate(canonicalNode && canonicalNode.href ? canonicalNode.href : '');
+      const ogUrlNode = document.querySelector('meta[property=""og:url""]');
+      pushCandidate(ogUrlNode && ogUrlNode.content ? ogUrlNode.content : '');
+      const watchFlexy = document.querySelector('ytd-watch-flexy[video-id], ytm-watch[video-id]');
+      pushCandidate(watchFlexy && watchFlexy.getAttribute ? buildYoutubeWatchUrl(watchFlexy.getAttribute('video-id')) : '');
+      const videoIdMeta = document.querySelector('meta[itemprop=""videoId""]');
+      pushCandidate(videoIdMeta && videoIdMeta.content ? buildYoutubeWatchUrl(videoIdMeta.content) : '');
+      try {{
+        if (playerNode && typeof playerNode.getVideoUrl === 'function') {{
+          pushCandidate(playerNode.getVideoUrl());
+        }}
+      }} catch (e) {{
+      }}
+      try {{
+        if (window.ytInitialPlayerResponse && window.ytInitialPlayerResponse.videoDetails && window.ytInitialPlayerResponse.videoDetails.videoId) {{
+          pushCandidate(buildYoutubeWatchUrl(window.ytInitialPlayerResponse.videoDetails.videoId));
+        }}
+      }} catch (e) {{
+      }}
+      try {{
+        if (window.ytInitialData && window.ytInitialData.currentVideoEndpoint && window.ytInitialData.currentVideoEndpoint.watchEndpoint && window.ytInitialData.currentVideoEndpoint.watchEndpoint.videoId) {{
+          pushCandidate(buildYoutubeWatchUrl(window.ytInitialData.currentVideoEndpoint.watchEndpoint.videoId));
+        }}
+      }} catch (e) {{
+      }}
+
+      for (const candidate of candidates) {{
+        const videoId = extractYoutubeVideoId(candidate);
+        if (videoId) {{
+          return buildYoutubeWatchUrl(videoId);
+        }}
+      }}
+
+      for (const candidate of candidates) {{
+        const normalized = normalizeYoutubeUrl(candidate);
+        if (normalized && normalized.toLowerCase().indexOf('youtube') >= 0) {{
+          return normalized;
+        }}
+      }}
+
+      return '';
+    }};
     const encodeResult = (result) => JSON.stringify(result);
     const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement ? document.documentElement.clientWidth || 0 : 0, 1);
     const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement ? document.documentElement.clientHeight || 0 : 0, 1);
@@ -805,8 +877,7 @@ public sealed class BrowserSnapshotService
     const pageTitle = ((document && document.title) || '').trim();
     const isYoutubeHost = host.indexOf('youtube.com') >= 0 || host.indexOf('youtu.be') >= 0 || host.indexOf('youtube-nocookie.com') >= 0;
     const youtubePlayer = document.querySelector('.html5-video-player, #movie_player, ytd-player, #player');
-    const canonical = document.querySelector('link[rel=""canonical""]');
-    const pageYoutubeUrl = normalizeYoutubeUrl(canonical && canonical.href ? canonical.href : pageUrl);
+    const pageYoutubeUrl = resolveYoutubeSourceUrl(youtubePlayer);
 
     if ((isYoutubeHost || pageUrl.toLowerCase().indexOf('youtube') >= 0) && youtubePlayer) {{
       const rect = youtubePlayer.getBoundingClientRect();
@@ -987,6 +1058,77 @@ public sealed class BrowserSnapshotService
       }}
       return rawUrl;
     }};
+    const buildYoutubeWatchUrl = (videoId) => {{
+      if (!videoId) return '';
+      return `https://www.youtube.com/watch?v=${{videoId}}`;
+    }};
+    const extractYoutubeVideoId = (value) => {{
+      if (!value) return '';
+      const normalized = normalizeYoutubeUrl(value);
+      if (!normalized) return '';
+      try {{
+        const parsed = new URL(normalized, window.location.href);
+        if (parsed.searchParams.get('v')) {{
+          return parsed.searchParams.get('v');
+        }}
+        const path = (parsed.pathname || '').replace(/^\/+/, '');
+        if (parsed.hostname.toLowerCase().indexOf('youtu.be') >= 0 && path) {{
+          return path.split('/')[0];
+        }}
+      }} catch (e) {{
+      }}
+      return '';
+    }};
+    const resolveYoutubeSourceUrl = (playerNode) => {{
+      const candidates = [];
+      const pushCandidate = (value) => {{
+        if (value) candidates.push(value);
+      }};
+
+      pushCandidate(window.location.href || '');
+      const canonicalNode = document.querySelector('link[rel=""canonical""]');
+      pushCandidate(canonicalNode && canonicalNode.href ? canonicalNode.href : '');
+      const ogUrlNode = document.querySelector('meta[property=""og:url""]');
+      pushCandidate(ogUrlNode && ogUrlNode.content ? ogUrlNode.content : '');
+      const watchFlexy = document.querySelector('ytd-watch-flexy[video-id], ytm-watch[video-id]');
+      pushCandidate(watchFlexy && watchFlexy.getAttribute ? buildYoutubeWatchUrl(watchFlexy.getAttribute('video-id')) : '');
+      const videoIdMeta = document.querySelector('meta[itemprop=""videoId""]');
+      pushCandidate(videoIdMeta && videoIdMeta.content ? buildYoutubeWatchUrl(videoIdMeta.content) : '');
+      try {{
+        if (playerNode && typeof playerNode.getVideoUrl === 'function') {{
+          pushCandidate(playerNode.getVideoUrl());
+        }}
+      }} catch (e) {{
+      }}
+      try {{
+        if (window.ytInitialPlayerResponse && window.ytInitialPlayerResponse.videoDetails && window.ytInitialPlayerResponse.videoDetails.videoId) {{
+          pushCandidate(buildYoutubeWatchUrl(window.ytInitialPlayerResponse.videoDetails.videoId));
+        }}
+      }} catch (e) {{
+      }}
+      try {{
+        if (window.ytInitialData && window.ytInitialData.currentVideoEndpoint && window.ytInitialData.currentVideoEndpoint.watchEndpoint && window.ytInitialData.currentVideoEndpoint.watchEndpoint.videoId) {{
+          pushCandidate(buildYoutubeWatchUrl(window.ytInitialData.currentVideoEndpoint.watchEndpoint.videoId));
+        }}
+      }} catch (e) {{
+      }}
+
+      for (const candidate of candidates) {{
+        const videoId = extractYoutubeVideoId(candidate);
+        if (videoId) {{
+          return buildYoutubeWatchUrl(videoId);
+        }}
+      }}
+
+      for (const candidate of candidates) {{
+        const normalized = normalizeYoutubeUrl(candidate);
+        if (normalized && normalized.toLowerCase().indexOf('youtube') >= 0) {{
+          return normalized;
+        }}
+      }}
+
+      return '';
+    }};
     const buildRect = (rect) => {{
       const rawLeft = rect.left || 0;
       const rawTop = rect.top || 0;
@@ -1020,7 +1162,7 @@ public sealed class BrowserSnapshotService
 
     if (player) {{
       const rect = player.getBoundingClientRect();
-      const sourceUrl = normalizeYoutubeUrl(window.location.href || '');
+      const sourceUrl = resolveYoutubeSourceUrl(player);
       if (suppress && video && typeof video.pause === 'function') {{
         try {{
           video.pause();
@@ -1066,7 +1208,7 @@ public sealed class BrowserSnapshotService
     if (video) {{
       const rectSource = video.closest('.html5-video-player') || video;
       const rect = rectSource.getBoundingClientRect();
-      const sourceUrl = normalizeYoutubeUrl(window.location.href || '');
+      const sourceUrl = resolveYoutubeSourceUrl(rectSource);
       if (suppress) {{
         try {{
           video.pause();
