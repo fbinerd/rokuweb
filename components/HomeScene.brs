@@ -72,6 +72,15 @@ sub init()
     m.interactionOverlaySelectedQualityIndex = 0
     m.interactionOverlayPendingSeekPosition = invalid
     m.interactionOverlaySourceUrl = ""
+    m.interactionOverlayQualityMenuVisible = false
+    m.interactionOverlayQualityMenuRects = []
+    m.interactionOverlayQualityMenuNodeIndices = []
+    m.interactionOverlayQualityMenuSelectedIndex = 0
+    m.interactionOverlayAutoMode = true
+    m.interactionOverlayAutoDegradeLevel = 0
+    m.interactionOverlayAutoBufferingCount = 0
+    m.displayWidth = 1280
+    m.displayHeight = 720
     m.lastHeldRemoteDispatch = invalid
     m.heldRemoteDispatchIntervalMs = 140
     m.interactionOverlaySeekStepSeconds = 6
@@ -133,6 +142,28 @@ sub init()
     m.interactionOverlayTitleLabel = m.top.findNode("interactionOverlayTitleLabel")
     m.interactionOverlayQualityButton = m.top.findNode("interactionOverlayQualityButton")
     m.interactionOverlayQualityLabel = m.top.findNode("interactionOverlayQualityLabel")
+    m.interactionOverlayQualityMenuGroup = m.top.findNode("interactionOverlayQualityMenuGroup")
+    m.interactionOverlayQualityMenuBackground = m.top.findNode("interactionOverlayQualityMenuBackground")
+    m.interactionOverlayQualityMenuItemBackgrounds = [
+        m.top.findNode("interactionOverlayQualityMenuItemBg0")
+        m.top.findNode("interactionOverlayQualityMenuItemBg1")
+        m.top.findNode("interactionOverlayQualityMenuItemBg2")
+        m.top.findNode("interactionOverlayQualityMenuItemBg3")
+        m.top.findNode("interactionOverlayQualityMenuItemBg4")
+        m.top.findNode("interactionOverlayQualityMenuItemBg5")
+        m.top.findNode("interactionOverlayQualityMenuItemBg6")
+        m.top.findNode("interactionOverlayQualityMenuItemBg7")
+    ]
+    m.interactionOverlayQualityMenuItemLabels = [
+        m.top.findNode("interactionOverlayQualityMenuItemLabel0")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel1")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel2")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel3")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel4")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel5")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel6")
+        m.top.findNode("interactionOverlayQualityMenuItemLabel7")
+    ]
     m.interactionOverlayFullscreenButton = m.top.findNode("interactionOverlayFullscreenButton")
     m.interactionOverlayFullscreenLabel = m.top.findNode("interactionOverlayFullscreenLabel")
     m.fullscreenVideoMode = m.top.findNode("fullscreenVideoModeVideo")
@@ -300,6 +331,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
         reportInputKey(normalizedKey)
 
         if normalizedKey = "back"
+            if m.interactionOverlayQualityMenuVisible
+                hideInteractionOverlayQualityMenu()
+                showInteractionOverlayControls("back-close-quality-menu")
+                return true
+            end if
             m.backHoldTimespan = CreateObject("roTimespan")
             m.backHoldTimespan.Mark()
             return true
@@ -328,6 +364,16 @@ function onKeyEvent(key as string, press as boolean) as boolean
                 return true
             end if
             if normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+                if m.interactionOverlayQualityMenuVisible
+                    hoveredMenuIndex = getInteractionOverlayHoveredQualityMenuIndex()
+                    if hoveredMenuIndex >= 0
+                        selectInteractionOverlayQualityMenuIndex(hoveredMenuIndex, "ok-hover")
+                    else
+                        selectInteractionOverlayQualityMenuIndex(m.interactionOverlayQualityMenuSelectedIndex, "ok")
+                    end if
+                    return true
+                end if
+
                 overlayHitTarget = getInteractionOverlayControlHitTarget()
                 if overlayHitTarget <> ""
                     handleInteractionOverlayControlHit(overlayHitTarget)
@@ -372,11 +418,6 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isMinusKey(normalizedKey)
             clearPendingEditableActivation()
-            if isInteractionOverlayActive()
-                ? "[OVERLAY] quality-key => minus"
-                cycleInteractionOverlayQualityByDelta(-1, "minus")
-                return true
-            end if
             if m.scrollModeEnabled
                 startHeldRemoteCommand(normalizedKey, "scroll-down")
             else
@@ -388,11 +429,6 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
         if isPlusKey(normalizedKey)
             clearPendingEditableActivation()
-            if isInteractionOverlayActive()
-                ? "[OVERLAY] quality-key => plus"
-                cycleInteractionOverlayQualityByDelta(1, "plus")
-                return true
-            end if
             if m.scrollModeEnabled
                 startHeldRemoteCommand(normalizedKey, "scroll-up")
             else
@@ -405,8 +441,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if isOptionsKey(normalizedKey)
             clearPendingEditableActivation()
             if isInteractionOverlayActive()
-                ? "[OVERLAY] quality-key => options"
-                cycleInteractionOverlayQualityByDelta(1, "options")
+                toggleInteractionOverlayQualityMenu("options")
                 return true
             end if
             sendRemoteCommand("enter")
@@ -659,6 +694,21 @@ sub applyBridgeResponse()
     activeSessionName = ""
     if json.activeSessions <> invalid and json.activeSessions.Count() > 0
         activeSessionName = getString(json.activeSessions[0].name, "")
+    end if
+
+    if json.displays <> invalid
+        for each display in json.displays
+            if getString(display.deviceId, "") = m.deviceId
+                detectedWidth = Int(getNumber(display.screenWidth, 0))
+                detectedHeight = Int(getNumber(display.screenHeight, 0))
+                if detectedWidth > 0 and detectedHeight > 0
+                    m.displayWidth = detectedWidth
+                    m.displayHeight = detectedHeight
+                    ? "[OVERLAY] display => "; m.displayWidth; "x"; m.displayHeight
+                end if
+                exit for
+            end if
+        end for
     end if
 
     previousSelectedId = ""
@@ -1172,6 +1222,7 @@ sub stopInteractionDirectVideoOverlay()
     m.interactionOverlaySelectedQualityIndex = 0
     m.interactionOverlayPendingSeekPosition = invalid
     m.interactionOverlaySourceUrl = ""
+    hideInteractionOverlayQualityMenu()
 end sub
 
 sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
@@ -1189,6 +1240,11 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
     overlayStreamUrl = getString(entry.directVideoStreamUrl, "")
     overlayStreamFormat = LCase(getString(entry.directVideoStreamFormat, ""))
     overlayQualityLabel = getString(entry.directVideoQualityLabel, "")
+    if overlaySourceUrl <> "" and overlaySourceUrl <> m.interactionOverlaySourceUrl
+        m.interactionOverlayAutoMode = true
+        m.interactionOverlayAutoDegradeLevel = 0
+        m.interactionOverlayAutoBufferingCount = 0
+    end if
     if not overlayEnabled or overlayStreamUrl = "" or overlayStreamFormat = ""
         if forceReload
             ? "[OVERLAY] inativo => enabled="; overlayEnabled; " stream="; overlayStreamUrl; " format="; overlayStreamFormat
@@ -1225,26 +1281,24 @@ sub syncInteractionDirectVideoOverlay(entry as object, forceReload as boolean)
         height: targetHeight
     }
     m.interactionOverlayQualityOptions = normalizeDirectVideoQualityOptions(entry.directVideoQualityOptions, overlayStreamUrl, overlayStreamFormat, overlayQualityLabel)
-    selectedStreamUrl = overlayStreamUrl
-    selectedQualityLabel = overlayQualityLabel
     selectedQualityIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, overlayStreamUrl, overlayQualityLabel)
-
-    if overlaySourceUrl <> "" and overlaySourceUrl = m.interactionOverlaySourceUrl and m.interactionOverlayAssignedStreamUrl <> ""
+    if m.interactionOverlayAutoMode
+        selectedQualityIndex = resolveInteractionOverlayAutoQualityIndex(m.interactionOverlayQualityOptions)
+    else if overlaySourceUrl <> "" and overlaySourceUrl = m.interactionOverlaySourceUrl and m.interactionOverlayAssignedStreamUrl <> ""
         preservedIndex = findDirectVideoQualityOptionIndex(m.interactionOverlayQualityOptions, m.interactionOverlayAssignedStreamUrl, "")
         if preservedIndex >= 0 and preservedIndex < m.interactionOverlayQualityOptions.Count()
-            preservedOption = m.interactionOverlayQualityOptions[preservedIndex]
-            preservedStreamUrl = getString(preservedOption.streamUrl, "")
-            preservedStreamFormat = LCase(getString(preservedOption.streamFormat, ""))
-            preservedQualityLabel = getString(preservedOption.label, "")
-            if preservedStreamUrl <> "" and preservedStreamFormat <> ""
-                selectedStreamUrl = preservedStreamUrl
-                overlayStreamFormat = preservedStreamFormat
-                selectedQualityLabel = preservedQualityLabel
-                selectedQualityIndex = preservedIndex
-            end if
+            selectedQualityIndex = preservedIndex
         end if
     end if
 
+    if selectedQualityIndex < 0 or selectedQualityIndex >= m.interactionOverlayQualityOptions.Count()
+        selectedQualityIndex = 0
+    end if
+
+    selectedOption = m.interactionOverlayQualityOptions[selectedQualityIndex]
+    selectedStreamUrl = getString(selectedOption.streamUrl, "")
+    overlayStreamFormat = LCase(getString(selectedOption.streamFormat, overlayStreamFormat))
+    selectedQualityLabel = getString(selectedOption.label, overlayQualityLabel)
     m.interactionOverlaySelectedQualityIndex = selectedQualityIndex
     applyInteractionOverlayLayout()
 
@@ -1327,7 +1381,7 @@ sub layoutInteractionOverlayControls()
         leftCapsuleWidth = 182
     end if
 
-    rightCapsuleWidth = 212
+    rightCapsuleWidth = 340
     titleCapsuleX = trackX + leftCapsuleWidth + 10
     titleCapsuleWidth = rect.width - leftCapsuleWidth - rightCapsuleWidth - 34
     if titleCapsuleWidth < 160
@@ -1366,12 +1420,14 @@ sub layoutInteractionOverlayControls()
     end if
     if m.interactionOverlayQualityButton <> invalid
         m.interactionOverlayQualityButton.translation = [rightCapsuleX + 12, buttonY + 6]
+        m.interactionOverlayQualityButton.width = 204
     end if
     if m.interactionOverlayQualityLabel <> invalid
         m.interactionOverlayQualityLabel.translation = [rightCapsuleX + 12, buttonY + 6]
+        m.interactionOverlayQualityLabel.width = 204
     end if
-    m.interactionOverlayFullscreenButton.translation = [rightCapsuleX + 96, buttonY + 6]
-    m.interactionOverlayFullscreenLabel.translation = [rightCapsuleX + 96, buttonY + 6]
+    m.interactionOverlayFullscreenButton.translation = [rightCapsuleX + 228, buttonY + 6]
+    m.interactionOverlayFullscreenLabel.translation = [rightCapsuleX + 228, buttonY + 6]
 
     m.interactionOverlayProgressTrackRect = {
         x: rect.x + trackX
@@ -1385,19 +1441,19 @@ sub layoutInteractionOverlayControls()
         width: 52
         height: 28
     }
+    m.interactionOverlayQualityButtonRect = {
+        x: rect.x + rightCapsuleX + 12
+        y: groupY + buttonY + 6
+        width: 204
+        height: 28
+    }
     m.interactionOverlayFullscreenButtonRect = {
-        x: rect.x + rightCapsuleX + 96
+        x: rect.x + rightCapsuleX + 228
         y: groupY + buttonY + 6
         width: 92
         height: 28
     }
-    m.interactionOverlayQualityButtonRect = {
-        x: rect.x + rightCapsuleX + 12
-        y: groupY + buttonY + 6
-        width: 74
-        height: 28
-    }
-
+    layoutInteractionOverlayQualityMenu(rect, groupY, rightCapsuleX + 12, buttonY + 6)
     refreshInteractionOverlayControls()
 end sub
 
@@ -1444,11 +1500,7 @@ sub refreshInteractionOverlayControls()
     end if
 
     if m.interactionOverlayQualityLabel <> invalid
-        currentQuality = getCurrentInteractionOverlayQualityLabel()
-        if currentQuality = ""
-            currentQuality = "Auto"
-        end if
-        m.interactionOverlayQualityLabel.text = currentQuality
+        m.interactionOverlayQualityLabel.text = getCurrentInteractionOverlayQualityButtonLabel()
     end if
 
     playHover = isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayPlayButtonRect) and m.interactionOverlayControlsVisible
@@ -1469,12 +1521,112 @@ sub refreshInteractionOverlayControls()
         end if
     end if
     if m.interactionOverlayQualityButton <> invalid
-        if qualityHover
+        if qualityHover or m.interactionOverlayQualityMenuVisible
             m.interactionOverlayQualityButton.color = "0xFF3B5C55"
         else
             m.interactionOverlayQualityButton.color = "0xFFFFFF18"
         end if
     end if
+
+    refreshInteractionOverlayQualityMenu()
+end sub
+
+sub layoutInteractionOverlayQualityMenu(rect as object, groupY as integer, buttonX as integer, buttonY as integer)
+    if m.interactionOverlayQualityMenuGroup = invalid or m.interactionOverlayQualityMenuBackground = invalid
+        return
+    end if
+
+    m.interactionOverlayQualityMenuRects = []
+    m.interactionOverlayQualityMenuNodeIndices = []
+
+    itemCount = getInteractionOverlayQualityMenuItemCount()
+    if itemCount <= 0
+        m.interactionOverlayQualityMenuGroup.visible = false
+        return
+    end if
+
+    menuWidth = 214
+    menuHeight = (itemCount * 32) + 6
+    menuX = buttonX
+    menuY = buttonY - menuHeight - 8
+    if menuY < 8
+        menuY = 8
+    end if
+
+    m.interactionOverlayQualityMenuGroup.translation = [menuX, menuY]
+    m.interactionOverlayQualityMenuBackground.width = menuWidth
+    m.interactionOverlayQualityMenuBackground.height = menuHeight
+
+    globalX = rect.x + menuX
+    globalY = groupY + menuY
+    for i = 0 to m.interactionOverlayQualityMenuItemBackgrounds.Count() - 1
+        itemBg = m.interactionOverlayQualityMenuItemBackgrounds[i]
+        itemLabel = m.interactionOverlayQualityMenuItemLabels[i]
+        if itemBg <> invalid and itemLabel <> invalid
+            if i < itemCount
+                itemY = 3 + (i * 32)
+                itemBg.translation = [4, itemY]
+                itemBg.width = menuWidth - 8
+                itemBg.height = 30
+                itemBg.visible = true
+
+                itemLabel.translation = [4, itemY]
+                itemLabel.width = menuWidth - 8
+                itemLabel.height = 30
+                itemLabel.visible = true
+
+                m.interactionOverlayQualityMenuRects.Push({
+                    x: globalX + 4
+                    y: globalY + itemY
+                    width: menuWidth - 8
+                    height: 30
+                })
+                m.interactionOverlayQualityMenuNodeIndices.Push(i)
+            else
+                itemBg.visible = false
+                itemLabel.visible = false
+            end if
+        end if
+    end for
+
+    m.interactionOverlayQualityMenuGroup.visible = m.interactionOverlayQualityMenuVisible and m.interactionOverlayControlsVisible
+end sub
+
+sub refreshInteractionOverlayQualityMenu()
+    if m.interactionOverlayQualityMenuGroup = invalid
+        return
+    end if
+
+    itemCount = getInteractionOverlayQualityMenuItemCount()
+    m.interactionOverlayQualityMenuGroup.visible = m.interactionOverlayQualityMenuVisible and m.interactionOverlayControlsVisible and itemCount > 0
+    if itemCount <= 0
+        return
+    end if
+
+    selectedMenuIndex = getInteractionOverlayQualityMenuSelectedIndex()
+    for i = 0 to m.interactionOverlayQualityMenuItemBackgrounds.Count() - 1
+        itemBg = m.interactionOverlayQualityMenuItemBackgrounds[i]
+        itemLabel = m.interactionOverlayQualityMenuItemLabels[i]
+        if itemBg <> invalid and itemLabel <> invalid
+            if i >= itemCount
+                itemBg.visible = false
+                itemLabel.visible = false
+            else
+                itemBg.visible = true
+                itemLabel.visible = true
+                itemLabel.text = getInteractionOverlayQualityMenuLabel(i)
+
+                hover = i < m.interactionOverlayQualityMenuRects.Count() and isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayQualityMenuRects[i]) and m.interactionOverlayQualityMenuVisible
+                if i = selectedMenuIndex
+                    itemBg.color = "0xE11D48CC"
+                else if hover
+                    itemBg.color = "0xFF3B5C55"
+                else
+                    itemBg.color = "0xFFFFFF18"
+                end if
+            end if
+        end if
+    end for
 end sub
 
 function fitOverlayTitle(textValue as string) as string
@@ -1511,6 +1663,9 @@ sub showInteractionOverlayControls(reason as string)
     m.interactionOverlayControlsLastActivity.Mark()
     m.interactionOverlayControlsVisible = true
     m.interactionOverlayControlsGroup.visible = true
+    if m.interactionOverlayQualityMenuVisible and m.interactionOverlayQualityMenuGroup <> invalid
+        m.interactionOverlayQualityMenuGroup.visible = true
+    end if
     ? "[OVERLAY] controls => show reason="; reason
     refreshInteractionOverlayControls()
 
@@ -1521,6 +1676,9 @@ sub showInteractionOverlayControls(reason as string)
 end sub
 
 sub hideInteractionOverlayControls()
+    if m.interactionOverlayQualityMenuVisible
+        return
+    end if
     m.interactionOverlayControlsVisible = false
     if m.interactionOverlayControlsGroup <> invalid
         m.interactionOverlayControlsGroup.visible = false
@@ -1540,6 +1698,13 @@ function shouldCaptureInteractionOverlayPointerInput() as boolean
 end function
 
 sub notifyInteractionOverlayPointerActivity()
+    hoveredMenuIndex = getInteractionOverlayHoveredQualityMenuIndex()
+    if hoveredMenuIndex >= 0
+        m.interactionOverlayQualityMenuSelectedIndex = hoveredMenuIndex
+        showInteractionOverlayControls("quality-menu-hover")
+        return
+    end if
+
     if not shouldCaptureInteractionOverlayPointerInput()
         return
     end if
@@ -1550,6 +1715,14 @@ end sub
 function getInteractionOverlayControlHitTarget() as string
     if not isInteractionOverlayActive() or not m.interactionOverlayControlsVisible
         return ""
+    end if
+
+    if m.interactionOverlayQualityMenuVisible
+        for i = 0 to m.interactionOverlayQualityMenuRects.Count() - 1
+            if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayQualityMenuRects[i])
+                return "quality-menu-" + i.ToStr()
+            end if
+        end for
     end if
 
     if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayPlayButtonRect)
@@ -1575,10 +1748,18 @@ function isPointInsideRect(x as integer, y as integer, rect as dynamic) as boole
 end function
 
 sub handleInteractionOverlayControlHit(target as string)
+    if Left(target, 13) = "quality-menu-"
+        indexValue = Val(Mid(target, 14))
+        ? "[OVERLAY] quality-menu => hit index="; indexValue
+        selectInteractionOverlayQualityMenuIndex(indexValue, "pointer")
+        showInteractionOverlayControls("quality-select")
+        return
+    end if
+
     if target = "play"
         toggleInteractionOverlayPlayback()
     else if target = "quality"
-        cycleInteractionOverlayQuality()
+        toggleInteractionOverlayQualityMenu("button")
     else if target = "fullscreen"
         toggleInteractionOverlayFullscreen()
     else if target = "progress"
@@ -1631,6 +1812,9 @@ sub cycleInteractionOverlayQualityByDelta(delta as integer, reason as string)
         return
     end if
 
+    m.interactionOverlayAutoMode = false
+    m.interactionOverlayAutoDegradeLevel = 0
+    m.interactionOverlayAutoBufferingCount = 0
     nextIndex = m.interactionOverlaySelectedQualityIndex + delta
     optionCount = m.interactionOverlayQualityOptions.Count()
     if optionCount <= 0
@@ -1643,7 +1827,89 @@ sub cycleInteractionOverlayQualityByDelta(delta as integer, reason as string)
         nextIndex = nextIndex - optionCount
     end while
 
-    option = m.interactionOverlayQualityOptions[nextIndex]
+    applyInteractionOverlayQualityOption(nextIndex, reason)
+end sub
+
+sub toggleInteractionOverlayQualityMenu(reason as string)
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    if m.interactionOverlayQualityMenuVisible
+        hideInteractionOverlayQualityMenu()
+        showInteractionOverlayControls("quality-menu-close")
+        return
+    end if
+
+    m.interactionOverlayQualityMenuVisible = true
+    m.interactionOverlayQualityMenuSelectedIndex = getInteractionOverlayQualityMenuSelectedIndex()
+    ? "[OVERLAY] quality-menu => open reason="; reason
+    showInteractionOverlayControls("quality-menu-open")
+    refreshInteractionOverlayControls()
+end sub
+
+sub hideInteractionOverlayQualityMenu()
+    m.interactionOverlayQualityMenuVisible = false
+    if m.interactionOverlayQualityMenuGroup <> invalid
+        m.interactionOverlayQualityMenuGroup.visible = false
+    end if
+end sub
+
+sub moveInteractionOverlayQualityMenuSelection(delta as integer)
+    itemCount = getInteractionOverlayQualityMenuItemCount()
+    if itemCount <= 0
+        return
+    end if
+
+    if not m.interactionOverlayQualityMenuVisible
+        toggleInteractionOverlayQualityMenu("direction")
+        return
+    end if
+
+    nextIndex = m.interactionOverlayQualityMenuSelectedIndex + delta
+    if nextIndex < 0
+        nextIndex = 0
+    else if nextIndex >= itemCount
+        nextIndex = itemCount - 1
+    end if
+    m.interactionOverlayQualityMenuSelectedIndex = nextIndex
+    showInteractionOverlayControls("quality-menu-nav")
+    refreshInteractionOverlayControls()
+end sub
+
+sub selectInteractionOverlayQualityMenuIndex(menuIndex as integer, reason as string)
+    itemCount = getInteractionOverlayQualityMenuItemCount()
+    if menuIndex < 0 or menuIndex >= itemCount
+        return
+    end if
+
+    ? "[OVERLAY] quality-menu => select index="; menuIndex; " reason="; reason; " label="; getInteractionOverlayQualityMenuLabel(menuIndex)
+    m.interactionOverlayQualityMenuSelectedIndex = menuIndex
+    hideInteractionOverlayQualityMenu()
+    if menuIndex = 0
+        m.interactionOverlayAutoMode = true
+        m.interactionOverlayAutoDegradeLevel = 0
+        m.interactionOverlayAutoBufferingCount = 0
+        autoIndex = resolveInteractionOverlayAutoQualityIndex(m.interactionOverlayQualityOptions)
+        applyInteractionOverlayQualityOption(autoIndex, "auto-" + reason)
+    else
+        m.interactionOverlayAutoMode = false
+        m.interactionOverlayAutoDegradeLevel = 0
+        m.interactionOverlayAutoBufferingCount = 0
+        applyInteractionOverlayQualityOption(menuIndex - 1, "manual-" + reason)
+    end if
+end sub
+
+sub applyInteractionOverlayQualityOption(optionIndex as integer, reason as string)
+    if not isInteractionOverlayActive()
+        return
+    end if
+
+    if optionIndex < 0 or optionIndex >= m.interactionOverlayQualityOptions.Count()
+        return
+    end if
+
+    option = m.interactionOverlayQualityOptions[optionIndex]
     streamUrl = getString(option.streamUrl, "")
     streamFormat = LCase(getString(option.streamFormat, ""))
     qualityLabel = getString(option.label, "")
@@ -1651,11 +1917,17 @@ sub cycleInteractionOverlayQualityByDelta(delta as integer, reason as string)
         return
     end if
 
+    if streamUrl = m.interactionOverlayAssignedStreamUrl
+        m.interactionOverlaySelectedQualityIndex = optionIndex
+        refreshInteractionOverlayControls()
+        return
+    end if
+
     resumeState = LCase(getString(m.fullscreenInteractionOverlayVideo.state, ""))
     currentPosition = getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
     shouldResume = resumeState = "playing" or resumeState = "buffering" or resumeState = "paused"
 
-    m.interactionOverlaySelectedQualityIndex = nextIndex
+    m.interactionOverlaySelectedQualityIndex = optionIndex
     if currentPosition > 0
         m.interactionOverlayPendingSeekPosition = currentPosition
     else
@@ -1884,6 +2156,24 @@ sub onInteractionOverlayVideoStateChanged()
 
     m.lastInteractionOverlayState = state
     ? "[OVERLAY] state => "; state; " pos="; getNumber(m.fullscreenInteractionOverlayVideo.position, 0.0)
+    if m.interactionOverlayAutoMode
+        if state = "playing"
+            m.interactionOverlayAutoBufferingCount = 0
+        else if state = "buffering"
+            m.interactionOverlayAutoBufferingCount = m.interactionOverlayAutoBufferingCount + 1
+            if m.interactionOverlayAutoBufferingCount >= 3
+                m.interactionOverlayAutoBufferingCount = 0
+                if tryDegradeInteractionOverlayAutoQuality("buffering")
+                    return
+                end if
+            end if
+        else if state = "error"
+            m.interactionOverlayAutoBufferingCount = 0
+            if tryDegradeInteractionOverlayAutoQuality("error")
+                return
+            end if
+        end if
+    end if
     refreshInteractionOverlayControls()
     if state <> "playing"
         showInteractionOverlayControls("state")
@@ -2718,6 +3008,11 @@ sub onInteractionOverlayControlsTimerFire()
         return
     end if
 
+    if m.interactionOverlayQualityMenuVisible
+        showInteractionOverlayControls("quality-menu")
+        return
+    end if
+
     if m.interactionOverlayControlsLastActivity.TotalMilliseconds() >= m.interactionOverlayControlsHideDelayMs
         hideInteractionOverlayControls()
     end if
@@ -3354,13 +3649,26 @@ function normalizeDirectVideoQualityOptions(options as dynamic, fallbackStreamUr
     for each option in getObjectArray(options)
         label = getString(option.label, "")
         streamUrl = getString(option.streamUrl, "")
-        streamFormat = getString(option.streamFormat, "")
+        streamFormat = LCase(getString(option.streamFormat, ""))
         if label <> "" and streamUrl <> "" and streamFormat <> ""
-            result.Push({
-                label: label
-                streamUrl: streamUrl
-                streamFormat: streamFormat
-            })
+            existingIndex = findDirectVideoQualityOptionIndex(result, "", label)
+            if existingIndex >= 0 and existingIndex < result.Count()
+                existingOption = result[existingIndex]
+                existingFormat = LCase(getString(existingOption.streamFormat, ""))
+                if existingFormat <> "hls" and streamFormat = "hls"
+                    result[existingIndex] = {
+                        label: label
+                        streamUrl: streamUrl
+                        streamFormat: streamFormat
+                    }
+                end if
+            else
+                result.Push({
+                    label: label
+                    streamUrl: streamUrl
+                    streamFormat: streamFormat
+                })
+            end if
         end if
     end for
 
@@ -3375,6 +3683,18 @@ function normalizeDirectVideoQualityOptions(options as dynamic, fallbackStreamUr
             streamFormat: fallbackStreamFormat
         })
     end if
+
+    for i = 0 to result.Count() - 2
+        for j = i + 1 to result.Count() - 1
+            leftHeight = getDirectVideoQualityHeight(getString(result[i].label, ""))
+            rightHeight = getDirectVideoQualityHeight(getString(result[j].label, ""))
+            if rightHeight > leftHeight
+                temp = result[i]
+                result[i] = result[j]
+                result[j] = temp
+            end if
+        end for
+    end for
 
     return result
 end function
@@ -3395,10 +3715,14 @@ function findDirectVideoQualityOptionIndex(options as dynamic, streamUrl as stri
         end if
     end for
 
-    return 0
+    return -1
 end function
 
 function getCurrentInteractionOverlayQualityLabel() as string
+    if m.interactionOverlayAutoMode
+        return "Auto"
+    end if
+
     if m.interactionOverlayQualityOptions = invalid or m.interactionOverlayQualityOptions.Count() = 0
         return ""
     end if
@@ -3408,6 +3732,187 @@ function getCurrentInteractionOverlayQualityLabel() as string
     end if
 
     return getString(m.interactionOverlayQualityOptions[m.interactionOverlaySelectedQualityIndex].label, "")
+end function
+
+function getCurrentInteractionOverlayQualityButtonLabel() as string
+    if m.interactionOverlayAutoMode
+        autoLabel = getCurrentInteractionOverlayAutoResolvedLabel()
+        if autoLabel <> ""
+            return "Auto (" + autoLabel + ")"
+        end if
+        return "Auto"
+    end if
+
+    currentQuality = getCurrentInteractionOverlayQualityLabel()
+    if currentQuality = ""
+        autoLabel = getCurrentInteractionOverlayAutoResolvedLabel()
+        if autoLabel <> ""
+            return "Auto (" + autoLabel + ")"
+        end if
+        return "Auto"
+    end if
+
+    return currentQuality
+end function
+
+function getInteractionOverlayQualityMenuItemCount() as integer
+    if m.interactionOverlayQualityOptions = invalid
+        return 1
+    end if
+
+    optionCount = m.interactionOverlayQualityOptions.Count() + 1
+    maxCount = m.interactionOverlayQualityMenuItemLabels.Count()
+    if optionCount > maxCount
+        optionCount = maxCount
+    end if
+    return optionCount
+end function
+
+function getInteractionOverlayQualityMenuLabel(menuIndex as integer) as string
+    if menuIndex = 0
+        autoLabel = getCurrentInteractionOverlayAutoResolvedLabel()
+        if autoLabel <> ""
+            return "Auto (" + autoLabel + ")"
+        end if
+        return "Auto"
+    end if
+
+    optionIndex = menuIndex - 1
+    if m.interactionOverlayQualityOptions = invalid or optionIndex < 0 or optionIndex >= m.interactionOverlayQualityOptions.Count()
+        return ""
+    end if
+
+    return getString(m.interactionOverlayQualityOptions[optionIndex].label, "")
+end function
+
+function getInteractionOverlayQualityMenuSelectedIndex() as integer
+    if m.interactionOverlayAutoMode
+        return 0
+    end if
+
+    indexValue = m.interactionOverlaySelectedQualityIndex + 1
+    itemCount = getInteractionOverlayQualityMenuItemCount()
+    if indexValue < 0
+        indexValue = 0
+    else if indexValue >= itemCount
+        indexValue = itemCount - 1
+    end if
+    return indexValue
+end function
+
+function getInteractionOverlayHoveredQualityMenuIndex() as integer
+    if not m.interactionOverlayQualityMenuVisible
+        return -1
+    end if
+
+    for i = 0 to m.interactionOverlayQualityMenuRects.Count() - 1
+        if isPointInsideRect(m.cursorX, m.cursorY, m.interactionOverlayQualityMenuRects[i])
+            return i
+        end if
+    end for
+
+    return -1
+end function
+
+function resolveInteractionOverlayAutoQualityIndex(options as dynamic) as integer
+    objectOptions = getObjectArray(options)
+    if objectOptions.Count() = 0
+        return 0
+    end if
+
+    targetHeight = m.displayHeight
+    if targetHeight >= 1080
+        targetHeight = 1080
+    else if targetHeight >= 720
+        targetHeight = 720
+    else if targetHeight >= 480
+        targetHeight = 480
+    end if
+
+    baseIndex = -1
+    for i = 0 to objectOptions.Count() - 1
+        optionHeight = getDirectVideoQualityHeight(getString(objectOptions[i].label, ""))
+        if optionHeight <= 0
+            optionHeight = 99999
+        end if
+        if optionHeight <= targetHeight
+            baseIndex = i
+            exit for
+        end if
+    end for
+
+    if baseIndex < 0
+        if getDirectVideoQualityHeight(getString(objectOptions[0].label, "")) <= 0
+            baseIndex = 0
+        else
+            baseIndex = objectOptions.Count() - 1
+        end if
+    end if
+
+    resolvedIndex = baseIndex + m.interactionOverlayAutoDegradeLevel
+    if resolvedIndex >= objectOptions.Count()
+        resolvedIndex = objectOptions.Count() - 1
+    end if
+    if resolvedIndex < 0
+        resolvedIndex = 0
+    end if
+    return resolvedIndex
+end function
+
+function getCurrentInteractionOverlayAutoResolvedLabel() as string
+    objectOptions = getObjectArray(m.interactionOverlayQualityOptions)
+    if objectOptions.Count() = 0
+        return ""
+    end if
+
+    autoIndex = resolveInteractionOverlayAutoQualityIndex(objectOptions)
+    if autoIndex < 0 or autoIndex >= objectOptions.Count()
+        return ""
+    end if
+
+    return getString(objectOptions[autoIndex].label, "")
+end function
+
+function tryDegradeInteractionOverlayAutoQuality(reason as string) as boolean
+    if not m.interactionOverlayAutoMode or m.interactionOverlayQualityOptions = invalid or m.interactionOverlayQualityOptions.Count() <= 1
+        return false
+    end if
+
+    currentAutoIndex = resolveInteractionOverlayAutoQualityIndex(m.interactionOverlayQualityOptions)
+    if currentAutoIndex >= m.interactionOverlayQualityOptions.Count() - 1
+        return false
+    end if
+
+    m.interactionOverlayAutoDegradeLevel = m.interactionOverlayAutoDegradeLevel + 1
+    nextAutoIndex = resolveInteractionOverlayAutoQualityIndex(m.interactionOverlayQualityOptions)
+    if nextAutoIndex = currentAutoIndex
+        return false
+    end if
+
+    ? "[OVERLAY] auto-quality => degrade level="; m.interactionOverlayAutoDegradeLevel; " reason="; reason
+    applyInteractionOverlayQualityOption(nextAutoIndex, "auto-" + reason)
+    return true
+end function
+
+function getDirectVideoQualityHeight(label as string) as integer
+    safeLabel = LCase(getString(label, ""))
+    numberText = ""
+    for i = 1 to Len(safeLabel)
+        ch = Mid(safeLabel, i, 1)
+        if ch >= "0" and ch <= "9"
+            numberText = numberText + ch
+        else if ch = "p" and numberText <> ""
+            return Val(numberText)
+        else if numberText <> ""
+            exit for
+        end if
+    end for
+
+    if numberText <> ""
+        return Val(numberText)
+    end if
+
+    return 0
 end function
 
 function clampNumber(value as double, minValue as double, maxValue as double) as double

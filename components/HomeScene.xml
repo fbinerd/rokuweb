@@ -193,13 +193,13 @@
         text="YouTube direto" />
       <Rectangle
         id="interactionOverlayQualityButton"
-        width="74"
+        width="204"
         height="28"
         translation="[506,28]"
         color="0xFFFFFF18" />
       <Label
         id="interactionOverlayQualityLabel"
-        width="74"
+        width="204"
         height="28"
         translation="[506,28]"
         horizAlign="center"
@@ -207,6 +207,142 @@
         color="0xFFFFFFFF"
         font="font:SmallSystemFont"
         text="Auto" />
+      <Group id="interactionOverlayQualityMenuGroup" translation="[0,0]" visible="false">
+        <Rectangle
+          id="interactionOverlayQualityMenuBackground"
+          width="214"
+          height="36"
+          translation="[0,0]"
+          color="0x111111EE" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg0"
+          width="206"
+          height="30"
+          translation="[4,3]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel0"
+          width="206"
+          height="30"
+          translation="[4,3]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg1"
+          width="206"
+          height="30"
+          translation="[4,35]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel1"
+          width="206"
+          height="30"
+          translation="[4,35]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg2"
+          width="206"
+          height="30"
+          translation="[4,67]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel2"
+          width="206"
+          height="30"
+          translation="[4,67]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg3"
+          width="206"
+          height="30"
+          translation="[4,99]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel3"
+          width="206"
+          height="30"
+          translation="[4,99]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg4"
+          width="206"
+          height="30"
+          translation="[4,131]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel4"
+          width="206"
+          height="30"
+          translation="[4,131]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg5"
+          width="206"
+          height="30"
+          translation="[4,163]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel5"
+          width="206"
+          height="30"
+          translation="[4,163]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg6"
+          width="206"
+          height="30"
+          translation="[4,195]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel6"
+          width="206"
+          height="30"
+          translation="[4,195]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg7"
+          width="206"
+          height="30"
+          translation="[4,227]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel7"
+          width="206"
+          height="30"
+          translation="[4,227]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+      </Group>
       <Rectangle
         id="interactionOverlayFullscreenButton"
         width="92"
