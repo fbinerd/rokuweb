@@ -1977,6 +1977,17 @@ public sealed class LocalWebRtcPublisherService
                 ? ", diag=" + _browserPanelRollingHlsService.GetDiagnosticStatus(window.Id)
                 : string.Empty;
 
+
+
+        if (string.IsNullOrWhiteSpace(unifiedPanelStreamUrl))
+        {
+            AppLog.Write("PanelRollingHls", $"[BridgeSnapshot] Stream URL vazio para janela {window.Id:N}. HLS disponível: {_browserPanelRollingHlsService.IsAvailable}, medium.m3u8: {_browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8")}, modo={streamingMode}, publishedUrl={publishedUrl}");
+        }
+        else
+        {
+            AppLog.Write("PanelRollingHls", $"[BridgeSnapshot] Stream URL atribuído para janela {window.Id:N}: {unifiedPanelStreamUrl}");
+        }
+
         var bridgeSnapshotMessage = string.Format(
             "Bridge snapshot => janela={0}, modo={1}, stream={2}, autoFullscreen={3}, hlsReady={4}{5}",
             window.Id.ToString("N"),
@@ -1994,6 +2005,7 @@ public sealed class LocalWebRtcPublisherService
             State = window.State.ToString(),
             InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
             PublishedWebRtcUrl = publishedUrl,
+            // StreamUrl: always set to the HLS URL if available and ready, otherwise fallback to publishedUrl
             StreamUrl = string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? publishedUrl : unifiedPanelStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
