@@ -2159,9 +2159,12 @@ public sealed class LocalWebRtcPublisherService
     {
         if (string.IsNullOrWhiteSpace(sourceUrl))
         {
+            AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] sourceUrl vazio ou nulo");
             return string.Empty;
         }
 
+        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Recebido: {sourceUrl}");
+        string normalized = sourceUrl;
         try
         {
             var uri = new Uri(sourceUrl, UriKind.Absolute);
@@ -2169,9 +2172,11 @@ public sealed class LocalWebRtcPublisherService
             if (host.IndexOf("youtu.be", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 var videoId = uri.AbsolutePath.Trim('/').Split('/')[0];
-                return string.IsNullOrWhiteSpace(videoId)
+                normalized = string.IsNullOrWhiteSpace(videoId)
                     ? sourceUrl
                     : string.Format("https://www.youtube.com/watch?v={0}", videoId);
+                AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtu.be detectado, normalizado: {normalized}");
+                return normalized;
             }
 
             if (host.IndexOf("youtube.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -2181,9 +2186,11 @@ public sealed class LocalWebRtcPublisherService
                 {
                     var query = ParseQueryString(uri.Query.TrimStart('?'));
                     var videoId = GetValue(query, "v");
-                    return string.IsNullOrWhiteSpace(videoId)
+                    normalized = string.IsNullOrWhiteSpace(videoId)
                         ? sourceUrl
                         : string.Format("https://www.youtube.com/watch?v={0}", videoId);
+                    AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtube.com/watch detectado, normalizado: {normalized}");
+                    return normalized;
                 }
 
                 if (uri.AbsolutePath.IndexOf("/embed/", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2192,16 +2199,20 @@ public sealed class LocalWebRtcPublisherService
                     var embedIndex = Array.FindIndex(segments, segment => string.Equals(segment, "embed", StringComparison.OrdinalIgnoreCase));
                     if (embedIndex >= 0 && embedIndex + 1 < segments.Length && !string.IsNullOrWhiteSpace(segments[embedIndex + 1]))
                     {
-                        return string.Format("https://www.youtube.com/watch?v={0}", segments[embedIndex + 1]);
+                        normalized = string.Format("https://www.youtube.com/watch?v={0}", segments[embedIndex + 1]);
+                        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtube.com/embed detectado, normalizado: {normalized}");
+                        return normalized;
                     }
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Exceção ao normalizar: {ex.Message}");
         }
 
-        return sourceUrl;
+        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Retornando original: {normalized}");
+        return normalized;
     }
 
     private static double ClampNormalizedCoordinate(double value)
