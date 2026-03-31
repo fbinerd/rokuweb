@@ -21,17 +21,80 @@ public partial class App : Application
         var toolsDir = Path.Combine(baseDirectory, "tools");
 
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
+
         SplashScreen splash = new SplashScreen();
         splash.Show();
         splash.SetStatus("Verificando dependências...", 0);
         try
         {
-            // Verifica e baixa dependências externas com barra de progresso
+            // 1. Verifica e baixa dependências externas
             await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(toolsDir, (msg, progress) =>
             {
                 splash.Dispatcher.Invoke(() => splash.SetStatus(msg, progress));
             });
             splash.SetStatus("Dependências prontas!", 100);
+
+            // 2. Seleção de canal
+            string[] canais = new[] { "stable", "develop", "local" };
+            string canalSelecionado = "stable";
+            splash.Dispatcher.Invoke(() => {
+                var dlg = new Window { Title = "Selecionar Canal", Width = 260, Height = 180, WindowStartupLocation = WindowStartupLocation.CenterScreen, Owner = splash };
+                var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
+                var combo = new System.Windows.Controls.ComboBox { ItemsSource = canais, SelectedValue = "stable" };
+                panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Escolha o canal de atualização:", Margin = new Thickness(0,0,0,8), Foreground = System.Windows.Media.Brushes.White });
+                panel.Children.Add(combo);
+                var btn = new System.Windows.Controls.Button { Content = "OK", Margin = new Thickness(0,10,0,0), IsDefault = true };
+                btn.Click += (_,__) => { canalSelecionado = combo.SelectedValue?.ToString() ?? "stable"; dlg.DialogResult = true; dlg.Close(); };
+                panel.Children.Add(btn);
+                dlg.Content = panel;
+                dlg.ShowDialog();
+            });
+            splash.SetStatus($"Canal selecionado: {canalSelecionado}", 100);
+
+            // 3. Checagem de update
+            splash.SetStatus("Checando atualizações...", 30);
+            var manifestService = new AppUpdateManifestService();
+            var updateResult = await manifestService.CheckForUpdateAsync(canalSelecionado, CancellationToken.None);
+            if (!updateResult.UpdateAvailable)
+            {
+                splash.SetStatus("Nenhuma atualização disponível.", 100);
+            }
+            else
+            {
+                splash.SetStatus($"Update disponível: {updateResult.LatestVersion}", 40);
+                // 4. Backup automático
+                var maintenanceService = new AppDataMaintenanceService();
+                string backupPath = string.Empty;
+                try
+                {
+                    backupPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManagerBroadcast", "backups", $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
+                    await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
+                    splash.SetStatus($"Backup criado: {backupPath}", 50);
+                }
+                catch (Exception ex)
+                {
+                    splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50);
+                }
+                // 5. Download e aplicação do update
+                splash.SetStatus("Baixando e aplicando update...", 70);
+                var selfUpdateService = new AppSelfUpdateService();
+                var updateResult2 = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
+                if (!updateResult2.Succeeded)
+                {
+                    splash.SetStatus($"Falha ao aplicar update: {updateResult2.Message}", 100);
+                    // 6. Restauração do backup
+                    if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
+                    {
+                        splash.SetStatus("Restaurando backup...", 90);
+                        await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
+                        splash.SetStatus("Backup restaurado.", 100);
+                    }
+                    MessageBox.Show($"Falha ao aplicar update: {updateResult2.Message}\nBackup restaurado.", "Erro de Update", MessageBoxButton.OK, MessageBoxImage.Error);
+                    Shutdown(-1);
+                    return;
+                }
+                splash.SetStatus("Update aplicado com sucesso!", 100);
+            }
 
             RegisterGlobalDiagnostics();
             _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Local\WindowManagerBroadcast.SingleInstance", createdNew: out var createdNew);

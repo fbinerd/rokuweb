@@ -56,3 +56,4 @@ if (-not $exeFile) {
 
 Start-Process -FilePath $exeFile.FullName -WorkingDirectory $exeFile.DirectoryName
 Write-Host "Aplicativo compilado e aberto."
+exit 0
