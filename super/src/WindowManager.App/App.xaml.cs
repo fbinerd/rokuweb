@@ -14,18 +14,31 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
     private string _watchdogToken = string.Empty;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         var baseDirectory = AppContext.BaseDirectory;
         var startupLogPath = Path.Combine(baseDirectory, "startup.log");
+        var toolsDir = Path.Combine(baseDirectory, "tools");
 
+        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
+        SplashScreen splash = new SplashScreen();
+        splash.Show();
+        splash.SetStatus("Verificando dependências...", 0);
         try
         {
+            // Verifica e baixa dependências externas com barra de progresso
+            await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(toolsDir, (msg, progress) =>
+            {
+                splash.Dispatcher.Invoke(() => splash.SetStatus(msg, progress));
+            });
+            splash.SetStatus("Dependências prontas!", 100);
+
             RegisterGlobalDiagnostics();
             _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Local\WindowManagerBroadcast.SingleInstance", createdNew: out var createdNew);
             if (!createdNew)
             {
                 File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Secondary instance blocked{Environment.NewLine}");
+                splash.Close();
                 Shutdown(0);
                 return;
             }
@@ -62,8 +75,8 @@ public partial class App : Application
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After CreateMainWindow{Environment.NewLine}");
             MainWindow = mainWindow;
             mainWindow.Show();
-            AppLog.Write("App", "MainWindow exibida");
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After mainWindow.Show{Environment.NewLine}");
+            AppLog.Write("App", "MainWindow exibida");
         }
         catch (Exception ex)
         {
@@ -73,6 +86,11 @@ public partial class App : Application
             MessageBox.Show(ex.ToString(), "Falha ao iniciar", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
         }
+        finally
+        {
+            splash.Close();
+        }
+        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup END{Environment.NewLine}");
     }
 
     protected override void OnExit(ExitEventArgs e)

@@ -55,67 +55,80 @@ public partial class MainWindow : Window
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
-        InitializeComponent();
-
-        _viewModel = viewModel;
-        _browserSnapshotService = browserSnapshotService;
-        _browserAudioCaptureService = browserAudioCaptureService;
-        DataContext = viewModel;
-
-        _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
-        _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-
-        foreach (var stream in _viewModel.WindowProfiles)
+        try
         {
-            stream.PropertyChanged += OnWindowProfilePropertyChanged;
-            stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
-            foreach (var item in stream.Windows)
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor START\n");
+            InitializeComponent();
+
+            _viewModel = viewModel;
+            _browserSnapshotService = browserSnapshotService;
+            _browserAudioCaptureService = browserAudioCaptureService;
+            DataContext = viewModel;
+
+            _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
+            _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+
+            foreach (var stream in _viewModel.WindowProfiles)
             {
-                item.PropertyChanged += OnWindowProfileItemPropertyChanged;
-                AddStreamDefinitionPreview(stream, item);
+                stream.PropertyChanged += OnWindowProfilePropertyChanged;
+                stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
+                foreach (var item in stream.Windows)
+                {
+                    item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                    AddStreamDefinitionPreview(stream, item);
+                }
             }
+
+            RefreshStreamPreviewSections();
+
+            foreach (var window in _viewModel.Windows)
+            {
+                AddPreview(window);
+            }
+
+            _previewRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(120)
+            };
+            _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
+
+            _expandedPreviewRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(180)
+            };
+            _expandedPreviewRefreshTimer.Tick += OnExpandedPreviewRefreshTimerTick;
+
+            _notifyIcon = CreateNotifyIcon();
+
+            Loaded += OnLoaded;
+            StateChanged += OnStateChanged;
+            UpdateSelectionVisuals();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor END\n");
         }
-
-        RefreshStreamPreviewSections();
-
-        foreach (var window in _viewModel.Windows)
+        catch (Exception ex)
         {
-            AddPreview(window);
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor EXCEPTION: {ex}\n");
+            throw;
         }
-
-        _previewRefreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(120)
-        };
-        _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
-
-        _expandedPreviewRefreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(180)
-        };
-        _expandedPreviewRefreshTimer.Tick += OnExpandedPreviewRefreshTimerTick;
-
-        _notifyIcon = CreateNotifyIcon();
-
-        Loaded += OnLoaded;
-        StateChanged += OnStateChanged;
-        UpdateSelectionVisuals();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         Loaded -= OnLoaded;
-
+        File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded START\n");
         try
         {
             await _viewModel.InitializeAfterStartupAsync();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow InitializeAfterStartupAsync END\n");
             RefreshStreamProfilesListView();
             await Dispatcher.InvokeAsync(RefreshStreamProfilesListView, DispatcherPriority.Background);
             ApplyPreviewMode();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded END\n");
         }
         catch (Exception ex)
         {
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded EXCEPTION: {ex}\n");
             _viewModel.ReportStartupFailure(string.Format("Falha ao restaurar a inicializacao automatica: {0}", ex.Message));
         }
     }
