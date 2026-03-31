@@ -109,11 +109,29 @@ public sealed class BrowserPanelInteractionHlsService
 
     private static string ResolveFfmpegPath()
     {
+        // Caminho direto relativo ao diretório base
+        string baseDir = AppContext.BaseDirectory;
+        string directPath = Path.Combine(baseDir, "tools", "ffmpeg", "ffmpeg.exe");
+        AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Testando caminho direto: {directPath}");
+        if (File.Exists(directPath))
+        {
+            AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Encontrado arquivo direto: {directPath}");
+            return Path.GetFullPath(directPath);
+        }
+
+        // Caminho detectado por TryResolveRepositoryFfmpegPath
+        string repoPath = TryResolveRepositoryFfmpegPath();
+        AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] TryResolveRepositoryFfmpegPath retornou: {repoPath}");
+        if (!string.IsNullOrWhiteSpace(repoPath) && File.Exists(repoPath))
+        {
+            AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Encontrado arquivo repo: {repoPath}");
+            return Path.GetFullPath(repoPath);
+        }
+
         var candidates = new[]
         {
             Environment.GetEnvironmentVariable("SUPERPAINEL_FFMPEG_PATH"),
             Environment.GetEnvironmentVariable("FFMPEG_PATH"),
-            TryResolveRepositoryFfmpegPath(),
             "ffmpeg"
         };
 
@@ -121,8 +139,10 @@ public sealed class BrowserPanelInteractionHlsService
         {
             try
             {
+                AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Testando candidato: {candidate}");
                 if (File.Exists(candidate))
                 {
+                    AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Encontrado arquivo: {candidate}");
                     return Path.GetFullPath(candidate);
                 }
 
@@ -137,20 +157,28 @@ public sealed class BrowserPanelInteractionHlsService
                 });
                 if (process is null)
                 {
+                    AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Falha ao iniciar processo para: {candidate}");
                     continue;
                 }
 
                 process.WaitForExit(1500);
                 if (process.ExitCode == 0)
                 {
+                    AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Processo OK para: {candidate}");
                     return candidate;
                 }
+                else
+                {
+                    AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Processo retornou código {process.ExitCode} para: {candidate}");
+                }
             }
-            catch
+            catch (Exception ex)
             {
+                AppLog.Write("PanelInteractionHls", $"[ffmpeg-detect] Exceção ao testar {candidate}: {ex.Message}");
             }
         }
 
+        AppLog.Write("PanelInteractionHls", "[ffmpeg-detect] Nenhum candidato válido encontrado para ffmpeg.exe");
         return string.Empty;
     }
 

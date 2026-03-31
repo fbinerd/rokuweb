@@ -408,10 +408,17 @@ public sealed class WindowProfileSetupViewModel : ViewModelBase
 
     public void AddOrUpdateWindow(string? nickname, string? url, WindowLinkEditorViewModel? existingWindow = null)
     {
+
         var normalizedUrl = url?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(normalizedUrl))
         {
             return;
+        }
+        // Auto-complete: adiciona http:// se não houver protocolo
+        if (!normalizedUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !normalizedUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            normalizedUrl = "http://" + normalizedUrl;
         }
 
         var normalizedNickname = nickname?.Trim() ?? string.Empty;
