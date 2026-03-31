@@ -54,8 +54,8 @@ public sealed class MainViewModel : ViewModelBase
     private WindowProfileViewModel? _selectedWindowProfile;
     private StaticDisplayPanelViewModel? _selectedStaticPanel;
     private string _profileName = "default";
-    private string _browserUrlInput = "https://emei.lovable.app";
-    private string _currentBrowserAddress = "https://emei.lovable.app";
+    private string _browserUrlInput = "https://SEU_SITE_AQUI";
+    private string _currentBrowserAddress = "https://SEU_SITE_AQUI";
     private int _webRtcServerPort = 8090;
     private WebRtcBindMode _webRtcBindMode = WebRtcBindMode.Lan;
     private string _webRtcSpecificIp = string.Empty;
