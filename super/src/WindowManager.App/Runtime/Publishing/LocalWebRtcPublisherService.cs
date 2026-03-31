@@ -1998,6 +1998,21 @@ public sealed class LocalWebRtcPublisherService
             videoDiagnostics);
         MaybeLogBridgeSnapshot(window.Id, bridgeSnapshotMessage);
 
+        // Log detalhado para diagnóstico
+        AppLog.Write(
+            "PanelRollingHls",
+            "[DEBUG] BuildWindowSnapshot: Id=" + window.Id.ToString("N") +
+            ", StreamingMode=" + streamingMode +
+            ", PublishedWebRtcUrl=" + publishedUrl +
+            ", UnifiedPanelStreamUrl=" + unifiedPanelStreamUrl +
+            ", StreamUrl=" + (string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? publishedUrl : unifiedPanelStreamUrl) +
+            ", AutoOpenFullscreen=" + autoOpenFullscreen +
+            ", IsPrimaryExclusive=" + window.IsPrimaryExclusive +
+            ", PanelHlsReady=" + panelHlsReady +
+            ", HlsAvailable=" + _browserPanelRollingHlsService.IsAvailable +
+            ", HasMediumM3u8=" + _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8")
+        );
+
         return new BridgeWindowSnapshot
         {
             Id = window.Id.ToString("N"),
