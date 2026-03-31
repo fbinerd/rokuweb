@@ -2330,23 +2330,30 @@ public sealed class LocalWebRtcPublisherService
     private static YouTubeDirectResolveResult ResolveYoutubeDirectPlayback(string youtubeUrl)
     {
         var repoRoot = TryFindMonorepoRoot();
-        if (string.IsNullOrWhiteSpace(repoRoot))
+        string ytDlpPath = string.Empty;
+        if (!string.IsNullOrWhiteSpace(repoRoot))
         {
-            return YouTubeDirectResolveResult.Fail("repo_nao_encontrado");
+            ytDlpPath = Path.Combine(repoRoot, "tools", "yt-dlp", "yt-dlp.exe");
         }
-
-        var ytDlpPath = Path.Combine(repoRoot, "tools", "yt-dlp", "yt-dlp.exe");
+        // fallback: procurar no caminho do executável
+        if (string.IsNullOrWhiteSpace(ytDlpPath) || !File.Exists(ytDlpPath))
+        {
+            var exeDir = AppContext.BaseDirectory;
+            var fallbackPath = Path.Combine(exeDir, "tools", "yt-dlp", "yt-dlp.exe");
+            if (File.Exists(fallbackPath))
+            {
+                ytDlpPath = fallbackPath;
+            }
+        }
         var nodePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
-        if (!File.Exists(ytDlpPath))
+        if (string.IsNullOrWhiteSpace(ytDlpPath) || !File.Exists(ytDlpPath))
         {
             return YouTubeDirectResolveResult.Fail("yt_dlp_ausente");
         }
-
         if (!File.Exists(nodePath))
         {
             return YouTubeDirectResolveResult.Fail("node_ausente");
         }
-
         var jsRuntime = string.Format("node:{0}", nodePath);
         var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl);
         if (scannedQualityOptions.Count > 0)
