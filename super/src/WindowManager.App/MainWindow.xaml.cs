@@ -139,8 +139,6 @@ public partial class MainWindow : Window
         File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded START\n");
         try
         {
-            await _viewModel.InitializeAfterStartupAsync();
-            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow InitializeAfterStartupAsync END\n");
             RefreshStreamProfilesListView();
             await Dispatcher.InvokeAsync(RefreshStreamProfilesListView, DispatcherPriority.Background);
             ApplyPreviewMode();
@@ -1419,6 +1417,15 @@ public partial class MainWindow : Window
             e.Cancel = true;
             HideToTray();
             return;
+        }
+
+        try
+        {
+            _viewModel.FlushUpdatePreferencesAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] Falha ao persistir preferencias de update no fechamento: {ex}\n");
         }
 
         base.OnClosing(e);

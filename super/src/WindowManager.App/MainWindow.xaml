@@ -282,6 +282,10 @@
                         <CheckBox Content="Baixar e aplicar atualizacoes automaticamente ao iniciar"
                                   IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}"
                                   IsEnabled="{Binding IsAutomaticUpdateToggleEnabled}" />
+                        <CheckBox Margin="0,8,0,0"
+                                  Content="Marcar branch atual como default"
+                                  IsChecked="{Binding RememberUpdateChannelSelection, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding IsUpdateChannelDefaultToggleEnabled}" />
                         <TextBlock Margin="0,8,0,0"
                                    Text="Canal de atualizacao"
                                    FontWeight="SemiBold" />

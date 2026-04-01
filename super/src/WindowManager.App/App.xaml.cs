@@ -3,11 +3,12 @@ using CefSharp.Wpf;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using WindowManager.App.Profiles;
 using WindowManager.App.Runtime;
+using WindowManager.App.ViewModels;
 
 namespace WindowManager.App;
 
@@ -20,12 +21,13 @@ public partial class App : Application
     {
         var previousShutdownMode = ShutdownMode;
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        // Captura exceções globais não tratadas
+
         AppDomain.CurrentDomain.UnhandledException += (s, ex) =>
         {
             File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [GLOBAL] UnhandledException: {ex.ExceptionObject}\n");
         };
-        this.DispatcherUnhandledException += (s, ex) =>
+
+        DispatcherUnhandledException += (s, ex) =>
         {
             File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [GLOBAL] DispatcherUnhandledException: {ex.Exception}\n");
             ex.Handled = true;
@@ -34,318 +36,254 @@ public partial class App : Application
         var baseDirectory = AppContext.BaseDirectory;
         var startupLogPath = Path.Combine(baseDirectory, "startup.log");
         var toolsDir = Path.Combine(baseDirectory, "tools");
-
-        // Força log também em local garantido para diagnóstico
         var forcedLogPath = "C:/Users/user/Documents/app/rokuweb/startup.log";
+        var profileStore = new ProfileStore();
+        var preferenceStore = new AppUpdatePreferenceStore();
+
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
         File.AppendAllText(forcedLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
 
-
-        // Função auxiliar para log detalhado
-        void LogStep(string msg)
+        void LogStep(string message)
         {
-            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] {msg}{Environment.NewLine}");
-            File.AppendAllText(forcedLogPath, $"[{DateTime.Now:O}] {msg}{Environment.NewLine}");
+            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] {message}{Environment.NewLine}");
+            File.AppendAllText(forcedLogPath, $"[{DateTime.Now:O}] {message}{Environment.NewLine}");
         }
 
-        LogStep("Antes de declarar SplashScreen splash");
-        SplashScreen splash = null;
-        LogStep("Depois de declarar SplashScreen splash");
-        TaskCompletionSource<bool> updateDone;
-        LogStep("Depois de declarar updateDone");
+        SplashScreen? splash = null;
+
         try
         {
-            LogStep("Dentro do try inicial");
+            LogStep("OnStartup inicializando updater");
             splash = new SplashScreen();
-            LogStep("SplashScreen instanciada");
-            updateDone = new TaskCompletionSource<bool>();
-            LogStep("TaskCompletionSource criado");
-            // Lê config do usuário
-            var profileStore = new ProfileStore();
+
             var startupProfileName = await profileStore.GetStartupProfileNameAsync(CancellationToken.None);
             var startupProfile = await profileStore.LoadAsync(startupProfileName, CancellationToken.None);
-            LogStep($"Startup profile: {startupProfileName}");
-            string defaultBranch = UpdateChannelNames.Stable;
-            bool autoUpdate = false;
-            bool setDefaultBranch = false;
-            if (startupProfile is not null)
-            {
-                defaultBranch = UpdateChannelNames.Normalize(startupProfile.UpdateChannel);
-                autoUpdate = startupProfile.AutoUpdateEnabled;
-                setDefaultBranch = startupProfile.RememberUpdateChannelSelection;
-            }
-            else
-            {
-                autoUpdate = false; // valor padrão sempre desmarcado
-                LogStep("Config não existe, autoUpdate = false");
-            }
-            autoUpdate = autoUpdate && setDefaultBranch;
-            LogStep($"defaultBranch={defaultBranch}, autoUpdate={autoUpdate}, setDefaultBranch={setDefaultBranch}");
+            var startupPreferences = await preferenceStore.LoadAsync(CancellationToken.None);
+            var startupSettings = BuildStartupUpdateSettings(startupProfile, startupPreferences);
+            LogStep(
+                $"Startup settings: profile={startupProfileName}, branch={startupSettings.Channel}, " +
+                $"auto={startupSettings.AutoUpdateEnabled}, default={startupSettings.RememberDefaultBranch}");
 
-            // Exibe versões antes de qualquer download
-            splash.SetInstalledVersion(WindowManager.App.Runtime.BuildVersionInfo.Version + " (" + WindowManager.App.Runtime.BuildVersionInfo.ReleaseId + ")");
-            string[] canais = new[] { "stable", "develop", "local" };
-            string canalSelecionado = defaultBranch;
-            bool autoUpdateChecked = autoUpdate;
-            autoUpdateChecked = false; // Força update manual, nunca automático
-            autoUpdateChecked = autoUpdate;
             var manifestService = new AppUpdateManifestService();
-            Dictionary<string, AppUpdateCheckResult>? prefetchedUpdates = null;
+            var channels = new[] { UpdateChannelNames.Stable, UpdateChannelNames.Develop, UpdateChannelNames.Local };
+            var prefetchedUpdates = await PrefetchUpdateInfoAsync(manifestService, channels, LogStep);
 
-            async Task<Dictionary<string, AppUpdateCheckResult>?> PrefetchUpdateInfoAsync()
+            if (prefetchedUpdates is not null)
             {
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                var results = new Dictionary<string, AppUpdateCheckResult>(StringComparer.OrdinalIgnoreCase);
-
-                try
-                {
-                    foreach (var branch in canais)
-                    {
-                        results[branch] = await manifestService.CheckForUpdateAsync(branch, timeoutCts.Token);
-                    }
-
-                    return results;
-                }
-                catch (OperationCanceledException)
-                {
-                    LogStep("Prefetch de updates excedeu o timeout. Abrindo o app sem atualizador.");
-                    return null;
-                }
-                catch (Exception ex)
-                {
-                    LogStep($"Falha ao buscar versoes remotas antes do splash: {ex}");
-                    return null;
-                }
-            }
-
-            string FormatRemoteVersion(AppUpdateCheckResult? result)
-            {
-                if (result is null)
-                {
-                    return "-";
-                }
-
-                if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
-                {
-                    return $"{result.LatestVersion} (build {result.LatestReleaseId})";
-                }
-
-                return !string.IsNullOrEmpty(result.LatestVersion) ? result.LatestVersion : "-";
-            }
-
-            prefetchedUpdates = await PrefetchUpdateInfoAsync();
-            var shouldShowUpdater = prefetchedUpdates is not null;
-
-            if (shouldShowUpdater)
-            {
-                splash.SetInstalledVersion(WindowManager.App.Runtime.BuildVersionInfo.Version + " (" + WindowManager.App.Runtime.BuildVersionInfo.ReleaseId + ")");
-                splash.Show();
-                LogStep("SplashScreen.Show chamado");
+                splash.SetInstalledVersion($"{BuildVersionInfo.Version} ({BuildVersionInfo.ReleaseId})");
+                splash.SetChannels(channels, startupSettings.Channel);
+                splash.SetSetDefaultBranchChecked(startupSettings.RememberDefaultBranch);
+                splash.SetAutoUpdateChecked(startupSettings.AutoUpdateEnabled && startupSettings.RememberDefaultBranch);
                 splash.ShowProgressBar(false);
-                LogStep("SplashScreen.ShowProgressBar(false) chamado");
-            }
-            else
-            {
-                updateDone.SetResult(true);
-            }
-            async Task SaveStartupUpdateSettingsAsync()
-            {
-                var profileToSave = startupProfile ?? new AppProfile { Name = startupProfileName };
-                profileToSave.AutoUpdateEnabled = autoUpdateChecked;
-                profileToSave.RememberUpdateChannelSelection = setDefaultBranch;
-                if (setDefaultBranch)
+                splash.Show();
+
+                await UpdateRemoteVersionAsync(
+                    splash,
+                    startupSettings.Channel,
+                    manifestService,
+                    prefetchedUpdates,
+                    LogStep);
+
+                splash.ChannelCombo.SelectionChanged += async (_, __) =>
                 {
-                    profileToSave.UpdateChannel = UpdateChannelNames.Normalize(canalSelecionado);
-                }
-                else if (string.IsNullOrWhiteSpace(profileToSave.UpdateChannel))
+                    await UpdateRemoteVersionAsync(
+                        splash,
+                        splash.SelectedChannel,
+                        manifestService,
+                        prefetchedUpdates,
+                        LogStep);
+                };
+
+                var selectedChannel = splash.SelectedChannel;
+                var autoUpdateChecked = splash.IsAutoUpdateChecked;
+                var rememberDefaultBranch = splash.IsSetDefaultBranchChecked;
+
+                async Task SaveSettingsAsync()
                 {
-                    profileToSave.UpdateChannel = UpdateChannelNames.Stable;
+                    selectedChannel = UpdateChannelNames.Normalize(splash.SelectedChannel);
+                    autoUpdateChecked = splash.IsAutoUpdateChecked;
+                    rememberDefaultBranch = splash.IsSetDefaultBranchChecked;
+
+                    var effectiveAutoUpdate = autoUpdateChecked && rememberDefaultBranch;
+                    var profileToSave = startupProfile ?? new AppProfile { Name = startupProfileName };
+                    profileToSave.UpdateChannel = selectedChannel;
+                    profileToSave.AutoUpdateEnabled = effectiveAutoUpdate;
+                    profileToSave.RememberUpdateChannelSelection = rememberDefaultBranch;
+                    await profileStore.SaveAsync(profileToSave, CancellationToken.None);
+
+                    startupProfile = profileToSave;
+
+                    await preferenceStore.SaveAsync(
+                        new AppUpdatePreferences
+                        {
+                            AutoUpdateEnabled = effectiveAutoUpdate,
+                            UpdateChannel = selectedChannel,
+                            RememberUpdateChannelSelection = rememberDefaultBranch,
+                            AdditionalDiscoveryCidrs = startupPreferences.AdditionalDiscoveryCidrs
+                        },
+                        CancellationToken.None);
                 }
 
-                await profileStore.SaveAsync(profileToSave, CancellationToken.None);
-                startupProfile = profileToSave;
-            }
-            // Função para atualizar a versão remota (com número da build)
-            async Task UpdateRemoteVersion(string branch)
-            {
-                if (prefetchedUpdates is not null && prefetchedUpdates.TryGetValue(branch, out var prefetchedResult))
+                async Task<bool> RunUpdateAndDependenciesAsync(string branch)
                 {
-                    splash.SetRemoteVersion(FormatRemoteVersion(prefetchedResult));
-                    return;
-                }
-
-                splash.SetRemoteVersion("Buscando...");
-                try {
-                    var result = await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
-                    if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
-                        splash.SetRemoteVersion($"{result.LatestVersion} (build {result.LatestReleaseId})");
-                    else if (!string.IsNullOrEmpty(result.LatestVersion))
-                        splash.SetRemoteVersion(result.LatestVersion);
-                    else
-                        splash.SetRemoteVersion("-");
-                } catch (Exception ex) {
-                    splash.SetRemoteVersion("Erro ao buscar versão");
-                }
-            }
-            // Garantir que updateDone só seja declarado uma vez
-            // (Removido: já foi declarado anteriormente)
-            if (shouldShowUpdater)
-            {
-            splash.Dispatcher.Invoke(() => {
-                splash.SetChannels(canais, canalSelecionado);
-                splash.SetAutoUpdateChecked(autoUpdateChecked);
-                splash.SetSetDefaultBranchChecked(setDefaultBranch);
-                // Registra o handler do botão OK imediatamente
-                splash.GetOkButton().Click += async (_,__) => {
-                    try {
-                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OK Clicked\n");
-                        canalSelecionado = splash.SelectedChannel;
-                        autoUpdateChecked = splash.IsAutoUpdateChecked;
-                        setDefaultBranch = splash.IsSetDefaultBranchChecked;
-                        await SaveStartupUpdateSettingsAsync();
-                        var ok = await RunUpdateAndTools(canalSelecionado);
-                        updateDone.SetResult(ok);
-                    } catch (Exception ex) {
-                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in OK handler: {ex}\n");
-                        MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
-                        updateDone.SetResult(false);
-                    }
-                };
-            });
-            // Atualiza a versão remota ao abrir
-            await UpdateRemoteVersion(canalSelecionado);
-            // Atualiza a versão remota ao trocar canal
-            splash.Dispatcher.Invoke(() => {
-                splash.ChannelCombo.SelectionChanged += async (s, e) => {
-                    var branch = splash.SelectedChannel;
-                    await UpdateRemoteVersion(branch);
-                };
-            });
-            }
-            // Função para executar o fluxo de update/tools
-            async Task<bool> RunUpdateAndTools(string branch)
-            {
-                try {
-                    splash.Dispatcher.Invoke(() => splash.ShowProgressBar(true));
-                    splash.Dispatcher.Invoke(() => splash.SetStatus("Baixando e aplicando update...", 10));
-                    var updateResult = prefetchedUpdates is not null && prefetchedUpdates.TryGetValue(branch, out var prefetchedResult)
-                        ? prefetchedResult
-                        : await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
-                    if (!string.IsNullOrEmpty(updateResult.LatestVersion) && !string.IsNullOrEmpty(updateResult.LatestReleaseId))
-                        splash.Dispatcher.Invoke(() => splash.SetRemoteVersion($"{updateResult.LatestVersion} (build {updateResult.LatestReleaseId})"));
-                    else if (!string.IsNullOrEmpty(updateResult.LatestVersion))
-                        splash.Dispatcher.Invoke(() => splash.SetRemoteVersion(updateResult.LatestVersion));
-                    else
-                        splash.Dispatcher.Invoke(() => splash.SetRemoteVersion("-"));
-                    if (!updateResult.UpdateAvailable)
-                    {
-                        splash.Dispatcher.Invoke(() => splash.SetStatus("Nenhuma atualização disponível.", 100));
-                        splash.Dispatcher.Invoke(() => splash.Close());
-                        return true;
-                    }
-                    splash.Dispatcher.Invoke(() => splash.SetStatus($"Update disponível: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})", 30));
-                    var maintenanceService = new AppDataMaintenanceService();
-                    string backupPath = string.Empty;
                     try
                     {
-                        backupPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManagerBroadcast", "backups", $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
-                        await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
-                        splash.Dispatcher.Invoke(() => splash.SetStatus($"Backup criado: {backupPath}", 50));
+                        splash.ShowProgressBar(true);
+                        splash.SetStatus("Baixando e aplicando update...", 10);
+
+                        var normalizedBranch = UpdateChannelNames.Normalize(branch);
+                        var updateResult = prefetchedUpdates.TryGetValue(normalizedBranch, out var cached)
+                            ? cached
+                            : await manifestService.CheckForUpdateAsync(normalizedBranch, CancellationToken.None);
+
+                        splash.SetRemoteVersion(FormatRemoteVersion(updateResult));
+
+                        if (!updateResult.UpdateAvailable)
+                        {
+                            splash.SetStatus("Nenhuma atualizacao disponivel.", 100);
+                            splash.Close();
+                            return true;
+                        }
+
+                        splash.SetStatus(
+                            $"Update disponivel: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})",
+                            30);
+
+                        var maintenanceService = new AppDataMaintenanceService();
+                        var backupPath = string.Empty;
+
+                        try
+                        {
+                            backupPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                "WindowManagerBroadcast",
+                                "backups",
+                                $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
+                            await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
+                            splash.SetStatus($"Backup criado: {backupPath}", 50);
+                        }
+                        catch (Exception ex)
+                        {
+                            splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50);
+                        }
+
+                        splash.SetStatus("Baixando e aplicando update...", 70);
+                        var selfUpdateService = new AppSelfUpdateService();
+                        var applyResult = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
+
+                        if (!applyResult.Succeeded)
+                        {
+                            splash.SetStatus($"Falha ao aplicar update: {applyResult.Message}", 100);
+
+                            if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
+                            {
+                                splash.SetStatus("Restaurando backup...", 90);
+                                await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
+                                splash.SetStatus("Backup restaurado.", 100);
+                            }
+
+                            MessageBox.Show(
+                                $"Falha ao aplicar update: {applyResult.Message}\nBackup restaurado.",
+                                "Erro de Update",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+                            Shutdown(-1);
+                            return false;
+                        }
+
+                        splash.SetStatus("Update aplicado com sucesso!", 100);
+                        splash.SetStatus("Baixando e configurando ferramentas...", 90);
+                        await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(
+                            toolsDir,
+                            (message, progress) => splash.SetStatus(message, progress));
+                        splash.SetStatus("Dependencias prontas!", 100);
+                        splash.Close();
+                        return true;
                     }
                     catch (Exception ex)
                     {
-                        splash.Dispatcher.Invoke(() => splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50));
-                    }
-                    splash.Dispatcher.Invoke(() => splash.SetStatus("Baixando e aplicando update...", 70));
-                    var selfUpdateService = new AppSelfUpdateService();
-                    var updateResult2 = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
-                    if (!updateResult2.Succeeded)
-                    {
-                        splash.Dispatcher.Invoke(() => splash.SetStatus($"Falha ao aplicar update: {updateResult2.Message}", 100));
-                        if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
-                        {
-                            splash.Dispatcher.Invoke(() => splash.SetStatus("Restaurando backup...", 90));
-                            await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
-                            splash.Dispatcher.Invoke(() => splash.SetStatus("Backup restaurado.", 100));
-                        }
-                        splash.Dispatcher.Invoke(() => MessageBox.Show($"Falha ao aplicar update: {updateResult2.Message}\nBackup restaurado.", "Erro de Update", MessageBoxButton.OK, MessageBoxImage.Error));
-                        Shutdown(-1);
+                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in RunUpdateAndDependenciesAsync: {ex}\n");
+                        MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
                         return false;
                     }
-                    splash.Dispatcher.Invoke(() => splash.SetStatus("Update aplicado com sucesso!", 100));
-                    // Só agora baixa/configura tools
-                    splash.Dispatcher.Invoke(() => splash.SetStatus("Baixando e configurando ferramentas...", 90));
-                    await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(toolsDir, (msg, progress) =>
+                }
+
+                var shouldAutoStart = rememberDefaultBranch
+                    && autoUpdateChecked
+                    && prefetchedUpdates.TryGetValue(UpdateChannelNames.Normalize(selectedChannel), out var autoStartResult)
+                    && autoStartResult.UpdateAvailable;
+
+                LogStep(
+                    $"Updater splash pronta: branch={selectedChannel}, auto={autoUpdateChecked}, " +
+                    $"default={rememberDefaultBranch}, autoStart={shouldAutoStart}");
+
+                if (shouldAutoStart)
+                {
+                    await SaveSettingsAsync();
+                    var autoUpdateOk = await RunUpdateAndDependenciesAsync(selectedChannel);
+                    if (!autoUpdateOk)
                     {
-                        splash.Dispatcher.Invoke(() => splash.SetStatus(msg, progress));
-                    });
-                    splash.Dispatcher.Invoke(() => splash.SetStatus("Dependências prontas!", 100));
-                    splash.Dispatcher.Invoke(() => splash.Close());
-                    return true;
-                } catch (Exception ex) {
-                    File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in RunUpdateAndTools: {ex}\n");
-                    splash.Dispatcher.Invoke(() => MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error));
-                    return false;
+                        return;
+                    }
+                }
+                else
+                {
+                    var confirmation = new TaskCompletionSource<bool>();
+
+                    splash.GetOkButton().Click += async (_, __) =>
+                    {
+                        try
+                        {
+                            await SaveSettingsAsync();
+                            var ok = await RunUpdateAndDependenciesAsync(splash.SelectedChannel);
+                            confirmation.TrySetResult(ok);
+                        }
+                        catch (Exception ex)
+                        {
+                            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in OK handler: {ex}\n");
+                            MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+                            confirmation.TrySetResult(false);
+                        }
+                    };
+
+                    var confirmed = await confirmation.Task;
+                    if (!confirmed)
+                    {
+                        return;
+                    }
                 }
             }
-            LogStep($"Antes do bloco de autoUpdateChecked");
-            // Removido: updateDone já foi declarado e inicializado acima
-            // Se autoUpdate estiver marcado, já inicia o fluxo automaticamente
-            if (shouldShowUpdater && autoUpdateChecked && setDefaultBranch)
+            else
             {
-                LogStep("autoUpdateChecked == true, iniciando Task.Run para auto-update");
-                _ = Task.Run(async () => {
-                    try {
-                        LogStep("Dentro da Task.Run do auto-update (antes do RunUpdateAndTools)");
-                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] AutoUpdate iniciado automaticamente\n");
-                        var ok = await RunUpdateAndTools(canalSelecionado);
-                        LogStep($"Task.Run do auto-update finalizada, ok={ok}");
-                        updateDone.SetResult(ok);
-                    } catch (Exception ex) {
-                        LogStep($"Exceção na Task.Run do auto-update: {ex}");
-                        updateDone.SetResult(false);
-                    }
-                });
+                LogStep("Prefetch falhou ou excedeu timeout; abrindo app sem updater");
             }
-            LogStep("Antes do await updateDone.Task");
-            // Espera o usuário clicar em OK ou terminar o processo automático
-            await updateDone.Task;
-            LogStep("Depois do await updateDone.Task");
-            // Fecha a splash antes de criar a janela principal
-            if (splash != null)
+
+            if (splash is not null && splash.IsLoaded)
             {
-                splash.Dispatcher.Invoke(() => splash.Close());
+                splash.Close();
             }
 
             RegisterGlobalDiagnostics();
-            _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Local\WindowManagerBroadcast.SingleInstance", createdNew: out var createdNew);
-            LogStep("Antes de fechar splash (se != null)");
+            _singleInstanceMutex = new Mutex(
+                initiallyOwned: true,
+                name: @"Local\WindowManagerBroadcast.SingleInstance",
+                createdNew: out var createdNew);
+
             if (!createdNew)
             {
-                splash.Dispatcher.Invoke(() => splash.Close());
-                LogStep("Splash fechada");
-                splash.Close();
-
-            LogStep("Antes de RegisterGlobalDiagnostics");
                 Shutdown(0);
-            LogStep("Depois de RegisterGlobalDiagnostics");
                 return;
-            LogStep("Mutex criado");
             }
 
             AppLog.Write("App", "Startup begin");
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Startup begin{Environment.NewLine}");
+
             _watchdogToken = ParseWatchdogToken(e.Args);
             if (!string.IsNullOrWhiteSpace(_watchdogToken))
             {
-
-            LogStep("Antes de AppLog.Write(App, Startup begin)");
                 Directory.CreateDirectory(AppDataPaths.WatchdogRoot);
-            LogStep("Depois de AppLog.Write(App, Startup begin)");
                 var exitMarkerPath = AppDataPaths.GetWatchdogExitMarkerPath(_watchdogToken);
-            LogStep("Antes de ParseWatchdogToken");
                 if (File.Exists(exitMarkerPath))
-            LogStep($"Depois de ParseWatchdogToken: _watchdogToken={_watchdogToken}");
                 {
                     File.Delete(exitMarkerPath);
                 }
@@ -354,42 +292,31 @@ public partial class App : Application
             var restoreBackupPath = ParseRestoreBackupPath(e.Args);
             if (!string.IsNullOrWhiteSpace(restoreBackupPath) && File.Exists(restoreBackupPath))
             {
-                AppLog.Write("Updater", string.Format("Restaurando backup solicitado na linha de comando: {0}", restoreBackupPath));
-
-            LogStep("Antes de ParseRestoreBackupPath");
+                AppLog.Write("Updater", $"Restaurando backup solicitado na linha de comando: {restoreBackupPath}");
                 var maintenanceService = new AppDataMaintenanceService();
-            LogStep($"Depois de ParseRestoreBackupPath: restoreBackupPath={restoreBackupPath}");
                 maintenanceService.ImportAsync(restoreBackupPath, CancellationToken.None).GetAwaiter().GetResult();
             }
 
             InitializeBrowserEngine(startupLogPath);
-
             base.OnStartup(e);
 
-            LogStep("Antes de InitializeBrowserEngine");
-            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After base.OnStartup{Environment.NewLine}");
-            LogStep("Depois de InitializeBrowserEngine");
-
             var bootstrapper = new Bootstrapper();
-            LogStep("Depois de base.OnStartup(e)");
-            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Before CreateMainWindow{Environment.NewLine}");
             var mainWindow = bootstrapper.CreateMainWindow();
-            LogStep("Bootstrapper instanciado");
-            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After CreateMainWindow{Environment.NewLine}");
-            LogStep("Antes de CreateMainWindow");
             MainWindow = mainWindow;
-            LogStep("Depois de CreateMainWindow");
+
+            if (mainWindow.DataContext is MainViewModel startupViewModel)
+            {
+                await startupViewModel.InitializeAfterStartupAsync();
+            }
+
             mainWindow.Show();
             ShutdownMode = ShutdownMode.OnMainWindowClose;
-            File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After mainWindow.Show{Environment.NewLine}");
-            LogStep("Antes de mainWindow.Show()");
             AppLog.Write("App", "MainWindow exibida");
-            LogStep("Depois de mainWindow.Show()");
         }
         catch (Exception ex)
         {
-            LogStep($"[CATCH] Exceção capturada após await: {ex}");
-            AppLog.Write("App", string.Format("Startup failure: {0}", ex.Message));
+            LogStep($"[CATCH] Excecao capturada apos await: {ex}");
+            AppLog.Write("App", $"Startup failure: {ex.Message}");
             CrashDiagnostics.Report("Startup", ex);
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Startup failure: {ex}{Environment.NewLine}");
             MessageBox.Show(ex.ToString(), "Falha ao iniciar", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -398,6 +325,7 @@ public partial class App : Application
         finally
         {
             LogStep("[FINALLY] Entrou no finally do OnStartup");
+
             if (splash is not null && splash.IsLoaded)
             {
                 try
@@ -416,6 +344,7 @@ public partial class App : Application
                 ShutdownMode = previousShutdownMode;
             }
         }
+
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup END{Environment.NewLine}");
     }
 
@@ -445,6 +374,114 @@ public partial class App : Application
         }
 
         base.OnExit(e);
+    }
+
+    private static StartupUpdateSettings BuildStartupUpdateSettings(AppProfile? profile, AppUpdatePreferences preferences)
+    {
+        var channel = UpdateChannelNames.Normalize(preferences.UpdateChannel);
+        var autoUpdate = preferences.AutoUpdateEnabled;
+        var rememberDefaultBranch = preferences.RememberUpdateChannelSelection;
+
+        if (profile is not null)
+        {
+            if (string.IsNullOrWhiteSpace(preferences.UpdateChannel))
+            {
+                channel = UpdateChannelNames.Normalize(profile.UpdateChannel);
+            }
+
+            if (!preferences.AutoUpdateEnabled && profile.AutoUpdateEnabled)
+            {
+                autoUpdate = profile.AutoUpdateEnabled;
+            }
+
+            if (!preferences.RememberUpdateChannelSelection && profile.RememberUpdateChannelSelection)
+            {
+                rememberDefaultBranch = profile.RememberUpdateChannelSelection;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(channel))
+        {
+            channel = UpdateChannelNames.Stable;
+        }
+
+        return new StartupUpdateSettings(
+            channel,
+            autoUpdate && rememberDefaultBranch,
+            rememberDefaultBranch);
+    }
+
+    private static async Task<Dictionary<string, AppUpdateCheckResult>?> PrefetchUpdateInfoAsync(
+        AppUpdateManifestService manifestService,
+        IReadOnlyList<string> channels,
+        Action<string> logStep)
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var results = new Dictionary<string, AppUpdateCheckResult>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (var channel in channels)
+            {
+                results[channel] = await manifestService.CheckForUpdateAsync(channel, timeoutCts.Token);
+            }
+
+            return results;
+        }
+        catch (OperationCanceledException)
+        {
+            logStep("Prefetch de updates excedeu o timeout. Abrindo o app sem atualizador.");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logStep($"Falha ao buscar versoes remotas antes do splash: {ex}");
+            return null;
+        }
+    }
+
+    private static async Task UpdateRemoteVersionAsync(
+        SplashScreen splash,
+        string branch,
+        AppUpdateManifestService manifestService,
+        IReadOnlyDictionary<string, AppUpdateCheckResult> prefetchedUpdates,
+        Action<string> logStep)
+    {
+        var normalizedBranch = UpdateChannelNames.Normalize(branch);
+
+        if (prefetchedUpdates.TryGetValue(normalizedBranch, out var cachedResult))
+        {
+            splash.SetRemoteVersion(FormatRemoteVersion(cachedResult));
+            return;
+        }
+
+        splash.SetRemoteVersion("Buscando...");
+
+        try
+        {
+            var result = await manifestService.CheckForUpdateAsync(normalizedBranch, CancellationToken.None);
+            splash.SetRemoteVersion(FormatRemoteVersion(result));
+        }
+        catch (Exception ex)
+        {
+            logStep($"Falha ao atualizar versao remota do canal {normalizedBranch}: {ex}");
+            splash.SetRemoteVersion("Erro ao buscar versao");
+        }
+    }
+
+    private static string FormatRemoteVersion(AppUpdateCheckResult? result)
+    {
+        if (result is null)
+        {
+            return "-";
+        }
+
+        if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
+        {
+            return $"{result.LatestVersion} (build {result.LatestReleaseId})";
+        }
+
+        return !string.IsNullOrEmpty(result.LatestVersion) ? result.LatestVersion : "-";
     }
 
     private void TryWriteWatchdogExitMarker()
@@ -551,7 +588,7 @@ public partial class App : Application
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Before Cef.Initialize{Environment.NewLine}");
         var initialized = Cef.Initialize(settings, performDependencyCheck: true, browserProcessHandler: null);
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] After Cef.Initialize => {initialized}{Environment.NewLine}");
-        AppLog.Write("CEF", string.Format("Cef.Initialize => {0}", initialized));
+        AppLog.Write("CEF", $"Cef.Initialize => {initialized}");
 
         AppRuntimeState.BrowserEngineAvailable = initialized == true;
         AppRuntimeState.BrowserEngineStatusMessage = initialized == true
@@ -573,20 +610,36 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
-        AppLog.Write("Crash", string.Format("DispatcherUnhandledException: {0}", e.Exception.Message));
+        AppLog.Write("Crash", $"DispatcherUnhandledException: {e.Exception.Message}");
         CrashDiagnostics.Report("DispatcherUnhandledException", e.Exception);
     }
 
     private void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         var exception = e.ExceptionObject as Exception;
-        AppLog.Write("Crash", string.Format("AppDomainUnhandledException: terminating={0}", e.IsTerminating));
-        CrashDiagnostics.Report("AppDomainUnhandledException", exception, string.Format("IsTerminating={0}", e.IsTerminating));
+        AppLog.Write("Crash", $"AppDomainUnhandledException: terminating={e.IsTerminating}");
+        CrashDiagnostics.Report("AppDomainUnhandledException", exception, $"IsTerminating={e.IsTerminating}");
     }
 
     private void OnTaskSchedulerUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        AppLog.Write("Crash", string.Format("TaskSchedulerUnobservedTaskException: {0}", e.Exception.Message));
+        AppLog.Write("Crash", $"TaskSchedulerUnobservedTaskException: {e.Exception.Message}");
         CrashDiagnostics.Report("TaskSchedulerUnobservedTaskException", e.Exception);
+    }
+
+    private sealed class StartupUpdateSettings
+    {
+        public StartupUpdateSettings(string channel, bool autoUpdateEnabled, bool rememberDefaultBranch)
+        {
+            Channel = channel;
+            AutoUpdateEnabled = autoUpdateEnabled;
+            RememberDefaultBranch = rememberDefaultBranch;
+        }
+
+        public string Channel { get; }
+
+        public bool AutoUpdateEnabled { get; }
+
+        public bool RememberDefaultBranch { get; }
     }
 }

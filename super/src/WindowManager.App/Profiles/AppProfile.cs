@@ -59,7 +59,7 @@ public sealed class AppProfile
     public bool ShowWindowPreviews { get; set; } = true;
 
     [DataMember(Order = 17)]
-    public bool AutoUpdateEnabled { get; set; } = true;
+    public bool AutoUpdateEnabled { get; set; }
 
     [DataMember(Order = 18)]
     public string UpdateChannel { get; set; } = UpdateChannelNames.Stable;

@@ -44,6 +44,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly UpdateRollbackStore _updateRollbackStore;
     private readonly UpdateRecoveryService _updateRecoveryService;
     private readonly SemaphoreSlim _profileLoadSemaphore = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _updatePreferenceSaveSemaphore = new SemaphoreSlim(1, 1);
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
@@ -77,6 +78,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isRestoringActiveSessions;
     private bool _suppressActiveSessionPersistence;
     private bool _isInitializingStartup;
+    private bool _startupInitializationCompleted;
     private bool _isNormalizingWindowProfiles;
     private readonly Dictionary<Guid, DateTime> _streamKeepAliveAttemptUtc = new Dictionary<Guid, DateTime>();
 
@@ -182,7 +184,11 @@ public sealed class MainViewModel : ViewModelBase
 
     public bool IsLocalDevelopmentBuild => string.Equals(BuildVersionInfo.CurrentBuildChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
 
-    public bool IsAutomaticUpdateToggleEnabled => !IsLocalDevelopmentBuild;
+    public bool IsAutomaticUpdateToggleEnabled => RememberUpdateChannelSelection;
+
+    public bool IsUpdateChannelDefaultToggleEnabled => true;
+
+    public bool IsUpdateChannelSelectionEnabled => true;
 
     public bool ShowWindowPreviews
     {
@@ -486,18 +492,9 @@ public sealed class MainViewModel : ViewModelBase
         get => _autoUpdateEnabled;
         set
         {
-            if (IsLocalDevelopmentBuild)
-            {
-                if (SetProperty(ref _autoUpdateEnabled, false))
-                {
-                    _ = PersistUpdatePreferencesAsync();
-                }
-
-                return;
-            }
-
             if (SetProperty(ref _autoUpdateEnabled, value))
             {
+                RaisePropertyChanged(nameof(IsAutomaticUpdateToggleEnabled));
                 _ = PersistUpdatePreferencesAsync();
             }
         }
@@ -510,6 +507,9 @@ public sealed class MainViewModel : ViewModelBase
         {
             if (SetProperty(ref _rememberUpdateChannelSelection, value))
             {
+                RaisePropertyChanged(nameof(IsAutomaticUpdateToggleEnabled));
+                RaisePropertyChanged(nameof(IsUpdateChannelDefaultToggleEnabled));
+
                 if (!value && AutoUpdateEnabled)
                 {
                     AutoUpdateEnabled = false;
@@ -658,6 +658,11 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task InitializeAfterStartupAsync()
     {
+        if (_startupInitializationCompleted)
+        {
+            return;
+        }
+
         _isInitializingStartup = true;
         LoadProfileCommand.RaiseCanExecuteChanged();
         try
@@ -667,6 +672,7 @@ public sealed class MainViewModel : ViewModelBase
             NormalizeWindowProfilesInMemory();
             RefreshWindowProfilesCollection();
             _ = CheckForAppUpdatesAsync();
+            _startupInitializationCompleted = true;
         }
         finally
         {
@@ -787,7 +793,8 @@ public sealed class MainViewModel : ViewModelBase
     private async Task LoadPreferencesAsync()
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
-        AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : preferences.AutoUpdateEnabled;
+        AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        RememberUpdateChannelSelection = preferences.RememberUpdateChannelSelection;
         SelectedUpdateChannel = preferences.UpdateChannel;
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
@@ -814,7 +821,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             IsCheckingForUpdates = true;
             UpdateStatusMessage = IsLocalDevelopmentBuild
-                ? "Build local detectado. Auto-update automatico desabilitado."
+                ? string.Format("Build local detectado. Consultando release remota do canal {0}...", SelectedUpdateChannel)
                 : "Consultando atualizacoes do super...";
             var result = await RefreshUpdateInfoAsync();
 
@@ -1907,11 +1914,14 @@ public sealed class MainViewModel : ViewModelBase
 
         try
         {
+            await _updatePreferenceSaveSemaphore.WaitAsync();
+
             await _appUpdatePreferenceStore.SaveAsync(
                 new AppUpdatePreferences
                 {
                     AutoUpdateEnabled = AutoUpdateEnabled,
                     UpdateChannel = SelectedUpdateChannel,
+                    RememberUpdateChannelSelection = RememberUpdateChannelSelection,
                     AdditionalDiscoveryCidrs = AdditionalDiscoveryCidrs
                 },
                 CancellationToken.None);
@@ -1927,6 +1937,18 @@ public sealed class MainViewModel : ViewModelBase
         {
             AppLog.Write("Updater", string.Format("Falha ao salvar preferencia de auto-update: {0}", ex.Message));
         }
+        finally
+        {
+            if (_updatePreferenceSaveSemaphore.CurrentCount == 0)
+            {
+                _updatePreferenceSaveSemaphore.Release();
+            }
+        }
+    }
+
+    public Task FlushUpdatePreferencesAsync()
+    {
+        return PersistUpdatePreferencesAsync();
     }
 
     private async Task RefreshTargetsAfterStartupAsync()
@@ -2534,7 +2556,7 @@ public sealed class MainViewModel : ViewModelBase
             var restoredSessionName = profile.Name;
             ShowWindowPreviews = profile.ShowWindowPreviews;
             RememberUpdateChannelSelection = profile.RememberUpdateChannelSelection;
-            AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : profile.AutoUpdateEnabled;
+            AutoUpdateEnabled = profile.AutoUpdateEnabled;
             SelectedUpdateChannel = UpdateChannelNames.Normalize(profile.UpdateChannel);
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
