@@ -9,10 +9,38 @@ namespace WindowManager.App
             InitializeComponent();
         }
 
+        public void SetInstalledVersion(string version)
+        {
+            InstalledVersionText.Text = $"Versão instalada: {version}";
+        }
+
+        public void SetRemoteVersion(string version)
+        {
+            RemoteVersionText.Text = $"Versão disponível: {version}";
+        }
+
+        public void ShowProgressBar(bool show)
+        {
+            ProgressBar.Visibility = show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        }
+
         public void SetStatus(string message, double progress)
         {
             StatusText.Text = message;
             ProgressBar.Value = progress;
         }
+
+        public bool IsAutoUpdateChecked => AutoUpdateCheckBox.IsChecked == true;
+        public void SetAutoUpdateChecked(bool value) => AutoUpdateCheckBox.IsChecked = value;
+        public bool IsSetDefaultBranchChecked => SetDefaultBranchCheckBox.IsChecked == true;
+        public void SetSetDefaultBranchChecked(bool value) => SetDefaultBranchCheckBox.IsChecked = value;
+        public System.Windows.Controls.ComboBox ChannelCombo => ChannelComboBox;
+        public string SelectedChannel => ChannelComboBox.SelectedValue?.ToString() ?? "stable";
+        public void SetChannels(string[] canais, string selected)
+        {
+            ChannelComboBox.ItemsSource = canais;
+            ChannelComboBox.SelectedValue = selected;
+        }
+        public System.Windows.Controls.Button GetOkButton() => OkButton;
     }
 }

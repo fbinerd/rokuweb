@@ -22,78 +22,170 @@ public partial class App : Application
 
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
 
-        SplashScreen splash = new SplashScreen();
-        splash.Show();
-        splash.SetStatus("Verificando dependências...", 0);
+
+        SplashScreen splash = null;
+        TaskCompletionSource<bool> updateDone;
         try
         {
-            // 1. Verifica e baixa dependências externas
-            await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(toolsDir, (msg, progress) =>
+            splash = new SplashScreen();
+            splash.Show();
+            splash.ShowProgressBar(false);
+            updateDone = new TaskCompletionSource<bool>();
+            // Lê config do usuário
+            string configPath = Path.Combine(baseDirectory, "user.config.json");
+            string defaultBranch = "stable";
+            bool autoUpdate = false;
+            bool setDefaultBranch = false;
+            try
             {
-                splash.Dispatcher.Invoke(() => splash.SetStatus(msg, progress));
-            });
-            splash.SetStatus("Dependências prontas!", 100);
-
-            // 2. Seleção de canal
-            string[] canais = new[] { "stable", "develop", "local" };
-            string canalSelecionado = "stable";
-            splash.Dispatcher.Invoke(() => {
-                var dlg = new Window { Title = "Selecionar Canal", Width = 260, Height = 180, WindowStartupLocation = WindowStartupLocation.CenterScreen, Owner = splash };
-                var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
-                var combo = new System.Windows.Controls.ComboBox { ItemsSource = canais, SelectedValue = "stable" };
-                panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Escolha o canal de atualização:", Margin = new Thickness(0,0,0,8), Foreground = System.Windows.Media.Brushes.White });
-                panel.Children.Add(combo);
-                var btn = new System.Windows.Controls.Button { Content = "OK", Margin = new Thickness(0,10,0,0), IsDefault = true };
-                btn.Click += (_,__) => { canalSelecionado = combo.SelectedValue?.ToString() ?? "stable"; dlg.DialogResult = true; dlg.Close(); };
-                panel.Children.Add(btn);
-                dlg.Content = panel;
-                dlg.ShowDialog();
-            });
-            splash.SetStatus($"Canal selecionado: {canalSelecionado}", 100);
-
-            // 3. Checagem de update
-            splash.SetStatus("Checando atualizações...", 30);
-            var manifestService = new AppUpdateManifestService();
-            var updateResult = await manifestService.CheckForUpdateAsync(canalSelecionado, CancellationToken.None);
-            if (!updateResult.UpdateAvailable)
-            {
-                splash.SetStatus("Nenhuma atualização disponível.", 100);
+                if (File.Exists(configPath))
+                {
+                    var configJson = File.ReadAllText(configPath);
+                    var config = Newtonsoft.Json.Linq.JObject.Parse(configJson);
+                    defaultBranch = config["DefaultBranch"]?.ToString() ?? "stable";
+                    autoUpdate = config["AutoUpdate"]?.ToObject<bool?>() ?? false;
+                    setDefaultBranch = config["SetDefaultBranch"]?.ToObject<bool?>() ?? false;
+                }
             }
-            else
+            catch { }
+
+            // Exibe versões antes de qualquer download
+            splash.SetInstalledVersion(WindowManager.App.Runtime.BuildVersionInfo.Version + " (" + WindowManager.App.Runtime.BuildVersionInfo.ReleaseId + ")");
+            string[] canais = new[] { "stable", "develop", "local" };
+            string canalSelecionado = defaultBranch;
+            bool autoUpdateChecked = autoUpdate;
+            var manifestService = new AppUpdateManifestService();
+            // Função para atualizar a versão remota (com número da build)
+            async Task UpdateRemoteVersion(string branch)
             {
-                splash.SetStatus($"Update disponível: {updateResult.LatestVersion}", 40);
-                // 4. Backup automático
-                var maintenanceService = new AppDataMaintenanceService();
-                string backupPath = string.Empty;
-                try
-                {
-                    backupPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManagerBroadcast", "backups", $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
-                    await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
-                    splash.SetStatus($"Backup criado: {backupPath}", 50);
+                splash.SetRemoteVersion("Buscando...");
+                try {
+                    var result = await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
+                    if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
+                        splash.SetRemoteVersion($"{result.LatestVersion} (build {result.LatestReleaseId})");
+                    else if (!string.IsNullOrEmpty(result.LatestVersion))
+                        splash.SetRemoteVersion(result.LatestVersion);
+                    else
+                        splash.SetRemoteVersion("-");
+                } catch (Exception ex) {
+                    splash.SetRemoteVersion("Erro ao buscar versão");
                 }
-                catch (Exception ex)
-                {
-                    splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50);
-                }
-                // 5. Download e aplicação do update
-                splash.SetStatus("Baixando e aplicando update...", 70);
-                var selfUpdateService = new AppSelfUpdateService();
-                var updateResult2 = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
-                if (!updateResult2.Succeeded)
-                {
-                    splash.SetStatus($"Falha ao aplicar update: {updateResult2.Message}", 100);
-                    // 6. Restauração do backup
-                    if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
-                    {
-                        splash.SetStatus("Restaurando backup...", 90);
-                        await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
-                        splash.SetStatus("Backup restaurado.", 100);
+            }
+            // Garantir que updateDone só seja declarado uma vez
+            // (Removido: já foi declarado anteriormente)
+            splash.Dispatcher.Invoke(() => {
+                splash.SetChannels(canais, canalSelecionado);
+                splash.SetAutoUpdateChecked(autoUpdateChecked);
+                splash.SetSetDefaultBranchChecked(setDefaultBranch);
+                // Registra o handler do botão OK imediatamente
+                splash.GetOkButton().Click += async (_,__) => {
+                    try {
+                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OK Clicked\n");
+                        canalSelecionado = splash.SelectedChannel;
+                        autoUpdateChecked = splash.IsAutoUpdateChecked;
+                        setDefaultBranch = splash.IsSetDefaultBranchChecked;
+                        if (autoUpdateChecked || setDefaultBranch)
+                        {
+                            File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked, SetDefaultBranch = setDefaultBranch }, Newtonsoft.Json.Formatting.Indented));
+                        }
+                        var ok = await RunUpdateAndTools(canalSelecionado);
+                        updateDone.SetResult(ok);
+                    } catch (Exception ex) {
+                        File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in OK handler: {ex}\n");
+                        MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+                        updateDone.SetResult(false);
                     }
-                    MessageBox.Show($"Falha ao aplicar update: {updateResult2.Message}\nBackup restaurado.", "Erro de Update", MessageBoxButton.OK, MessageBoxImage.Error);
-                    Shutdown(-1);
-                    return;
+                };
+            });
+            // Atualiza a versão remota ao abrir
+            await UpdateRemoteVersion(canalSelecionado);
+            // Atualiza a versão remota ao trocar canal
+            splash.Dispatcher.Invoke(() => {
+                splash.ChannelCombo.SelectionChanged += async (s, e) => {
+                    var branch = splash.SelectedChannel;
+                    await UpdateRemoteVersion(branch);
+                };
+            });
+            // Função para executar o fluxo de update/tools
+            async Task<bool> RunUpdateAndTools(string branch)
+            {
+                try {
+                    splash.ShowProgressBar(true);
+                    splash.SetStatus("Baixando e aplicando update...", 10);
+                    var updateResult = await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
+                    if (!string.IsNullOrEmpty(updateResult.LatestVersion) && !string.IsNullOrEmpty(updateResult.LatestReleaseId))
+                        splash.SetRemoteVersion($"{updateResult.LatestVersion} (build {updateResult.LatestReleaseId})");
+                    else if (!string.IsNullOrEmpty(updateResult.LatestVersion))
+                        splash.SetRemoteVersion(updateResult.LatestVersion);
+                    else
+                        splash.SetRemoteVersion("-");
+                    if (!updateResult.UpdateAvailable)
+                    {
+                        splash.SetStatus("Nenhuma atualização disponível.", 100);
+                        splash.DialogResult = true;
+                        return true;
+                    }
+                    splash.SetStatus($"Update disponível: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})", 30);
+                    var maintenanceService = new AppDataMaintenanceService();
+                    string backupPath = string.Empty;
+                    try
+                    {
+                        backupPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowManagerBroadcast", "backups", $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
+                        await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
+                        splash.SetStatus($"Backup criado: {backupPath}", 50);
+                    }
+                    catch (Exception ex)
+                    {
+                        splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50);
+                    }
+                    splash.SetStatus("Baixando e aplicando update...", 70);
+                    var selfUpdateService = new AppSelfUpdateService();
+                    var updateResult2 = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
+                    if (!updateResult2.Succeeded)
+                    {
+                        splash.SetStatus($"Falha ao aplicar update: {updateResult2.Message}", 100);
+                        if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
+                        {
+                            splash.SetStatus("Restaurando backup...", 90);
+                            await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
+                            splash.SetStatus("Backup restaurado.", 100);
+                        }
+                        MessageBox.Show($"Falha ao aplicar update: {updateResult2.Message}\nBackup restaurado.", "Erro de Update", MessageBoxButton.OK, MessageBoxImage.Error);
+                        Shutdown(-1);
+                        return false;
+                    }
+                    splash.SetStatus("Update aplicado com sucesso!", 100);
+                    // Só agora baixa/configura tools
+                    splash.SetStatus("Baixando e configurando ferramentas...", 90);
+                    await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(toolsDir, (msg, progress) =>
+                    {
+                        splash.Dispatcher.Invoke(() => splash.SetStatus(msg, progress));
+                    });
+                    splash.SetStatus("Dependências prontas!", 100);
+                    splash.DialogResult = true;
+                    return true;
+                } catch (Exception ex) {
+                    File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] Exception in RunUpdateAndTools: {ex}\n");
+                    MessageBox.Show($"Erro inesperado: {ex}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return false;
                 }
-                splash.SetStatus("Update aplicado com sucesso!", 100);
+            }
+            // Removido: updateDone já foi declarado e inicializado acima
+            // Se autoUpdate estiver marcado, já inicia o fluxo automaticamente
+            if (autoUpdateChecked)
+            {
+                _ = Task.Run(async () => {
+                    File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] AutoUpdate iniciado automaticamente\n");
+                    var ok = await RunUpdateAndTools(canalSelecionado);
+                    updateDone.SetResult(ok);
+                });
+            }
+            // Espera o usuário clicar em OK ou terminar o processo automático
+            await updateDone.Task;
+            // Fecha a splash antes de criar a janela principal
+            if (splash != null)
+            {
+                splash.Dispatcher.Invoke(() => splash.Close());
             }
 
             RegisterGlobalDiagnostics();

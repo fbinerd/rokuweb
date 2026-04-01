@@ -2427,5 +2427,68 @@ public partial class MainWindow : Window
 
         return Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ? uri : null;
     }
+
+    // Handler para botão de configuração de atualização
+    private void OnUpdateConfigClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string baseDirectory = AppContext.BaseDirectory;
+            string configPath = Path.Combine(baseDirectory, "user.config.json");
+            string[] canais = new[] { "stable", "develop", "local" };
+            string defaultBranch = "stable";
+            bool autoUpdate = false;
+            if (File.Exists(configPath))
+            {
+                var configJson = File.ReadAllText(configPath);
+                var config = Newtonsoft.Json.Linq.JObject.Parse(configJson);
+                defaultBranch = config["DefaultBranch"]?.ToString() ?? "stable";
+                autoUpdate = config["AutoUpdate"]?.ToObject<bool?>() ?? false;
+            }
+            string canalSelecionado = defaultBranch;
+            bool autoUpdateChecked = autoUpdate;
+            var dlg = new Window { Title = "Configuração de Atualização", Width = 340, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterScreen, Owner = this, ResizeMode = ResizeMode.NoResize, WindowStyle = WindowStyle.ToolWindow };
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
+            var combo = new System.Windows.Controls.ComboBox { ItemsSource = canais, SelectedValue = canalSelecionado, Width = 180 };
+            combo.SelectedValue = canalSelecionado;
+            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Escolha o canal de atualização:", Margin = new Thickness(0,0,0,8), Foreground = System.Windows.Media.Brushes.Black });
+            panel.Children.Add(combo);
+            var check = new System.Windows.Controls.CheckBox { Content = "Não perguntar e atualizar automaticamente", Foreground = System.Windows.Media.Brushes.Black, Margin = new Thickness(0,10,0,0), IsChecked = autoUpdateChecked };
+            panel.Children.Add(check);
+            var btnDefault = new System.Windows.Controls.Button { Content = "Marcar default", Width = 120, Height = 28, Margin = new Thickness(0,10,0,0) };
+            panel.Children.Add(btnDefault);
+            var btn = new System.Windows.Controls.Button { Content = "OK", Margin = new Thickness(0,10,0,0), IsDefault = true };
+            panel.Children.Add(btn);
+            btn.Click += (_,__) => {
+                canalSelecionado = combo.SelectedValue?.ToString() ?? defaultBranch;
+                autoUpdateChecked = check.IsChecked == true;
+                dlg.DialogResult = true; dlg.Close();
+            };
+            btnDefault.Click += (_,__) => {
+                canalSelecionado = combo.SelectedValue?.ToString() ?? defaultBranch;
+                autoUpdateChecked = check.IsChecked == true;
+                // Salva como default
+                File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked }, Newtonsoft.Json.Formatting.Indented));
+                MessageBox.Show($"Canal '{canalSelecionado}' marcado como padrão.", "Configuração", MessageBoxButton.OK, MessageBoxImage.Information);
+            };
+            dlg.Content = panel;
+            dlg.ShowDialog();
+            // Se autoUpdateChecked, salva config
+            if (autoUpdateChecked)
+            {
+                File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked }, Newtonsoft.Json.Formatting.Indented));
+            }
+            // Pergunta se deseja reiniciar
+            if (MessageBox.Show("Deseja reiniciar o aplicativo para aplicar a troca de branch?", "Reiniciar", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            {
+                System.Windows.Forms.Application.Restart();
+                Application.Current.Shutdown();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Erro ao abrir configuração: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 }
 

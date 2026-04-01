@@ -12,6 +12,7 @@
     <AssemblyName>SuperPainel</AssemblyName>
     <Product>SuperPainel</Product>
     <Title>SuperPainel</Title>
+    <ApplicationIcon>favicon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
