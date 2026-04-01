@@ -1,10 +1,12 @@
 using CefSharp;
 using CefSharp.Wpf;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Windows;
+using WindowManager.App.Profiles;
 using WindowManager.App.Runtime;
 
 namespace WindowManager.App;
@@ -56,37 +58,28 @@ public partial class App : Application
             LogStep("Dentro do try inicial");
             splash = new SplashScreen();
             LogStep("SplashScreen instanciada");
-            splash.Show();
-            LogStep("SplashScreen.Show chamado");
-            splash.ShowProgressBar(false);
-            LogStep("SplashScreen.ShowProgressBar(false) chamado");
             updateDone = new TaskCompletionSource<bool>();
             LogStep("TaskCompletionSource criado");
             // Lê config do usuário
-            string configPath = Path.Combine(baseDirectory, "user.config.json");
-            LogStep($"Config path: {configPath}");
-            string defaultBranch = "stable";
+            var profileStore = new ProfileStore();
+            var startupProfileName = await profileStore.GetStartupProfileNameAsync(CancellationToken.None);
+            var startupProfile = await profileStore.LoadAsync(startupProfileName, CancellationToken.None);
+            LogStep($"Startup profile: {startupProfileName}");
+            string defaultBranch = UpdateChannelNames.Stable;
             bool autoUpdate = false;
             bool setDefaultBranch = false;
-            if (File.Exists(configPath))
+            if (startupProfile is not null)
             {
-                try
-                {
-                    var configJson = File.ReadAllText(configPath);
-                    LogStep("Config lido do disco");
-                    var config = Newtonsoft.Json.Linq.JObject.Parse(configJson);
-                    LogStep("Config parseado");
-                    defaultBranch = config["DefaultBranch"]?.ToString() ?? "stable";
-                    autoUpdate = config["AutoUpdate"]?.ToObject<bool?>() ?? false;
-                    setDefaultBranch = config["SetDefaultBranch"]?.ToObject<bool?>() ?? false;
-                }
-                catch (Exception ex) { LogStep($"Erro ao ler config: {ex}"); }
+                defaultBranch = UpdateChannelNames.Normalize(startupProfile.UpdateChannel);
+                autoUpdate = startupProfile.AutoUpdateEnabled;
+                setDefaultBranch = startupProfile.RememberUpdateChannelSelection;
             }
             else
             {
                 autoUpdate = false; // valor padrão sempre desmarcado
                 LogStep("Config não existe, autoUpdate = false");
             }
+            autoUpdate = autoUpdate && setDefaultBranch;
             LogStep($"defaultBranch={defaultBranch}, autoUpdate={autoUpdate}, setDefaultBranch={setDefaultBranch}");
 
             // Exibe versões antes de qualquer download
@@ -95,10 +88,92 @@ public partial class App : Application
             string canalSelecionado = defaultBranch;
             bool autoUpdateChecked = autoUpdate;
             autoUpdateChecked = false; // Força update manual, nunca automático
+            autoUpdateChecked = autoUpdate;
             var manifestService = new AppUpdateManifestService();
+            Dictionary<string, AppUpdateCheckResult>? prefetchedUpdates = null;
+
+            async Task<Dictionary<string, AppUpdateCheckResult>?> PrefetchUpdateInfoAsync()
+            {
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var results = new Dictionary<string, AppUpdateCheckResult>(StringComparer.OrdinalIgnoreCase);
+
+                try
+                {
+                    foreach (var branch in canais)
+                    {
+                        results[branch] = await manifestService.CheckForUpdateAsync(branch, timeoutCts.Token);
+                    }
+
+                    return results;
+                }
+                catch (OperationCanceledException)
+                {
+                    LogStep("Prefetch de updates excedeu o timeout. Abrindo o app sem atualizador.");
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    LogStep($"Falha ao buscar versoes remotas antes do splash: {ex}");
+                    return null;
+                }
+            }
+
+            string FormatRemoteVersion(AppUpdateCheckResult? result)
+            {
+                if (result is null)
+                {
+                    return "-";
+                }
+
+                if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
+                {
+                    return $"{result.LatestVersion} (build {result.LatestReleaseId})";
+                }
+
+                return !string.IsNullOrEmpty(result.LatestVersion) ? result.LatestVersion : "-";
+            }
+
+            prefetchedUpdates = await PrefetchUpdateInfoAsync();
+            var shouldShowUpdater = prefetchedUpdates is not null;
+
+            if (shouldShowUpdater)
+            {
+                splash.SetInstalledVersion(WindowManager.App.Runtime.BuildVersionInfo.Version + " (" + WindowManager.App.Runtime.BuildVersionInfo.ReleaseId + ")");
+                splash.Show();
+                LogStep("SplashScreen.Show chamado");
+                splash.ShowProgressBar(false);
+                LogStep("SplashScreen.ShowProgressBar(false) chamado");
+            }
+            else
+            {
+                updateDone.SetResult(true);
+            }
+            async Task SaveStartupUpdateSettingsAsync()
+            {
+                var profileToSave = startupProfile ?? new AppProfile { Name = startupProfileName };
+                profileToSave.AutoUpdateEnabled = autoUpdateChecked;
+                profileToSave.RememberUpdateChannelSelection = setDefaultBranch;
+                if (setDefaultBranch)
+                {
+                    profileToSave.UpdateChannel = UpdateChannelNames.Normalize(canalSelecionado);
+                }
+                else if (string.IsNullOrWhiteSpace(profileToSave.UpdateChannel))
+                {
+                    profileToSave.UpdateChannel = UpdateChannelNames.Stable;
+                }
+
+                await profileStore.SaveAsync(profileToSave, CancellationToken.None);
+                startupProfile = profileToSave;
+            }
             // Função para atualizar a versão remota (com número da build)
             async Task UpdateRemoteVersion(string branch)
             {
+                if (prefetchedUpdates is not null && prefetchedUpdates.TryGetValue(branch, out var prefetchedResult))
+                {
+                    splash.SetRemoteVersion(FormatRemoteVersion(prefetchedResult));
+                    return;
+                }
+
                 splash.SetRemoteVersion("Buscando...");
                 try {
                     var result = await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
@@ -114,6 +189,8 @@ public partial class App : Application
             }
             // Garantir que updateDone só seja declarado uma vez
             // (Removido: já foi declarado anteriormente)
+            if (shouldShowUpdater)
+            {
             splash.Dispatcher.Invoke(() => {
                 splash.SetChannels(canais, canalSelecionado);
                 splash.SetAutoUpdateChecked(autoUpdateChecked);
@@ -125,10 +202,7 @@ public partial class App : Application
                         canalSelecionado = splash.SelectedChannel;
                         autoUpdateChecked = splash.IsAutoUpdateChecked;
                         setDefaultBranch = splash.IsSetDefaultBranchChecked;
-                        if (autoUpdateChecked || setDefaultBranch)
-                        {
-                            File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked, SetDefaultBranch = setDefaultBranch }, Newtonsoft.Json.Formatting.Indented));
-                        }
+                        await SaveStartupUpdateSettingsAsync();
                         var ok = await RunUpdateAndTools(canalSelecionado);
                         updateDone.SetResult(ok);
                     } catch (Exception ex) {
@@ -147,13 +221,16 @@ public partial class App : Application
                     await UpdateRemoteVersion(branch);
                 };
             });
+            }
             // Função para executar o fluxo de update/tools
             async Task<bool> RunUpdateAndTools(string branch)
             {
                 try {
                     splash.Dispatcher.Invoke(() => splash.ShowProgressBar(true));
                     splash.Dispatcher.Invoke(() => splash.SetStatus("Baixando e aplicando update...", 10));
-                    var updateResult = await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
+                    var updateResult = prefetchedUpdates is not null && prefetchedUpdates.TryGetValue(branch, out var prefetchedResult)
+                        ? prefetchedResult
+                        : await manifestService.CheckForUpdateAsync(branch, CancellationToken.None);
                     if (!string.IsNullOrEmpty(updateResult.LatestVersion) && !string.IsNullOrEmpty(updateResult.LatestReleaseId))
                         splash.Dispatcher.Invoke(() => splash.SetRemoteVersion($"{updateResult.LatestVersion} (build {updateResult.LatestReleaseId})"));
                     else if (!string.IsNullOrEmpty(updateResult.LatestVersion))
@@ -214,7 +291,7 @@ public partial class App : Application
             LogStep($"Antes do bloco de autoUpdateChecked");
             // Removido: updateDone já foi declarado e inicializado acima
             // Se autoUpdate estiver marcado, já inicia o fluxo automaticamente
-            if (autoUpdateChecked)
+            if (shouldShowUpdater && autoUpdateChecked && setDefaultBranch)
             {
                 LogStep("autoUpdateChecked == true, iniciando Task.Run para auto-update");
                 _ = Task.Run(async () => {

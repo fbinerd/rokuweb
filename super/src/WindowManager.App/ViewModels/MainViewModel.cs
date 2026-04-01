@@ -68,6 +68,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isUpdateAvailable;
     private bool _isCheckingForUpdates;
     private bool _autoUpdateEnabled;
+    private bool _rememberUpdateChannelSelection;
     private bool _showWindowPreviews = true;
     private AppUpdateCheckResult? _lastUpdateCheckResult;
     private string _additionalDiscoveryCidrs = string.Empty;
@@ -497,6 +498,24 @@ public sealed class MainViewModel : ViewModelBase
 
             if (SetProperty(ref _autoUpdateEnabled, value))
             {
+                _ = PersistUpdatePreferencesAsync();
+            }
+        }
+    }
+
+    public bool RememberUpdateChannelSelection
+    {
+        get => _rememberUpdateChannelSelection;
+        set
+        {
+            if (SetProperty(ref _rememberUpdateChannelSelection, value))
+            {
+                if (!value && AutoUpdateEnabled)
+                {
+                    AutoUpdateEnabled = false;
+                    return;
+                }
+
                 _ = PersistUpdatePreferencesAsync();
             }
         }
@@ -1881,6 +1900,11 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task PersistUpdatePreferencesAsync()
     {
+        if (_isInitializingStartup || _isApplyingProfile || string.IsNullOrWhiteSpace(ProfileName))
+        {
+            return;
+        }
+
         try
         {
             await _appUpdatePreferenceStore.SaveAsync(
@@ -1891,6 +1915,13 @@ public sealed class MainViewModel : ViewModelBase
                     AdditionalDiscoveryCidrs = AdditionalDiscoveryCidrs
                 },
                 CancellationToken.None);
+
+            var profile = await _profileStore.LoadAsync(ProfileName, CancellationToken.None)
+                ?? new AppProfile { Name = ProfileName.Trim() };
+            profile.AutoUpdateEnabled = AutoUpdateEnabled;
+            profile.UpdateChannel = UpdateChannelNames.Normalize(SelectedUpdateChannel);
+            profile.RememberUpdateChannelSelection = RememberUpdateChannelSelection;
+            await _profileStore.SaveAsync(profile, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -2502,6 +2533,9 @@ public sealed class MainViewModel : ViewModelBase
             var restoredSessionId = Guid.NewGuid();
             var restoredSessionName = profile.Name;
             ShowWindowPreviews = profile.ShowWindowPreviews;
+            RememberUpdateChannelSelection = profile.RememberUpdateChannelSelection;
+            AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : profile.AutoUpdateEnabled;
+            SelectedUpdateChannel = UpdateChannelNames.Normalize(profile.UpdateChannel);
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
             WebRtcSpecificIp = profile.WebRtcSpecificIp ?? string.Empty;
@@ -2804,6 +2838,9 @@ public sealed class MainViewModel : ViewModelBase
             WebRtcBindMode = WebRtcBindMode,
             WebRtcSpecificIp = WebRtcSpecificIp,
             ShowWindowPreviews = ShowWindowPreviews,
+            AutoUpdateEnabled = AutoUpdateEnabled,
+            UpdateChannel = UpdateChannelNames.Normalize(SelectedUpdateChannel),
+            RememberUpdateChannelSelection = RememberUpdateChannelSelection,
             DisplayTargets = Targets.Select(x => new DisplayTargetProfile
             {
                 Id = x.Id,

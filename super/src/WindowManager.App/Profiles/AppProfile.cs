@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.Serialization;
+using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 using WindowManager.Core.Models;
 
@@ -56,6 +57,15 @@ public sealed class AppProfile
 
     [DataMember(Order = 16)]
     public bool ShowWindowPreviews { get; set; } = true;
+
+    [DataMember(Order = 17)]
+    public bool AutoUpdateEnabled { get; set; } = true;
+
+    [DataMember(Order = 18)]
+    public string UpdateChannel { get; set; } = UpdateChannelNames.Stable;
+
+    [DataMember(Order = 19)]
+    public bool RememberUpdateChannelSelection { get; set; }
 }
 
 [DataContract]

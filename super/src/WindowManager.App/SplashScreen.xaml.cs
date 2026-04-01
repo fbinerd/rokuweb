@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 
 namespace WindowManager.App
 {
@@ -7,6 +8,11 @@ namespace WindowManager.App
         public SplashScreen()
         {
             InitializeComponent();
+            SetDefaultBranchCheckBox.Checked += OnUpdateOptionChanged;
+            SetDefaultBranchCheckBox.Unchecked += OnUpdateOptionChanged;
+            AutoUpdateCheckBox.Checked += OnUpdateOptionChanged;
+            AutoUpdateCheckBox.Unchecked += OnUpdateOptionChanged;
+            SyncUpdateOptionState();
         }
 
         public void SetInstalledVersion(string version)
@@ -31,9 +37,17 @@ namespace WindowManager.App
         }
 
         public bool IsAutoUpdateChecked => AutoUpdateCheckBox.IsChecked == true;
-        public void SetAutoUpdateChecked(bool value) => AutoUpdateCheckBox.IsChecked = value;
+        public void SetAutoUpdateChecked(bool value)
+        {
+            AutoUpdateCheckBox.IsChecked = value;
+            SyncUpdateOptionState();
+        }
         public bool IsSetDefaultBranchChecked => SetDefaultBranchCheckBox.IsChecked == true;
-        public void SetSetDefaultBranchChecked(bool value) => SetDefaultBranchCheckBox.IsChecked = value;
+        public void SetSetDefaultBranchChecked(bool value)
+        {
+            SetDefaultBranchCheckBox.IsChecked = value;
+            SyncUpdateOptionState();
+        }
         public System.Windows.Controls.ComboBox ChannelCombo => ChannelComboBox;
         public string SelectedChannel => ChannelComboBox.SelectedValue?.ToString() ?? "stable";
         public void SetChannels(string[] canais, string selected)
@@ -42,5 +56,20 @@ namespace WindowManager.App
             ChannelComboBox.SelectedValue = selected;
         }
         public System.Windows.Controls.Button GetOkButton() => OkButton;
+
+        private void OnUpdateOptionChanged(object sender, RoutedEventArgs e)
+        {
+            SyncUpdateOptionState();
+        }
+
+        private void SyncUpdateOptionState()
+        {
+            var canAutoUpdate = SetDefaultBranchCheckBox.IsChecked == true;
+            AutoUpdateCheckBox.IsEnabled = canAutoUpdate;
+            if (!canAutoUpdate)
+            {
+                AutoUpdateCheckBox.IsChecked = false;
+            }
+        }
     }
 }

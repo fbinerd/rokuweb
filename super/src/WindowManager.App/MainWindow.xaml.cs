@@ -2453,20 +2453,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            string baseDirectory = AppContext.BaseDirectory;
-            string configPath = Path.Combine(baseDirectory, "user.config.json");
             string[] canais = new[] { "stable", "develop", "local" };
-            string defaultBranch = "stable";
-            bool autoUpdate = false;
-            if (File.Exists(configPath))
-            {
-                var configJson = File.ReadAllText(configPath);
-                var config = Newtonsoft.Json.Linq.JObject.Parse(configJson);
-                defaultBranch = config["DefaultBranch"]?.ToString() ?? "stable";
-                autoUpdate = config["AutoUpdate"]?.ToObject<bool?>() ?? false;
-            }
+            string defaultBranch = UpdateChannelNames.Normalize(_viewModel.SelectedUpdateChannel);
+            bool autoUpdate = _viewModel.AutoUpdateEnabled;
             string canalSelecionado = defaultBranch;
             bool autoUpdateChecked = autoUpdate;
+            bool saveAsDefault = false;
             var dlg = new Window { Title = "Configuração de Atualização", Width = 340, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterScreen, Owner = this, ResizeMode = ResizeMode.NoResize, WindowStyle = WindowStyle.ToolWindow };
             var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
             var combo = new System.Windows.Controls.ComboBox { ItemsSource = canais, SelectedValue = canalSelecionado, Width = 180 };
@@ -2488,18 +2480,32 @@ public partial class MainWindow : Window
                 canalSelecionado = combo.SelectedValue?.ToString() ?? defaultBranch;
                 autoUpdateChecked = check.IsChecked == true;
                 // Salva como default
-                File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked }, Newtonsoft.Json.Formatting.Indented));
+                saveAsDefault = true;
+                dlg.DialogResult = true;
+                dlg.Close();
                 MessageBox.Show($"Canal '{canalSelecionado}' marcado como padrão.", "Configuração", MessageBoxButton.OK, MessageBoxImage.Information);
             };
             dlg.Content = panel;
-            dlg.ShowDialog();
-            // Se autoUpdateChecked, salva config
-            if (autoUpdateChecked)
+            var result = dlg.ShowDialog();
+            if (result != true)
             {
-                File.WriteAllText(configPath, Newtonsoft.Json.JsonConvert.SerializeObject(new { DefaultBranch = canalSelecionado, AutoUpdate = autoUpdateChecked }, Newtonsoft.Json.Formatting.Indented));
+                return;
+            }
+
+            var previousChannel = UpdateChannelNames.Normalize(_viewModel.SelectedUpdateChannel);
+            var previousRememberDefault = _viewModel.RememberUpdateChannelSelection;
+            var rememberDefault = saveAsDefault || previousRememberDefault;
+            _viewModel.RememberUpdateChannelSelection = rememberDefault;
+            _viewModel.AutoUpdateEnabled = autoUpdateChecked && rememberDefault;
+            _viewModel.SelectedUpdateChannel = UpdateChannelNames.Normalize(canalSelecionado);
+
+            if (saveAsDefault)
+            {
+                MessageBox.Show($"Canal '{canalSelecionado}' salvo no perfil atual.", "ConfiguraÃ§Ã£o", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             // Pergunta se deseja reiniciar
-            if (MessageBox.Show("Deseja reiniciar o aplicativo para aplicar a troca de branch?", "Reiniciar", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            if (!string.Equals(previousChannel, _viewModel.SelectedUpdateChannel, StringComparison.OrdinalIgnoreCase) &&
+                MessageBox.Show("Deseja reiniciar o aplicativo para aplicar a troca de branch?", "Reiniciar", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             {
                 System.Windows.Forms.Application.Restart();
                 Application.Current.Shutdown();
