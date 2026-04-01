@@ -58,13 +58,29 @@ public partial class MainWindow : Window
         try
         {
             File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor START\n");
+            if (viewModel == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] viewModel is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] viewModel type: {viewModel.GetType().FullName}\n");
+            if (browserSnapshotService == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserSnapshotService is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserSnapshotService type: {browserSnapshotService.GetType().FullName}\n");
+            if (browserAudioCaptureService == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserAudioCaptureService is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserAudioCaptureService type: {browserAudioCaptureService.GetType().FullName}\n");
+
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow BEFORE InitializeComponent\n");
             InitializeComponent();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow AFTER InitializeComponent\n");
 
             _viewModel = viewModel;
             _browserSnapshotService = browserSnapshotService;
             _browserAudioCaptureService = browserAudioCaptureService;
             DataContext = viewModel;
 
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow BEFORE event handlers\n");
             _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
             _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
             _viewModel.PropertyChanged += OnViewModelPropertyChanged;
@@ -102,6 +118,10 @@ public partial class MainWindow : Window
             _notifyIcon = CreateNotifyIcon();
 
             Loaded += OnLoaded;
+            Closed += (s, e) =>
+            {
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow CLOSED\n");
+            };
             StateChanged += OnStateChanged;
             UpdateSelectionVisuals();
             File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor END\n");
