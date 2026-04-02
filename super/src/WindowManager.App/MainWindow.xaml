@@ -272,13 +272,13 @@
                     </StackPanel>
                 </GroupBox>
 
-                <GroupBox Header="Atualizacoes" Margin="0,12,0,0">
+                <GroupBox Header="Atualizações" Margin="0,12,0,0">
                     <StackPanel Margin="12">
-                        <CheckBox Content="Baixar e aplicar atualizacoes automaticamente ao iniciar"
+                        <CheckBox Content="Baixar e aplicar atualizações automaticamente ao iniciar"
                                   IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}"
                                   IsEnabled="{Binding IsAutomaticUpdateToggleEnabled}" />
                         <TextBlock Margin="0,8,0,0"
-                                   Text="Canal de atualizacao"
+                                   Text="Canal de atualização"
                                    FontWeight="SemiBold" />
                         <ComboBox Margin="0,8,0,0"
                                   Height="34"
@@ -303,11 +303,11 @@
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="0"
                                     Height="34"
-                                    Content="Buscar atualizacoes"
+                                    Content="Buscar atualizações"
                                     Command="{Binding SearchUpdatesCommand}" />
                             <Button Grid.Column="2"
                                     Height="34"
-                                    Content="Instalar atualizacao"
+                                    Content="Instalar atualização"
                                     Command="{Binding InstallUpdateCommand}" />
                         </Grid>
                         <Button Margin="0,12,0,0"
@@ -317,7 +317,7 @@
                                 Visibility="{Binding IsLocalDevelopmentBuild, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <Button Margin="0,12,0,0"
                                 Height="34"
-                                Content="Voltar versao anterior"
+                                Content="Voltar versão anterior"
                                 Command="{Binding RollbackToPreviousVersionCommand}" />
                         <Button Margin="0,12,0,0"
                                 Height="34"

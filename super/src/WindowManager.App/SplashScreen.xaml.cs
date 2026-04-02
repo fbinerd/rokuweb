@@ -17,12 +17,12 @@ namespace WindowManager.App
 
         public void SetInstalledVersion(string version)
         {
-            InstalledVersionText.Text = $"Versao instalada: {version}";
+            InstalledVersionText.Text = $"Versão instalada: {version}";
         }
 
         public void SetRemoteVersion(string version)
         {
-            RemoteVersionText.Text = $"Versao disponivel: {version}";
+            RemoteVersionText.Text = $"Versão disponível: {version}";
         }
 
         public void ShowProgressBar(bool show)
@@ -78,6 +78,21 @@ namespace WindowManager.App
         }
 
         public Button GetOkButton() => OkButton;
+
+        public void SetInteractionEnabled(bool enabled)
+        {
+            ChannelComboBox.IsEnabled = enabled;
+            SetDefaultBranchCheckBox.IsEnabled = enabled;
+            OkButton.IsEnabled = enabled;
+
+            if (!enabled)
+            {
+                AutoUpdateCheckBox.IsEnabled = false;
+                return;
+            }
+
+            SyncUpdateOptionState();
+        }
 
         public void SetCompactMode(bool compact)
         {

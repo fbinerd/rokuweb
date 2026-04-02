@@ -28,10 +28,11 @@ public sealed class AppSelfUpdateService
     public async Task<AppSelfUpdateResult> DownloadAndPrepareAsync(
         AppUpdateCheckResult update,
         Action<string, double>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string restartArguments = "")
     {
         var downloadResult = await DownloadPackagesAsync(update, progress, cancellationToken).ConfigureAwait(false);
-        return await PrepareDownloadedPackagesAsync(update, downloadResult, progress, cancellationToken).ConfigureAwait(false);
+        return await PrepareDownloadedPackagesAsync(update, downloadResult, progress, cancellationToken, restartArguments).ConfigureAwait(false);
     }
 
     public async Task<AppSelfUpdateDownloadResult> DownloadPackagesAsync(
@@ -41,13 +42,13 @@ public sealed class AppSelfUpdateService
     {
         if (update is null || !update.UpdateAvailable)
         {
-            return AppSelfUpdateDownloadResult.Failure("Nenhuma atualizacao disponivel para aplicar.");
+            return AppSelfUpdateDownloadResult.Failure("Nenhuma atualização disponível para aplicar.");
         }
 
         var packageUrls = ResolvePackageUrls(update);
         if (packageUrls.Length == 0)
         {
-            return AppSelfUpdateDownloadResult.Failure("Manifesto sem pacotes validos para aplicar.");
+            return AppSelfUpdateDownloadResult.Failure("Manifesto sem pacotes válidos para aplicar.");
         }
 
         var tempRoot = Path.Combine(
@@ -89,11 +90,12 @@ public sealed class AppSelfUpdateService
         AppUpdateCheckResult update,
         AppSelfUpdateDownloadResult downloadResult,
         Action<string, double>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string restartArguments = "")
     {
         if (downloadResult is null || !downloadResult.Succeeded)
         {
-            return AppSelfUpdateResult.Failure(downloadResult?.Message ?? "Pacotes de update nao foram baixados.");
+            return AppSelfUpdateResult.Failure(downloadResult?.Message ?? "Pacotes de atualização não foram baixados.");
         }
 
         var extractRoot = Path.Combine(downloadResult.TempRoot, "extracted");
@@ -135,7 +137,8 @@ public sealed class AppSelfUpdateService
             targetDirectory,
             exePath,
             expectedExecutableHash,
-            Path.Combine(downloadResult.TempRoot, "apply-update.log"));
+            Path.Combine(downloadResult.TempRoot, "apply-update.log"),
+            restartArguments);
 
         File.WriteAllText(scriptPath, scriptContent, Encoding.ASCII);
         progress?.Invoke("Finalizando preparacao da atualizacao...", 95);

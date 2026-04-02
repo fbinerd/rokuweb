@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$RokuIp = "",
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
@@ -17,12 +17,16 @@ Add-Type -AssemblyName System.Net.Http
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
-$superWatchdogScriptPath = Join-Path $repoRoot "Run-SuperPainelWatchdog.ps1"
-$superWatchdogHiddenLauncherPath = Join-Path $repoRoot "Run-SuperPainelWatchdogHidden.vbs"
+$superLauncherPath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperLauncher.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
+$diagnosticsRoot = Join-Path $repoRoot "tmp\diagnostics"
 $superDataRoot = Join-Path $env:LOCALAPPDATA "WindowManagerBroadcast"
+$superLogPath = Join-Path $superDataRoot "logs\super.log"
 $desktopShortcutPath = Join-Path $env:USERPROFILE "Desktop\SuperPainel Local.lnk"
+$launchSuperBeforeSideload = [bool]$LaunchSuper
+$superReadyForSideload = $false
+$activeDiagnosticsSession = ""
 
 function Invoke-Step {
     param(
@@ -122,22 +126,43 @@ function Invoke-RokuSideload {
         }
 
         if ($LaunchChannel) {
-            Start-Sleep -Milliseconds 1200
-            try {
-                $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-                Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
-            }
-            catch {
-                Write-Host "keypress/Home => falhou"
+            $devAlreadyActive = $false
+            for ($attempt = 0; $attempt -lt 8; $attempt++) {
+                Start-Sleep -Milliseconds 900
+                try {
+                    $activeAppResponse = $client.GetAsync("http://${RokuHost}:8060/query/active-app").GetAwaiter().GetResult()
+                    $activeAppBody = $activeAppResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    if ($activeAppResponse.IsSuccessStatusCode -and $activeAppBody -match 'id=\"dev\"') {
+                        $devAlreadyActive = $true
+                        Write-Host ("active-app => canal dev ja ativo apos plugin_install (tentativa {0})" -f ($attempt + 1))
+                        break
+                    }
+                }
+                catch {
+                }
             }
 
-            Start-Sleep -Milliseconds 1200
-            $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
-            $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-            $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
-            Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
-            Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
-            Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
+            if (-not $devAlreadyActive) {
+                Start-Sleep -Milliseconds 1200
+                try {
+                    $homeResponse = $client.PostAsync("http://${RokuHost}:8060/keypress/Home", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+                    Write-Host ("keypress/Home => status={0}" -f [int]$homeResponse.StatusCode)
+                }
+                catch {
+                    Write-Host "keypress/Home => falhou"
+                }
+
+                Start-Sleep -Milliseconds 1200
+                $launchResponse = $client.PostAsync("http://${RokuHost}:8060/launch/dev", [System.Net.Http.StringContent]::new("")).GetAwaiter().GetResult()
+                $launchBody = $launchResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                $launchDumpPath = Join-Path $sideloadLogRoot ("launch_dev-{0}-{1}.txt" -f ($RokuHost -replace '[^0-9A-Za-z.-]', '_'), $timestamp)
+                Set-Content -Path $launchDumpPath -Value $launchBody -Encoding UTF8
+                Write-Host ("launch/dev => status={0}" -f [int]$launchResponse.StatusCode)
+                Write-Host ("launch/dev dump => {0}" -f $launchDumpPath)
+            }
+            else {
+                Write-Host "launch/dev => ignorado porque o canal dev ja ficou ativo apos plugin_install"
+            }
         }
         else {
             Write-Host "launch/dev => ignorado (use -LaunchRokuApp para relancar o canal na TV)"
@@ -242,10 +267,193 @@ function Update-SuperDesktopShortcut {
     Write-Host ("Atalho atualizado em: {0}" -f $ShortcutPath)
 }
 
+function Send-RokuHome {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RokuHost
+    )
+
+    try {
+        Invoke-WebRequest -Uri "http://${RokuHost}:8060/keypress/Home" -Method Post -UseBasicParsing -TimeoutSec 5 | Out-Null
+        Write-Host "keypress/Home => enviado antes do sideload"
+    }
+    catch {
+        Write-Host "keypress/Home => falhou antes do sideload"
+    }
+
+    Start-Sleep -Milliseconds 1200
+}
+
+function Stop-ExistingSuperLaunchers {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            ($_.Name -match 'powershell|wscript') -and
+            (
+                ($_.CommandLine -match 'Run-SuperPainelWatchdog') -or
+                ($_.CommandLine -match 'Run-SuperPainelWatchdogHidden')
+            )
+        } |
+        ForEach-Object {
+            try {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+        }
+}
+
+function Stop-ExistingLocalLogMonitors {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match 'powershell' -and
+            $_.CommandLine -match 'Dev-LocalLogMonitor\.ps1'
+        } |
+        ForEach-Object {
+            try {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+        }
+}
+
+function Start-LocalDiagnosticsMonitor {
+    param(
+        [string]$RokuHost
+    )
+
+    Stop-ExistingLocalLogMonitors
+    New-Item -ItemType Directory -Force -Path $diagnosticsRoot | Out-Null
+
+    $sessionName = Get-Date -Format "yyyyMMdd-HHmmss"
+    $sessionRoot = Join-Path $diagnosticsRoot $sessionName
+    New-Item -ItemType Directory -Force -Path $sessionRoot | Out-Null
+
+    $monitorScriptPath = Join-Path $repoRoot "scripts\Dev-LocalLogMonitor.ps1"
+    if (-not (Test-Path $monitorScriptPath)) {
+        throw "Script de monitor nao encontrado: $monitorScriptPath"
+    }
+
+    $argumentList = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", ('"{0}"' -f $monitorScriptPath),
+        "-SessionRoot", ('"{0}"' -f $sessionRoot),
+        "-SuperLogPath", ('"{0}"' -f $superLogPath),
+        "-DurationMinutes", "30"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RokuHost)) {
+        $argumentList += @("-RokuIp", ('"{0}"' -f $RokuHost))
+    }
+
+    Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
+    return $sessionRoot
+}
+
+function Start-SuperLocal {
+    Stop-ExistingSuperLaunchers
+    Get-Process -Name "SuperLauncher" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 600
+
+    if (-not (Test-Path $superLauncherPath)) {
+        throw "Executavel do SuperLauncher nao encontrado: $superLauncherPath"
+    }
+
+    $launcherProcess = Start-Process -FilePath $superLauncherPath -WorkingDirectory (Split-Path -Parent $superLauncherPath) -WindowStyle Normal -PassThru
+    $deadline = (Get-Date).AddSeconds(20)
+
+    while ((Get-Date) -lt $deadline) {
+        $process = Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue |
+            Sort-Object StartTime -Descending |
+            Select-Object -First 1
+
+        if ($process) {
+            return $process
+        }
+
+        try {
+            $launcherProcess.Refresh()
+            if ($launcherProcess.HasExited -and $launcherProcess.ExitCode -ne 0) {
+                throw "O SuperLauncher encerrou com falha. ExitCode=$($launcherProcess.ExitCode)"
+            }
+        }
+        catch {
+            throw
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "O SuperPainel nao iniciou a partir do SuperLauncher a tempo."
+}
+
+function Wait-SuperWindowReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $Process.Refresh()
+            if ($Process.HasExited) {
+                throw "O SuperPainel encerrou antes de criar a janela principal. ExitCode=$($Process.ExitCode)"
+            }
+
+            if ($Process.MainWindowHandle -ne 0) {
+                return $true
+            }
+        }
+        catch {
+            throw
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    return $false
+}
+
+function Wait-SuperBridgeReady {
+    param(
+        [string]$BaseUrl = "http://127.0.0.1:8090",
+        [int]$TimeoutSeconds = 25
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -Uri ($BaseUrl.TrimEnd('/') + "/api/windows") -UseBasicParsing -TimeoutSec 3
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+                return $true
+            }
+        }
+        catch {
+        }
+
+        Start-Sleep -Milliseconds 700
+    }
+
+    return $false
+}
+
 if ($ResetLocalData) {
     Invoke-Step -Label "Resetar base local do SuperPainel" -Action {
         Reset-SuperLocalData -DataRoot $superDataRoot
     }
+}
+
+Invoke-Step -Label "Iniciar monitor de diagnostico local" -Action {
+    $script:activeDiagnosticsSession = Start-LocalDiagnosticsMonitor -RokuHost $RokuIp.Trim()
+    Write-Host ("Diagnostico: {0}" -f $script:activeDiagnosticsSession)
+    Write-Host ("Super bruto: {0}" -f (Join-Path $script:activeDiagnosticsSession "super-raw.log"))
+    Write-Host ("Telnet bruto: {0}" -f (Join-Path $script:activeDiagnosticsSession "telnet-raw.log"))
+    Write-Host ("Foco filtrado: {0}" -f (Join-Path $script:activeDiagnosticsSession "focus.log"))
 }
 
 Invoke-Step -Label "Compilar super em modo local" -Action {
@@ -280,21 +488,25 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
 
 Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
     Update-SuperDesktopShortcut `
-        -TargetPath "$env:SystemRoot\System32\wscript.exe" `
+        -TargetPath $superLauncherPath `
         -ShortcutPath $desktopShortcutPath `
-        -Arguments "`"$superWatchdogHiddenLauncherPath`"" `
-        -WorkingDirectory $repoRoot
+        -Arguments "" `
+        -WorkingDirectory (Split-Path -Parent $superLauncherPath)
 }
 
-if ($LaunchSuper) {
+if ($launchSuperBeforeSideload) {
     Invoke-Step -Label "Abrir SuperPainel local" -Action {
-        if (-not (Test-Path $superWatchdogHiddenLauncherPath)) {
-            throw "Launcher watchdog oculto nao encontrado: $superWatchdogHiddenLauncherPath"
+        $superProcess = Start-SuperLocal
+        Write-Host ("SuperPainel iniciado => pid={0}" -f $superProcess.Id)
+        if (-not (Wait-SuperWindowReady -Process $superProcess)) {
+            throw "O SuperPainel nao criou a janela principal a tempo."
         }
-
-        Start-Process -FilePath "$env:SystemRoot\System32\wscript.exe" -ArgumentList @(
-            $superWatchdogHiddenLauncherPath
-        ) -WorkingDirectory $repoRoot
+        Write-Host "SuperPainel com janela principal ativa."
+        if (-not (Wait-SuperBridgeReady)) {
+            throw "O SuperPainel nao respondeu em /api/windows a tempo."
+        }
+        $script:superReadyForSideload = $true
+        Write-Host "SuperPainel pronto para seguir com o sideload."
     }
 }
 
@@ -303,6 +515,10 @@ if (-not $LaunchSuper) {
 }
 
 if (-not $SkipSideload) {
+    if ($LaunchSuper -and -not $superReadyForSideload) {
+        throw "O sideload foi bloqueado porque o SuperPainel nao ficou pronto antes da etapa da Roku."
+    }
+
     if ([string]::IsNullOrWhiteSpace($RokuIp)) {
         throw "Informe -RokuIp para fazer sideload local, ou use -SkipSideload."
     }
@@ -321,6 +537,9 @@ if (-not $SkipSideload) {
     }
 
     Invoke-Step -Label "Enviar sideload local para $RokuIp" -Action {
+        if ($LaunchRokuApp) {
+            Send-RokuHome -RokuHost $RokuIp.Trim()
+        }
         Invoke-RokuSideload -RokuHost $RokuIp.Trim() -Username $RokuUser -Password $RokuPassword -PackagePath $localRokuZip -LaunchChannel:$LaunchRokuApp
     }
 }
@@ -328,4 +547,12 @@ if (-not $SkipSideload) {
 Write-Host ""
 Write-Host "Fluxo local concluido."
 Write-Host "Super: $superExePath"
+Write-Host "Launcher: $superLauncherPath"
 Write-Host "Roku zip: $localRokuZip"
+if (-not [string]::IsNullOrWhiteSpace($activeDiagnosticsSession)) {
+    Write-Host "Diagnostico:"
+    Write-Host ("  Pasta: {0}" -f $activeDiagnosticsSession)
+    Write-Host ("  Super: {0}" -f (Join-Path $activeDiagnosticsSession "super-raw.log"))
+    Write-Host ("  Telnet: {0}" -f (Join-Path $activeDiagnosticsSession "telnet-raw.log"))
+    Write-Host ("  Foco: {0}" -f (Join-Path $activeDiagnosticsSession "focus.log"))
+}
