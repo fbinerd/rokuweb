@@ -18,7 +18,17 @@ public sealed class AppSelfUpdateService
         Timeout = TimeSpan.FromMinutes(10)
     };
 
-    public async Task<AppSelfUpdateResult> DownloadAndPrepareAsync(AppUpdateCheckResult update, CancellationToken cancellationToken)
+    public async Task<AppSelfUpdateResult> DownloadAndPrepareAsync(
+        AppUpdateCheckResult update,
+        CancellationToken cancellationToken)
+    {
+        return await DownloadAndPrepareAsync(update, progress: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<AppSelfUpdateResult> DownloadAndPrepareAsync(
+        AppUpdateCheckResult update,
+        Action<string, double>? progress,
+        CancellationToken cancellationToken)
     {
         if (update is null || !update.UpdateAvailable)
         {
@@ -64,6 +74,12 @@ public sealed class AppSelfUpdateService
             var packageFileName = Path.GetFileName(new Uri(packageUrl).AbsolutePath);
             var packagePath = Path.Combine(tempRoot, string.Format("{0:D2}-{1}", index + 1, packageFileName));
             var extractDirectory = Path.Combine(extractRoot, string.Format("{0:D2}", index + 1));
+            var packageBaseProgress = packageUrls.Length == 0 ? 0 : (index * 80.0) / packageUrls.Length;
+            var packageProgressSpan = packageUrls.Length == 0 ? 80.0 : 80.0 / packageUrls.Length;
+
+            progress?.Invoke(
+                string.Format("Baixando pacote {0}/{1}...", index + 1, packageUrls.Length),
+                packageBaseProgress);
 
             using (var response = await HttpClient.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
             {
@@ -71,14 +87,28 @@ public sealed class AppSelfUpdateService
                 using (var sourceStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                 using (var destinationStream = File.Create(packagePath))
                 {
-                    await sourceStream.CopyToAsync(destinationStream).ConfigureAwait(false);
+                    await CopyWithProgressAsync(
+                        sourceStream,
+                        destinationStream,
+                        response.Content.Headers.ContentLength,
+                        message => progress?.Invoke(message, packageBaseProgress + packageProgressSpan * 0.9),
+                        value => progress?.Invoke(
+                            string.Format("Baixando pacote {0}/{1}...", index + 1, packageUrls.Length),
+                            packageBaseProgress + (packageProgressSpan * 0.9 * value / 100.0)),
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
 
+            progress?.Invoke(
+                string.Format("Extraindo pacote {0}/{1}...", index + 1, packageUrls.Length),
+                packageBaseProgress + packageProgressSpan * 0.92);
             Directory.CreateDirectory(extractDirectory);
             ZipFile.ExtractToDirectory(packagePath, extractDirectory);
             extractedDirectories.Add(extractDirectory);
             lastPackagePath = packagePath;
+            progress?.Invoke(
+                string.Format("Pacote {0}/{1} pronto.", index + 1, packageUrls.Length),
+                packageBaseProgress + packageProgressSpan);
         }
 
         var expectedExecutableHash = string.Empty;
@@ -98,6 +128,7 @@ public sealed class AppSelfUpdateService
             Path.Combine(tempRoot, "apply-update.log"));
 
         File.WriteAllText(scriptPath, scriptContent, Encoding.ASCII);
+        progress?.Invoke("Finalizando preparacao da atualizacao...", 95);
 
         Process.Start(new ProcessStartInfo
         {
@@ -111,6 +142,7 @@ public sealed class AppSelfUpdateService
             WindowStyle = ProcessWindowStyle.Hidden
         });
 
+        progress?.Invoke("Atualizacao preparada. Reiniciando aplicacao...", 100);
         return AppSelfUpdateResult.Success(
             string.Join(Environment.NewLine, packageUrls),
             lastPackagePath,
@@ -259,6 +291,72 @@ public sealed class AppSelfUpdateService
         }
 
         return string.Format("--restore-backup \"{0}\"", restoreBackupZipPath.Replace("\"", "\"\""));
+    }
+
+    private static async Task CopyWithProgressAsync(
+        Stream source,
+        Stream destination,
+        long? contentLength,
+        Action<string>? message,
+        Action<double>? progress,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        long totalRead = 0;
+        long previousRead = 0;
+        int bytesRead;
+        var stopwatch = Stopwatch.StartNew();
+        var lastUpdate = TimeSpan.Zero;
+        double smoothedKbps = 0;
+
+        while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            await destination.WriteAsync(buffer, 0, bytesRead, cancellationToken).ConfigureAwait(false);
+            totalRead += bytesRead;
+            var elapsed = stopwatch.Elapsed;
+            var deltaSeconds = Math.Max(0.1, (elapsed - lastUpdate).TotalSeconds);
+            var deltaRead = totalRead - previousRead;
+            var instantKbps = (deltaRead / 1024.0) / deltaSeconds;
+            smoothedKbps = smoothedKbps <= 0
+                ? instantKbps
+                : ((smoothedKbps * 0.8) + (instantKbps * 0.2));
+
+            var shouldReport = elapsed - lastUpdate >= TimeSpan.FromMilliseconds(250)
+                || (contentLength.GetValueOrDefault() > 0 && totalRead >= contentLength.Value);
+
+            if (!shouldReport)
+            {
+                if (contentLength.GetValueOrDefault() > 0)
+                {
+                    progress?.Invoke(Math.Min(100, totalRead * 100.0 / contentLength.Value));
+                }
+
+                continue;
+            }
+
+            previousRead = totalRead;
+            lastUpdate = elapsed;
+
+            if (contentLength.GetValueOrDefault() > 0)
+            {
+                message?.Invoke(
+                    string.Format(
+                        "Baixando pacote... {0:N1} MB baixados / {1:N1} MB total - {2:N0} KB/s",
+                        totalRead / 1024.0 / 1024.0,
+                        contentLength.Value / 1024.0 / 1024.0,
+                        smoothedKbps));
+                progress?.Invoke(Math.Min(100, totalRead * 100.0 / contentLength.Value));
+            }
+            else
+            {
+                message?.Invoke(string.Format("Baixando pacote... {0:N0} KB baixados - {1:N0} KB/s", totalRead / 1024.0, smoothedKbps));
+            }
+        }
+
+        if (contentLength.GetValueOrDefault() > 0)
+        {
+            progress?.Invoke(100);
+        }
     }
 }
 

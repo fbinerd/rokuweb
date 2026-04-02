@@ -27,13 +27,30 @@ namespace WindowManager.App
 
         public void ShowProgressBar(bool show)
         {
-            ProgressBar.Visibility = show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            ProgressContainer.Visibility = show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            if (!show)
+            {
+                ProgressDetailsHost.Visibility = System.Windows.Visibility.Collapsed;
+                ProgressDetailsShadowText.Text = string.Empty;
+                ProgressDetailsText.Text = string.Empty;
+            }
         }
 
         public void SetStatus(string message, double progress)
         {
             StatusText.Text = message;
             ProgressBar.Value = progress;
+        }
+
+        public void SetProgressDetails(string? details)
+        {
+            var hasDetails = !string.IsNullOrWhiteSpace(details);
+            var text = hasDetails ? details! : string.Empty;
+            ProgressDetailsShadowText.Text = text;
+            ProgressDetailsText.Text = text;
+            ProgressDetailsHost.Visibility = hasDetails
+                ? System.Windows.Visibility.Visible
+                : System.Windows.Visibility.Collapsed;
         }
 
         public bool IsAutoUpdateChecked => AutoUpdateCheckBox.IsChecked == true;

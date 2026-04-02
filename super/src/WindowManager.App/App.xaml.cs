@@ -6,6 +6,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using WindowManager.App.Profiles;
 using WindowManager.App.Runtime;
 using WindowManager.App.ViewModels;
@@ -128,76 +129,154 @@ public partial class App : Application
                 {
                     try
                     {
-                        splash.ShowProgressBar(true);
-                        splash.SetStatus("Baixando e aplicando update...", 10);
+                        void RunOnSplashUi(Action action)
+                        {
+                            if (splash.Dispatcher.CheckAccess())
+                            {
+                                action();
+                                return;
+                            }
+
+                            splash.Dispatcher.Invoke(action);
+                        }
+
+                        static (string Status, string Details, bool PreserveDetails) SplitProgressMessage(string message)
+                        {
+                            if (string.IsNullOrWhiteSpace(message))
+                            {
+                                return (string.Empty, string.Empty, false);
+                            }
+
+                            const string downloadPrefix = "Baixando pacote... ";
+                            if (message.StartsWith(downloadPrefix, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return ("Baixando pacote...", message.Substring(downloadPrefix.Length).Trim(), false);
+                            }
+
+                            if (message.StartsWith("Baixando pacote ", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return (message, string.Empty, true);
+                            }
+
+                            return (message, string.Empty, false);
+                        }
+
+                        await splash.Dispatcher.InvokeAsync(() =>
+                        {
+                            splash.ShowProgressBar(true);
+                            splash.SetStatus("Iniciando atualizacao...", 1);
+                            splash.SetProgressDetails(string.Empty);
+                            splash.GetOkButton().IsEnabled = false;
+                            splash.ChannelCombo.IsEnabled = false;
+                        }, DispatcherPriority.Render);
+
+                        await Task.Yield();
+
+                        double currentProgress = 0;
+                        string currentProgressDetails = string.Empty;
+                        void SetProgress(string message, double progress)
+                        {
+                            currentProgress = Math.Max(currentProgress, Math.Max(0, Math.Min(100, progress)));
+                            var (status, details, preserveDetails) = SplitProgressMessage(message);
+                            if (!string.IsNullOrWhiteSpace(details))
+                            {
+                                currentProgressDetails = details;
+                            }
+                            else if (!preserveDetails)
+                            {
+                                currentProgressDetails = string.Empty;
+                            }
+
+                            RunOnSplashUi(() =>
+                            {
+                                splash.SetStatus(status, currentProgress);
+                                splash.SetProgressDetails(currentProgressDetails);
+                            });
+                        }
+
+                        double MapProgress(double phaseStart, double phaseEnd, double phaseProgress)
+                        {
+                            var normalized = Math.Max(0, Math.Min(100, phaseProgress)) / 100.0;
+                            return phaseStart + ((phaseEnd - phaseStart) * normalized);
+                        }
+
+                        SetProgress("Verificando atualizacao...", 5);
 
                         var normalizedBranch = UpdateChannelNames.Normalize(branch);
                         var updateResult = prefetchedUpdates.TryGetValue(normalizedBranch, out var cached)
                             ? cached
                             : await manifestService.CheckForUpdateAsync(normalizedBranch, CancellationToken.None);
 
-                        splash.SetRemoteVersion(FormatRemoteVersion(updateResult));
+                        RunOnSplashUi(() => splash.SetRemoteVersion(FormatRemoteVersion(updateResult)));
 
-                        if (!updateResult.UpdateAvailable)
+                        if (updateResult.UpdateAvailable)
                         {
-                            splash.SetStatus("Nenhuma atualizacao disponivel.", 100);
-                            splash.Close();
-                            return true;
-                        }
+                            SetProgress(
+                                $"Update disponivel: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})",
+                                12);
 
-                        splash.SetStatus(
-                            $"Update disponivel: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})",
-                            30);
+                            var maintenanceService = new AppDataMaintenanceService();
+                            var backupPath = string.Empty;
 
-                        var maintenanceService = new AppDataMaintenanceService();
-                        var backupPath = string.Empty;
-
-                        try
-                        {
-                            backupPath = Path.Combine(
-                                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                "WindowManagerBroadcast",
-                                "backups",
-                                $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
-                            await maintenanceService.ExportAsync(backupPath, CancellationToken.None);
-                            splash.SetStatus($"Backup criado: {backupPath}", 50);
-                        }
-                        catch (Exception ex)
-                        {
-                            splash.SetStatus($"Falha ao criar backup: {ex.Message}", 50);
-                        }
-
-                        splash.SetStatus("Baixando e aplicando update...", 70);
-                        var selfUpdateService = new AppSelfUpdateService();
-                        var applyResult = await selfUpdateService.DownloadAndPrepareAsync(updateResult, CancellationToken.None);
-
-                        if (!applyResult.Succeeded)
-                        {
-                            splash.SetStatus($"Falha ao aplicar update: {applyResult.Message}", 100);
-
-                            if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
+                            try
                             {
-                                splash.SetStatus("Restaurando backup...", 90);
-                                await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
-                                splash.SetStatus("Backup restaurado.", 100);
+                                backupPath = Path.Combine(
+                                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                    "WindowManagerBroadcast",
+                                    "backups",
+                                    $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
+                                SetProgress("Criando backup antes da atualizacao...", 18);
+                                await maintenanceService.ExportAsync(
+                                    backupPath,
+                                    (message, progress) => SetProgress(message, MapProgress(18, 25, progress)),
+                                    CancellationToken.None);
+                                SetProgress($"Backup criado: {backupPath}", 25);
+                            }
+                            catch (Exception ex)
+                            {
+                                SetProgress($"Falha ao criar backup: {ex.Message}", 25);
                             }
 
-                            MessageBox.Show(
-                                $"Falha ao aplicar update: {applyResult.Message}\nBackup restaurado.",
-                                "Erro de Update",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Error);
-                            Shutdown(-1);
-                            return false;
+                            SetProgress("Baixando e aplicando update...", 30);
+                            var selfUpdateService = new AppSelfUpdateService();
+                            var applyResult = await selfUpdateService.DownloadAndPrepareAsync(
+                                updateResult,
+                                (message, progress) => SetProgress(message, MapProgress(30, 80, progress)),
+                                CancellationToken.None);
+
+                            if (!applyResult.Succeeded)
+                            {
+                                SetProgress($"Falha ao aplicar update: {applyResult.Message}", 100);
+
+                                if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
+                                {
+                                    SetProgress("Restaurando backup...", 90);
+                                    await maintenanceService.ImportAsync(backupPath, CancellationToken.None);
+                                    SetProgress("Backup restaurado.", 100);
+                                }
+
+                                MessageBox.Show(
+                                    $"Falha ao aplicar update: {applyResult.Message}\nBackup restaurado.",
+                                    "Erro de Update",
+                                    MessageBoxButton.OK,
+                                    MessageBoxImage.Error);
+                                Shutdown(-1);
+                                return false;
+                            }
+
+                            SetProgress("Update aplicado com sucesso!", 80);
+                        }
+                        else
+                        {
+                            SetProgress("Nenhuma atualizacao disponivel. Verificando dependencias...", 30);
                         }
 
-                        splash.SetStatus("Update aplicado com sucesso!", 100);
-                        splash.SetStatus("Baixando e configurando ferramentas...", 90);
+                        SetProgress("Verificando e configurando dependencias...", 80);
                         await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(
                             toolsDir,
-                            (message, progress) => splash.SetStatus(message, progress));
-                        splash.SetStatus("Dependencias prontas!", 100);
-                        splash.Close();
+                            (message, progress) => SetProgress(message, MapProgress(80, 100, progress)));
+                        SetProgress("Dependencias prontas!", 100);
+                        RunOnSplashUi(() => splash.Close());
                         return true;
                     }
                     catch (Exception ex)
@@ -208,10 +287,7 @@ public partial class App : Application
                     }
                 }
 
-                var shouldAutoStart = rememberDefaultBranch
-                    && autoUpdateChecked
-                    && prefetchedUpdates.TryGetValue(UpdateChannelNames.Normalize(selectedChannel), out var autoStartResult)
-                    && autoStartResult.UpdateAvailable;
+                var shouldAutoStart = rememberDefaultBranch && autoUpdateChecked;
 
                 LogStep(
                     $"Updater splash pronta: branch={selectedChannel}, auto={autoUpdateChecked}, " +
