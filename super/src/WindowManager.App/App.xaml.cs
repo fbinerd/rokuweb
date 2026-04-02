@@ -15,6 +15,8 @@ namespace WindowManager.App;
 
 public partial class App : Application
 {
+    private const string SkipUpdaterArgument = "--skip-updater";
+    private const string LaunchedByLauncherArgument = "--launched-by-launcher";
     private static Mutex? _singleInstanceMutex;
     private string _watchdogToken = string.Empty;
 
@@ -56,7 +58,20 @@ public partial class App : Application
         {
             LogStep("OnStartup inicializando updater");
             splash = new SplashScreen();
-            var skipUpdater = HasArgument(e.Args, "--skip-updater");
+            var skipUpdater = HasArgument(e.Args, SkipUpdaterArgument);
+            var launchedByLauncher = HasArgument(e.Args, LaunchedByLauncherArgument);
+
+            if (!launchedByLauncher)
+            {
+                LogStep("Inicializacao bloqueada: SuperPainel foi aberto sem passar pelo launcher.");
+                MessageBox.Show(
+                    "Abra o Super pelo SuperLauncher. A abertura direta do SuperPainel foi bloqueada.",
+                    "Inicialização bloqueada",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Shutdown(-1);
+                return;
+            }
 
             var startupProfileName = await profileStore.GetStartupProfileNameAsync(CancellationToken.None);
             var startupProfile = await profileStore.LoadAsync(startupProfileName, CancellationToken.None);

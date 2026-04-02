@@ -12,6 +12,7 @@
     <AssemblyName>SuperLauncher</AssemblyName>
     <Product>SuperLauncher</Product>
     <Title>SuperLauncher</Title>
+    <ApplicationIcon>..\WindowManager.App\favicon.ico</ApplicationIcon>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>..\WindowManager.App\bin\$(Configuration)\$(TargetFramework)\</OutputPath>
   </PropertyGroup>

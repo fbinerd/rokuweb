@@ -15,6 +15,9 @@ namespace WindowManager.Launcher;
 
 public partial class App : Application
 {
+    private const string SkipUpdaterArgument = "--skip-updater";
+    private const string LaunchedByLauncherArgument = "--launched-by-launcher";
+
     private enum LauncherOutcome
     {
         LaunchInstalledApp,
@@ -529,9 +532,14 @@ public partial class App : Application
 
         foreach (var arg in originalArgs ?? Array.Empty<string>())
         {
-            if (string.Equals(arg, "--skip-updater", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(arg, SkipUpdaterArgument, StringComparison.OrdinalIgnoreCase))
             {
                 hasSkipUpdater = true;
+            }
+
+            if (string.Equals(arg, LaunchedByLauncherArgument, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
             }
 
             items.Add(QuoteArgument(arg));
@@ -539,8 +547,10 @@ public partial class App : Application
 
         if (!hasSkipUpdater)
         {
-            items.Add("--skip-updater");
+            items.Add(SkipUpdaterArgument);
         }
+
+        items.Add(LaunchedByLauncherArgument);
 
         return string.Join(" ", items);
     }
