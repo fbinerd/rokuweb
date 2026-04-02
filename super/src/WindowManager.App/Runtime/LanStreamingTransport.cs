@@ -11,18 +11,11 @@ public sealed class LanStreamingTransport : IDisplayTransport
 
     public Task StartAsync(CaptureSession captureSession, DisplayTarget target, CancellationToken cancellationToken)
     {
-        AppLog.Write(
-            "Transporte",
-            string.Format(
-                "LanStreaming acionado para '{0}' ({1}), mas a transmissao real ainda nao foi implementada.",
-                target.Name,
-                target.NetworkAddress));
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CaptureSession captureSession, CancellationToken cancellationToken)
     {
-        AppLog.Write("Transporte", "LanStreaming encerrado.");
         return Task.CompletedTask;
     }
 }

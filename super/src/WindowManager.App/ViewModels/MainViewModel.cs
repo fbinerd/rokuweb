@@ -44,6 +44,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly UpdateRollbackStore _updateRollbackStore;
     private readonly UpdateRecoveryService _updateRecoveryService;
     private readonly SemaphoreSlim _profileLoadSemaphore = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _updatePreferenceSaveSemaphore = new SemaphoreSlim(1, 1);
 
     private bool _isApplyingProfile;
     private bool _isRefreshingProfileNames;
@@ -54,8 +55,8 @@ public sealed class MainViewModel : ViewModelBase
     private WindowProfileViewModel? _selectedWindowProfile;
     private StaticDisplayPanelViewModel? _selectedStaticPanel;
     private string _profileName = "default";
-    private string _browserUrlInput = "https://emei.lovable.app";
-    private string _currentBrowserAddress = "https://emei.lovable.app";
+    private string _browserUrlInput = "https://SEU_SITE_AQUI";
+    private string _currentBrowserAddress = "https://SEU_SITE_AQUI";
     private int _webRtcServerPort = 8090;
     private WebRtcBindMode _webRtcBindMode = WebRtcBindMode.Lan;
     private string _webRtcSpecificIp = string.Empty;
@@ -68,6 +69,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isUpdateAvailable;
     private bool _isCheckingForUpdates;
     private bool _autoUpdateEnabled;
+    private bool _rememberUpdateChannelSelection;
     private bool _showWindowPreviews = true;
     private AppUpdateCheckResult? _lastUpdateCheckResult;
     private string _additionalDiscoveryCidrs = string.Empty;
@@ -76,6 +78,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isRestoringActiveSessions;
     private bool _suppressActiveSessionPersistence;
     private bool _isInitializingStartup;
+    private bool _startupInitializationCompleted;
     private bool _isNormalizingWindowProfiles;
     private readonly Dictionary<Guid, DateTime> _streamKeepAliveAttemptUtc = new Dictionary<Guid, DateTime>();
 
@@ -181,7 +184,11 @@ public sealed class MainViewModel : ViewModelBase
 
     public bool IsLocalDevelopmentBuild => string.Equals(BuildVersionInfo.CurrentBuildChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
 
-    public bool IsAutomaticUpdateToggleEnabled => !IsLocalDevelopmentBuild;
+    public bool IsAutomaticUpdateToggleEnabled => RememberUpdateChannelSelection;
+
+    public bool IsUpdateChannelDefaultToggleEnabled => true;
+
+    public bool IsUpdateChannelSelectionEnabled => true;
 
     public bool ShowWindowPreviews
     {
@@ -485,18 +492,30 @@ public sealed class MainViewModel : ViewModelBase
         get => _autoUpdateEnabled;
         set
         {
-            if (IsLocalDevelopmentBuild)
-            {
-                if (SetProperty(ref _autoUpdateEnabled, false))
-                {
-                    _ = PersistUpdatePreferencesAsync();
-                }
-
-                return;
-            }
-
             if (SetProperty(ref _autoUpdateEnabled, value))
             {
+                RaisePropertyChanged(nameof(IsAutomaticUpdateToggleEnabled));
+                _ = PersistUpdatePreferencesAsync();
+            }
+        }
+    }
+
+    public bool RememberUpdateChannelSelection
+    {
+        get => _rememberUpdateChannelSelection;
+        set
+        {
+            if (SetProperty(ref _rememberUpdateChannelSelection, value))
+            {
+                RaisePropertyChanged(nameof(IsAutomaticUpdateToggleEnabled));
+                RaisePropertyChanged(nameof(IsUpdateChannelDefaultToggleEnabled));
+
+                if (!value && AutoUpdateEnabled)
+                {
+                    AutoUpdateEnabled = false;
+                    return;
+                }
+
                 _ = PersistUpdatePreferencesAsync();
             }
         }
@@ -639,6 +658,11 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task InitializeAfterStartupAsync()
     {
+        if (_startupInitializationCompleted)
+        {
+            return;
+        }
+
         _isInitializingStartup = true;
         LoadProfileCommand.RaiseCanExecuteChanged();
         try
@@ -648,6 +672,7 @@ public sealed class MainViewModel : ViewModelBase
             NormalizeWindowProfilesInMemory();
             RefreshWindowProfilesCollection();
             _ = CheckForAppUpdatesAsync();
+            _startupInitializationCompleted = true;
         }
         finally
         {
@@ -768,7 +793,8 @@ public sealed class MainViewModel : ViewModelBase
     private async Task LoadPreferencesAsync()
     {
         var preferences = await _appUpdatePreferenceStore.LoadAsync(CancellationToken.None);
-        AutoUpdateEnabled = IsLocalDevelopmentBuild ? false : preferences.AutoUpdateEnabled;
+        AutoUpdateEnabled = preferences.AutoUpdateEnabled;
+        RememberUpdateChannelSelection = preferences.RememberUpdateChannelSelection;
         SelectedUpdateChannel = preferences.UpdateChannel;
         AdditionalDiscoveryCidrs = preferences.AdditionalDiscoveryCidrs;
     }
@@ -795,7 +821,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             IsCheckingForUpdates = true;
             UpdateStatusMessage = IsLocalDevelopmentBuild
-                ? "Build local detectado. Auto-update automatico desabilitado."
+                ? string.Format("Build local detectado. Consultando release remota do canal {0}...", SelectedUpdateChannel)
                 : "Consultando atualizacoes do super...";
             var result = await RefreshUpdateInfoAsync();
 
@@ -1086,7 +1112,8 @@ public sealed class MainViewModel : ViewModelBase
                 Url = window.Url,
                 IsEnabled = window.IsEnabled,
                 IsPrimaryExclusive = window.IsPrimaryExclusive,
-                IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
             })
             .ToList();
 
@@ -1101,12 +1128,26 @@ public sealed class MainViewModel : ViewModelBase
                     x.Url,
                     IsEnabled = x.Id == exclusiveWindow.Id,
                     IsPrimaryExclusive = x.Id == exclusiveWindow.Id,
-                    x.IsNavigationBarEnabled
+                    x.IsNavigationBarEnabled,
+                    x.StreamingMode
                 })
                 .ToList();
         }
 
         var desiredWindowIds = desiredWindows.Select(x => x.Id).ToHashSet();
+        var streamingModeChanged = desiredWindows.Any(desiredWindow =>
+        {
+            var existingWindow = windowProfile.Windows.FirstOrDefault(x => x.Id == desiredWindow.Id);
+            if (existingWindow is null)
+            {
+                return false;
+            }
+
+            return !string.Equals(
+                StreamingModeOptions.Normalize(existingWindow.StreamingMode),
+                desiredWindow.StreamingMode,
+                StringComparison.OrdinalIgnoreCase);
+        });
         var windowsToRemove = windowProfile.Windows
             .Where(existing => !desiredWindowIds.Contains(existing.Id))
             .ToList();
@@ -1128,7 +1169,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = desiredWindow.Url,
                     IsEnabled = desiredWindow.IsEnabled,
                     IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled,
+                    StreamingMode = desiredWindow.StreamingMode
                 });
                 continue;
             }
@@ -1138,15 +1180,37 @@ public sealed class MainViewModel : ViewModelBase
             existingWindow.IsEnabled = desiredWindow.IsEnabled;
             existingWindow.IsPrimaryExclusive = desiredWindow.IsPrimaryExclusive;
             existingWindow.IsNavigationBarEnabled = desiredWindow.IsNavigationBarEnabled;
+            existingWindow.StreamingMode = desiredWindow.StreamingMode;
         }
 
         SelectedWindowProfile = windowProfile;
         NormalizeWindowProfilesInMemory();
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Salvar stream '{0}': browserProfileChanged={1}, streamingModeChanged={2}",
+                windowProfile.Name,
+                browserProfileChanged,
+                streamingModeChanged));
         if (browserProfileChanged)
         {
+            AppLog.Write("StreamingMode", string.Format("Reset runtime do stream '{0}' por troca de perfil do navegador.", windowProfile.Name));
             await ResetWindowProfileRuntimeAsync(windowProfile);
+            await SyncWindowProfileRuntimeAsync(windowProfile);
         }
-        await SyncWindowProfileRuntimeAsync(windowProfile);
+        else if (streamingModeChanged)
+        {
+            await ApplyWindowProfileStreamingModeRuntimeAsync(windowProfile);
+            AppLog.Write("StreamingMode", string.Format("Republish do stream '{0}' apos sincronizar novo modo.", windowProfile.Name));
+            await RepublishWindowProfileRuntimeAsync(windowProfile);
+        }
+        else
+        {
+            await SyncWindowProfileRuntimeAsync(windowProfile);
+        }
+        RebuildActiveSessionsFromWindows();
+        UpdateBridgeSnapshot();
+        await PersistActiveSessionsAsync();
         await SaveProfileInternalAsync(updateStatus: false);
         StatusMessage = string.Format(
             "Stream '{0}' salvo e vinculado ao perfil de TV '{1}'.",
@@ -1843,21 +1907,48 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task PersistUpdatePreferencesAsync()
     {
+        if (_isInitializingStartup || _isApplyingProfile || string.IsNullOrWhiteSpace(ProfileName))
+        {
+            return;
+        }
+
         try
         {
+            await _updatePreferenceSaveSemaphore.WaitAsync();
+
             await _appUpdatePreferenceStore.SaveAsync(
                 new AppUpdatePreferences
                 {
                     AutoUpdateEnabled = AutoUpdateEnabled,
                     UpdateChannel = SelectedUpdateChannel,
+                    RememberUpdateChannelSelection = RememberUpdateChannelSelection,
                     AdditionalDiscoveryCidrs = AdditionalDiscoveryCidrs
                 },
                 CancellationToken.None);
+
+            var profile = await _profileStore.LoadAsync(ProfileName, CancellationToken.None)
+                ?? new AppProfile { Name = ProfileName.Trim() };
+            profile.AutoUpdateEnabled = AutoUpdateEnabled;
+            profile.UpdateChannel = UpdateChannelNames.Normalize(SelectedUpdateChannel);
+            profile.RememberUpdateChannelSelection = RememberUpdateChannelSelection;
+            await _profileStore.SaveAsync(profile, CancellationToken.None);
         }
         catch (Exception ex)
         {
             AppLog.Write("Updater", string.Format("Falha ao salvar preferencia de auto-update: {0}", ex.Message));
         }
+        finally
+        {
+            if (_updatePreferenceSaveSemaphore.CurrentCount == 0)
+            {
+                _updatePreferenceSaveSemaphore.Release();
+            }
+        }
+    }
+
+    public Task FlushUpdatePreferencesAsync()
+    {
+        return PersistUpdatePreferencesAsync();
     }
 
     private async Task RefreshTargetsAfterStartupAsync()
@@ -2464,6 +2555,9 @@ public sealed class MainViewModel : ViewModelBase
             var restoredSessionId = Guid.NewGuid();
             var restoredSessionName = profile.Name;
             ShowWindowPreviews = profile.ShowWindowPreviews;
+            RememberUpdateChannelSelection = profile.RememberUpdateChannelSelection;
+            AutoUpdateEnabled = profile.AutoUpdateEnabled;
+            SelectedUpdateChannel = UpdateChannelNames.Normalize(profile.UpdateChannel);
             WebRtcServerPort = profile.WebRtcServerPort <= 0 ? 8090 : profile.WebRtcServerPort;
             WebRtcBindMode = profile.WebRtcBindMode;
             WebRtcSpecificIp = profile.WebRtcSpecificIp ?? string.Empty;
@@ -2494,6 +2588,7 @@ public sealed class MainViewModel : ViewModelBase
                     IsWebRtcPublishingEnabled = persistedWindow.IsWebRtcPublishingEnabled,
                     IsNavigationBarEnabled = persistedWindow.IsNavigationBarEnabled,
                     BrowserProfileName = persistedWindow.BrowserProfileName ?? string.Empty,
+                    StreamingMode = StreamingModeOptions.Normalize(persistedWindow.StreamingMode),
                     ProfileName = string.IsNullOrWhiteSpace(persistedWindow.ProfileName) ? profile.Name : persistedWindow.ProfileName,
                     ActiveSessionId = persistedWindow.ActiveSessionId == Guid.Empty ? restoredSessionId : persistedWindow.ActiveSessionId,
                     ActiveSessionName = string.IsNullOrWhiteSpace(persistedWindow.ActiveSessionName) ? restoredSessionName : persistedWindow.ActiveSessionName
@@ -2647,6 +2742,7 @@ public sealed class MainViewModel : ViewModelBase
                     browserWindow.IsPrimaryExclusive = windowRecord.IsPrimaryExclusive;
                     browserWindow.IsNavigationBarEnabled = windowRecord.IsNavigationBarEnabled;
                     browserWindow.BrowserProfileName = windowRecord.BrowserProfileName ?? string.Empty;
+                    browserWindow.StreamingMode = StreamingModeOptions.Normalize(windowRecord.StreamingMode);
                     browserWindow.ProfileName = record.ProfileName;
                     browserWindow.ActiveSessionId = session.Id;
                     browserWindow.ActiveSessionName = session.Name;
@@ -2706,7 +2802,8 @@ public sealed class MainViewModel : ViewModelBase
                     IsWebRtcPublishingEnabled = window.IsWebRtcPublishingEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
                     IsNavigationBarEnabled = window.IsNavigationBarEnabled,
-                    BrowserProfileName = window.BrowserProfileName ?? string.Empty
+                    BrowserProfileName = window.BrowserProfileName ?? string.Empty,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 }).ToList(),
             BoundDisplays = session.BoundDisplays.Select(binding => new ActiveSessionDisplayBindingRecord
             {
@@ -2763,6 +2860,9 @@ public sealed class MainViewModel : ViewModelBase
             WebRtcBindMode = WebRtcBindMode,
             WebRtcSpecificIp = WebRtcSpecificIp,
             ShowWindowPreviews = ShowWindowPreviews,
+            AutoUpdateEnabled = AutoUpdateEnabled,
+            UpdateChannel = UpdateChannelNames.Normalize(SelectedUpdateChannel),
+            RememberUpdateChannelSelection = RememberUpdateChannelSelection,
             DisplayTargets = Targets.Select(x => new DisplayTargetProfile
             {
                 Id = x.Id,
@@ -2798,6 +2898,7 @@ public sealed class MainViewModel : ViewModelBase
                 IsWebRtcPublishingEnabled = x.IsWebRtcPublishingEnabled,
                 IsNavigationBarEnabled = x.IsNavigationBarEnabled,
                 BrowserProfileName = x.BrowserProfileName ?? string.Empty,
+                StreamingMode = StreamingModeOptions.Normalize(x.StreamingMode),
                 ProfileName = x.ProfileName,
                 ActiveSessionId = x.ActiveSessionId,
                 ActiveSessionName = x.ActiveSessionName
@@ -3046,7 +3147,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 }).ToList()
             }).ToList();
     }
@@ -3237,7 +3339,8 @@ public sealed class MainViewModel : ViewModelBase
                     Url = window.Url,
                     IsEnabled = window.IsEnabled,
                     IsPrimaryExclusive = window.IsPrimaryExclusive,
-                    IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                    IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                    StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                 });
             }
 
@@ -3384,7 +3487,8 @@ public sealed class MainViewModel : ViewModelBase
                         Url = window.Url,
                         IsEnabled = window.IsEnabled,
                         IsPrimaryExclusive = window.IsPrimaryExclusive,
-                        IsNavigationBarEnabled = window.IsNavigationBarEnabled
+                        IsNavigationBarEnabled = window.IsNavigationBarEnabled,
+                        StreamingMode = StreamingModeOptions.Normalize(window.StreamingMode)
                     });
                 }
 
@@ -3616,6 +3720,40 @@ public sealed class MainViewModel : ViewModelBase
         var tvReachable = activeProbe is not null;
         var registeredDisplay = FindRegisteredDisplayForBinding(resolvedTarget, binding);
         var registrationFresh = IsRegisteredDisplayFresh(registeredDisplay, TimeSpan.FromSeconds(8));
+        var recentlyStreaming = _webRtcPublisherService.IsDisplayStreamingRecently(resolvedTarget, TimeSpan.FromSeconds(20));
+
+        if (resolvedTarget.TransportKind == DisplayTransportKind.LanStreaming && recentlyStreaming)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' esta consumindo HLS recentemente.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
+
+        if (resolvedTarget.TransportKind == DisplayTransportKind.LanStreaming && registeredDisplay is not null && tvReachable)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' ja esta registrada e alcancavel.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
+
+        if (registrationFresh)
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV '{1}' se registrou recentemente.",
+                    stream.Name,
+                    resolvedTarget.Name));
+            return;
+        }
 
         if (tvReachable && registrationFresh)
         {
@@ -3723,6 +3861,73 @@ public sealed class MainViewModel : ViewModelBase
         RebuildActiveSessionsFromWindows();
     }
 
+    private async Task RepublishWindowProfileRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        var liveWindows = Windows
+            .Where(x => x.ActiveSessionId == windowProfile.Id)
+            .ToList();
+
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "RepublishWindowProfileRuntimeAsync: stream='{0}', janelas={1}",
+                windowProfile.Name,
+                liveWindows.Count));
+
+        foreach (var liveWindow in liveWindows)
+        {
+            try
+            {
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "Republish janela={0}, titulo='{1}', modoAtual={2}",
+                        liveWindow.Id,
+                        liveWindow.Title,
+                        liveWindow.StreamingMode));
+                await PublishWindowWebRtcAsync(liveWindow, false);
+            }
+            catch
+            {
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "Republish falhou para janela={0}, titulo='{1}'",
+                        liveWindow.Id,
+                        liveWindow.Title));
+            }
+        }
+
+        UpdateBridgeSnapshot();
+    }
+
+    private Task ApplyWindowProfileStreamingModeRuntimeAsync(WindowProfileViewModel windowProfile)
+    {
+        foreach (var item in windowProfile.Windows)
+        {
+            var liveWindow = Windows.FirstOrDefault(x => x.Id == item.Id);
+            if (liveWindow is null)
+            {
+                continue;
+            }
+
+            liveWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
+            liveWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
+            liveWindow.StreamingMode = StreamingModeOptions.Normalize(item.StreamingMode);
+
+            AppLog.Write(
+                "StreamingMode",
+                string.Format(
+                    "Aplicando modo na runtime sem reroute: janela={0}, titulo='{1}', novoModo={2}",
+                    liveWindow.Id,
+                    liveWindow.Title,
+                    liveWindow.StreamingMode));
+        }
+
+        UpdateBridgeSnapshot();
+        return Task.CompletedTask;
+    }
+
     private async Task ApplyStreamWindowRuntimeStateAsync(WindowProfileViewModel stream, WindowProfileItemViewModel item)
     {
         if (!item.IsEnabled)
@@ -3798,6 +4003,7 @@ public sealed class MainViewModel : ViewModelBase
         browserWindow.IsPrimaryExclusive = item.IsPrimaryExclusive;
         browserWindow.IsNavigationBarEnabled = item.IsNavigationBarEnabled;
         browserWindow.BrowserProfileName = stream.BrowserProfileName ?? string.Empty;
+        browserWindow.StreamingMode = StreamingModeOptions.Normalize(item.StreamingMode);
 
         if (!Windows.Any(x => x.Id == browserWindow.Id))
         {
@@ -4543,6 +4749,7 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     private bool _isEnabled;
     private bool _isPrimaryExclusive;
     private bool _isNavigationBarEnabled;
+    private string _streamingMode = StreamingModeOptions.Interaction;
 
     public Guid Id
     {
@@ -4578,6 +4785,12 @@ public sealed class WindowProfileItemViewModel : ViewModelBase
     {
         get => _isNavigationBarEnabled;
         set => SetProperty(ref _isNavigationBarEnabled, value);
+    }
+
+    public string StreamingMode
+    {
+        get => _streamingMode;
+        set => SetProperty(ref _streamingMode, StreamingModeOptions.Normalize(value));
     }
 }
 

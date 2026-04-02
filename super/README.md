@@ -49,7 +49,7 @@ Por isso, esta base organiza a aplicacao com uma camada de `DisplayTransport`, p
 
 1. Abra `Abrir-App.cmd`.
 2. No app Windows, confirme que a porta esta em `8090`.
-3. Crie uma janela apontando para `https://emei.lovable.app`.
+3. Crie uma janela apontando para `https://SEU_SITE_AQUI`.
 4. Se quiser expor a rota local HTML, habilite a publicacao da janela.
 5. Com o app aberto, o servidor local responde:
 
@@ -70,7 +70,7 @@ Se quiser que o `super` empurre atualizacoes do canal Roku automaticamente para 
 
 Quando uma TV Roku se registrar no bridge com versao antiga do canal, o `super` tenta fazer sideload automatico do pacote via developer mode.
 7. Abra o app Roku na TV.
-8. O app deve listar a janela `emei.lovable.app` vinda do servidor Windows.
+8. O app deve listar a janela `SEU_SITE_AQUI` vinda do servidor Windows.
 
 Observacao:
 

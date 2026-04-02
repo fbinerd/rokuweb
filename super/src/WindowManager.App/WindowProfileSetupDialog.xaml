@@ -165,6 +165,17 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
+                            <GridViewColumn Header="Modo"
+                                            Width="110">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding AvailableStreamingModes}"
+                                                  SelectedItem="{Binding StreamingMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  Width="96"
+                                                  Height="24" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                         </GridView>
                     </ListView.View>
                 </ListView>

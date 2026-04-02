@@ -49,72 +49,104 @@ public partial class MainWindow : Window
     private bool _hasShownTrayHint;
     private Point? _lastExpandedPreviewMousePoint;
     private DateTime _nextKeepAliveCheckUtc = DateTime.MinValue;
+    private readonly DateTime _keepAliveStartupGraceUntilUtc = DateTime.UtcNow.AddSeconds(45);
     private bool _isRefreshingExpandedPreview;
     private const string UnassignedStreamSection = "__UNASSIGNED_STREAMS__";
 
     public MainWindow(MainViewModel viewModel, BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService)
     {
-        InitializeComponent();
-
-        _viewModel = viewModel;
-        _browserSnapshotService = browserSnapshotService;
-        _browserAudioCaptureService = browserAudioCaptureService;
-        DataContext = viewModel;
-
-        _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
-        _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-
-        foreach (var stream in _viewModel.WindowProfiles)
+        try
         {
-            stream.PropertyChanged += OnWindowProfilePropertyChanged;
-            stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
-            foreach (var item in stream.Windows)
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor START\n");
+            if (viewModel == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] viewModel is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] viewModel type: {viewModel.GetType().FullName}\n");
+            if (browserSnapshotService == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserSnapshotService is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserSnapshotService type: {browserSnapshotService.GetType().FullName}\n");
+            if (browserAudioCaptureService == null)
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserAudioCaptureService is NULL!\n");
+            else
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] [DEBUG] browserAudioCaptureService type: {browserAudioCaptureService.GetType().FullName}\n");
+
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow BEFORE InitializeComponent\n");
+            InitializeComponent();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow AFTER InitializeComponent\n");
+
+            _viewModel = viewModel;
+            _browserSnapshotService = browserSnapshotService;
+            _browserAudioCaptureService = browserAudioCaptureService;
+            DataContext = viewModel;
+
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow BEFORE event handlers\n");
+            _viewModel.Windows.CollectionChanged += OnWindowsCollectionChanged;
+            _viewModel.WindowProfiles.CollectionChanged += OnWindowProfilesCollectionChanged;
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+
+            foreach (var stream in _viewModel.WindowProfiles)
             {
-                item.PropertyChanged += OnWindowProfileItemPropertyChanged;
-                AddStreamDefinitionPreview(stream, item);
+                stream.PropertyChanged += OnWindowProfilePropertyChanged;
+                stream.Windows.CollectionChanged += OnWindowProfileWindowsCollectionChanged;
+                foreach (var item in stream.Windows)
+                {
+                    item.PropertyChanged += OnWindowProfileItemPropertyChanged;
+                    AddStreamDefinitionPreview(stream, item);
+                }
             }
+
+            RefreshStreamPreviewSections();
+
+            foreach (var window in _viewModel.Windows)
+            {
+                AddPreview(window);
+            }
+
+            _previewRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(120)
+            };
+            _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
+
+            _expandedPreviewRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(180)
+            };
+            _expandedPreviewRefreshTimer.Tick += OnExpandedPreviewRefreshTimerTick;
+
+            _notifyIcon = CreateNotifyIcon();
+
+            Loaded += OnLoaded;
+            Closed += (s, e) =>
+            {
+                File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow CLOSED\n");
+            };
+            StateChanged += OnStateChanged;
+            UpdateSelectionVisuals();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor END\n");
         }
-
-        RefreshStreamPreviewSections();
-
-        foreach (var window in _viewModel.Windows)
+        catch (Exception ex)
         {
-            AddPreview(window);
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow ctor EXCEPTION: {ex}\n");
+            throw;
         }
-
-        _previewRefreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(120)
-        };
-        _previewRefreshTimer.Tick += OnPreviewRefreshTimerTick;
-
-        _expandedPreviewRefreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(180)
-        };
-        _expandedPreviewRefreshTimer.Tick += OnExpandedPreviewRefreshTimerTick;
-
-        _notifyIcon = CreateNotifyIcon();
-
-        Loaded += OnLoaded;
-        StateChanged += OnStateChanged;
-        UpdateSelectionVisuals();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         Loaded -= OnLoaded;
-
+        File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded START\n");
         try
         {
-            await _viewModel.InitializeAfterStartupAsync();
             RefreshStreamProfilesListView();
             await Dispatcher.InvokeAsync(RefreshStreamProfilesListView, DispatcherPriority.Background);
             ApplyPreviewMode();
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded END\n");
         }
         catch (Exception ex)
         {
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] MainWindow OnLoaded EXCEPTION: {ex}\n");
             _viewModel.ReportStartupFailure(string.Format("Falha ao restaurar a inicializacao automatica: {0}", ex.Message));
         }
     }
@@ -524,7 +556,13 @@ public partial class MainWindow : Window
     {
         item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
         RemoveStreamDefinitionPreviewCardOnly(item.Id);
-        if (_viewModel.ShowWindowPreviews)
+        if (item.IsEnabled || _viewModel.Windows.Any(x => x.Id == item.Id))
+        {
+            _streamDefinitionSectionKeys.Remove(item.Id);
+            return;
+        }
+
+        if (_viewModel.ShowWindowPreviews && !item.IsEnabled && !_viewModel.Windows.Any(x => x.Id == item.Id))
         {
             EnsureStreamDefinitionCaptureWindow(stream, item);
         }
@@ -695,7 +733,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService, stream.BrowserProfileName);
+        var captureWindow = new BrowserCaptureWindow(item.Id, TryCreateUri(item.Url), _browserAudioCaptureService, stream.BrowserProfileName, enableAudioCapture: false);
         captureWindow.SetNavigationBarEnabled(item.IsNavigationBarEnabled);
         _streamDefinitionCaptureWindows[item.Id] = captureWindow;
         _browserSnapshotService.Register(item.Id, captureWindow.Browser);
@@ -719,8 +757,11 @@ public partial class MainWindow : Window
                 _streamDefinitionCaptureWindows.Remove(item.Id);
             }
 
-            EnsureStreamDefinitionCaptureWindow(stream, item);
-            _browserSnapshotService.InvalidateCapture(item.Id);
+            if (!item.IsEnabled && !_viewModel.Windows.Any(x => x.Id == item.Id))
+            {
+                EnsureStreamDefinitionCaptureWindow(stream, item);
+                _browserSnapshotService.InvalidateCapture(item.Id);
+            }
         }
 
         _ = Dispatcher.InvokeAsync(RefreshPreviewImagesAsync);
@@ -1378,6 +1419,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        try
+        {
+            _viewModel.FlushUpdatePreferencesAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText("startup.log", $"[{DateTime.Now:O}] Falha ao persistir preferencias de update no fechamento: {ex}\n");
+        }
+
         base.OnClosing(e);
     }
 
@@ -1396,11 +1446,11 @@ public partial class MainWindow : Window
 
         if (_streamDefinitionCaptureWindows.TryGetValue(session.Id, out var existingDefinitionCapture))
         {
+            _browserSnapshotService.Unregister(session.Id);
+            _browserAudioCaptureService.Unregister(session.Id);
+            existingDefinitionCapture.Close();
             _streamDefinitionCaptureWindows.Remove(session.Id);
-            existingDefinitionCapture.SetNavigationBarEnabled(session.IsNavigationBarEnabled);
-            _captureWindows[session.Id] = existingDefinitionCapture;
             RemoveStreamDefinitionPreviewCardOnly(session.Id);
-            return;
         }
 
         var captureWindow = new BrowserCaptureWindow(session.Id, session.InitialUri, _browserAudioCaptureService, session.BrowserProfileName);
@@ -1964,6 +2014,11 @@ public partial class MainWindow : Window
     private async void OnPreviewRefreshTimerTick(object? sender, EventArgs e)
     {
         await RefreshPreviewImagesAsync();
+        if (DateTime.UtcNow < _keepAliveStartupGraceUntilUtc)
+        {
+            return;
+        }
+
         if (DateTime.UtcNow >= _nextKeepAliveCheckUtc)
         {
             _nextKeepAliveCheckUtc = DateTime.UtcNow.AddSeconds(3);
@@ -2171,6 +2226,11 @@ public partial class MainWindow : Window
         {
             foreach (var item in stream.Windows)
             {
+                if (item.IsEnabled || _viewModel.Windows.Any(x => x.Id == item.Id))
+                {
+                    continue;
+                }
+
                 EnsureStreamDefinitionCaptureWindow(stream, item);
             }
         }
@@ -2393,6 +2453,75 @@ public partial class MainWindow : Window
         }
 
         return Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    // Handler para botão de configuração de atualização
+    private void OnUpdateConfigClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string[] canais = new[] { "stable", "develop", "local" };
+            string defaultBranch = UpdateChannelNames.Normalize(_viewModel.SelectedUpdateChannel);
+            bool autoUpdate = _viewModel.AutoUpdateEnabled;
+            string canalSelecionado = defaultBranch;
+            bool autoUpdateChecked = autoUpdate;
+            bool saveAsDefault = false;
+            var dlg = new Window { Title = "Configuração de Atualização", Width = 340, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterScreen, Owner = this, ResizeMode = ResizeMode.NoResize, WindowStyle = WindowStyle.ToolWindow };
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
+            var combo = new System.Windows.Controls.ComboBox { ItemsSource = canais, SelectedValue = canalSelecionado, Width = 180 };
+            combo.SelectedValue = canalSelecionado;
+            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Escolha o canal de atualização:", Margin = new Thickness(0,0,0,8), Foreground = System.Windows.Media.Brushes.Black });
+            panel.Children.Add(combo);
+            var check = new System.Windows.Controls.CheckBox { Content = "Não perguntar e atualizar automaticamente", Foreground = System.Windows.Media.Brushes.Black, Margin = new Thickness(0,10,0,0), IsChecked = autoUpdateChecked };
+            panel.Children.Add(check);
+            var btnDefault = new System.Windows.Controls.Button { Content = "Marcar default", Width = 120, Height = 28, Margin = new Thickness(0,10,0,0) };
+            panel.Children.Add(btnDefault);
+            var btn = new System.Windows.Controls.Button { Content = "OK", Margin = new Thickness(0,10,0,0), IsDefault = true };
+            panel.Children.Add(btn);
+            btn.Click += (_,__) => {
+                canalSelecionado = combo.SelectedValue?.ToString() ?? defaultBranch;
+                autoUpdateChecked = check.IsChecked == true;
+                dlg.DialogResult = true; dlg.Close();
+            };
+            btnDefault.Click += (_,__) => {
+                canalSelecionado = combo.SelectedValue?.ToString() ?? defaultBranch;
+                autoUpdateChecked = check.IsChecked == true;
+                // Salva como default
+                saveAsDefault = true;
+                dlg.DialogResult = true;
+                dlg.Close();
+                MessageBox.Show($"Canal '{canalSelecionado}' marcado como padrão.", "Configuração", MessageBoxButton.OK, MessageBoxImage.Information);
+            };
+            dlg.Content = panel;
+            var result = dlg.ShowDialog();
+            if (result != true)
+            {
+                return;
+            }
+
+            var previousChannel = UpdateChannelNames.Normalize(_viewModel.SelectedUpdateChannel);
+            var previousRememberDefault = _viewModel.RememberUpdateChannelSelection;
+            var rememberDefault = saveAsDefault || previousRememberDefault;
+            _viewModel.RememberUpdateChannelSelection = rememberDefault;
+            _viewModel.AutoUpdateEnabled = autoUpdateChecked && rememberDefault;
+            _viewModel.SelectedUpdateChannel = UpdateChannelNames.Normalize(canalSelecionado);
+
+            if (saveAsDefault)
+            {
+                MessageBox.Show($"Canal '{canalSelecionado}' salvo no perfil atual.", "ConfiguraÃ§Ã£o", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            // Pergunta se deseja reiniciar
+            if (!string.Equals(previousChannel, _viewModel.SelectedUpdateChannel, StringComparison.OrdinalIgnoreCase) &&
+                MessageBox.Show("Deseja reiniciar o aplicativo para aplicar a troca de branch?", "Reiniciar", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            {
+                System.Windows.Forms.Application.Restart();
+                Application.Current.Shutdown();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Erro ao abrir configuração: {ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 }
 

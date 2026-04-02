@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -11,6 +13,7 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using WindowManager.App.Runtime;
 using WindowManager.Core.Models;
 
@@ -18,6 +21,12 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class LocalWebRtcPublisherService
 {
+    private const string InteractionStreamingMode = "Interacao";
+    private const string VideoStreamingMode = "Video";
+    private const bool AutomaticRokuSideloadEnabled = false;
+    private static readonly TimeSpan ModeSwitchAckTimeout = TimeSpan.FromSeconds(2.5);
+    private static readonly TimeSpan DirectYoutubeResolveSuccessTtl = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan DirectYoutubeResolveFailureTtl = TimeSpan.FromSeconds(45);
     private static readonly HttpClient DeviceProbeHttpClient = new HttpClient
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -26,27 +35,45 @@ public sealed class LocalWebRtcPublisherService
     private readonly BrowserSnapshotService _browserSnapshotService;
     private readonly BrowserAudioCaptureService _browserAudioCaptureService;
     private readonly BrowserAudioHlsService _browserAudioHlsService;
+    private readonly BrowserPanelInteractionHlsService _browserPanelInteractionHlsService;
     private readonly BrowserPanelRollingHlsService _browserPanelRollingHlsService;
     private readonly RokuDevDeploymentService _rokuDevDeploymentService;
     private readonly object _listenerGate = new object();
     private readonly ConcurrentDictionary<string, PublishedWindowRoute> _routes = new ConcurrentDictionary<string, PublishedWindowRoute>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _windowRouteKeys = new ConcurrentDictionary<Guid, string>();
     private readonly ConcurrentDictionary<Guid, BridgeWindowSnapshot> _windowSnapshots = new ConcurrentDictionary<Guid, BridgeWindowSnapshot>();
+    private readonly ConcurrentDictionary<Guid, WindowSession> _runtimeWindows = new ConcurrentDictionary<Guid, WindowSession>();
     private readonly ConcurrentDictionary<string, BridgeActiveSessionSnapshot> _sessionSnapshots = new ConcurrentDictionary<string, BridgeActiveSessionSnapshot>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, RegisteredDisplaySnapshot> _registeredDisplays = new ConcurrentDictionary<string, RegisteredDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _displayReadyUtcByDeviceId = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DisplayModeSwitchState> _displayModeSwitchStates = new ConcurrentDictionary<string, DisplayModeSwitchState>(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, DateTime> _lastAudioServeLogUtc = new ConcurrentDictionary<Guid, DateTime>();
     private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsLogUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _lastPanelHlsStatusByKey = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _lastPanelHlsRequestUtcByDisplay = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _bridgeDiagnosticsCountByDevice = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, string> _lastBridgeSnapshotLogByWindow = new ConcurrentDictionary<Guid, string>();
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastBridgeSnapshotLogUtcByWindow = new ConcurrentDictionary<Guid, DateTime>();
     private readonly ConcurrentDictionary<Guid, int> _streamReloadVersions = new ConcurrentDictionary<Guid, int>();
+    private readonly ConcurrentDictionary<Guid, DateTime> _lastInteractionReloadUtc = new ConcurrentDictionary<Guid, DateTime>();
+    private readonly ConcurrentDictionary<string, CachedDirectPlaybackResolveResult> _cachedDirectPlaybackByYoutubeUrl = new ConcurrentDictionary<string, CachedDirectPlaybackResolveResult>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Task<CachedDirectPlaybackResolveResult>> _directPlaybackResolveTasks = new ConcurrentDictionary<string, Task<CachedDirectPlaybackResolveResult>>(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, string> _lastDirectOverlayLogByWindow = new ConcurrentDictionary<Guid, string>();
+    private static readonly TimeSpan InteractionReloadDebounce = TimeSpan.FromMilliseconds(700);
 
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCancellation;
     private string _activeListenerKey = string.Empty;
+    private int _currentServerPort = 8090;
+    private WebRtcBindMode _currentBindMode;
+    private string _currentSpecificIp = string.Empty;
 
-    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
+    public LocalWebRtcPublisherService(BrowserSnapshotService browserSnapshotService, BrowserAudioCaptureService browserAudioCaptureService, BrowserAudioHlsService browserAudioHlsService, BrowserPanelInteractionHlsService browserPanelInteractionHlsService, BrowserPanelRollingHlsService browserPanelRollingHlsService, AppUpdatePreferenceStore appUpdatePreferenceStore)
     {
         _browserSnapshotService = browserSnapshotService;
         _browserAudioCaptureService = browserAudioCaptureService;
         _browserAudioHlsService = browserAudioHlsService;
+        _browserPanelInteractionHlsService = browserPanelInteractionHlsService;
         _browserPanelRollingHlsService = browserPanelRollingHlsService;
         _rokuDevDeploymentService = new RokuDevDeploymentService(appUpdatePreferenceStore);
     }
@@ -133,7 +160,7 @@ public sealed class LocalWebRtcPublisherService
                     display.ChannelVersion,
                     display.ExpectedChannelVersion));
 
-            var result = await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+            var result = await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion, "manual_batch_update").ConfigureAwait(false);
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
@@ -199,7 +226,7 @@ public sealed class LocalWebRtcPublisherService
                 display.ChannelVersion,
                 display.ExpectedChannelVersion));
 
-        return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion).ConfigureAwait(false);
+        return await _rokuDevDeploymentService.DeployNowAsync(display, display.ExpectedChannelVersion, "manual_target_update").ConfigureAwait(false);
     }
 
     public async Task<RokuPowerBatchResult> SendPowerCommandToConnectedDisplaysAsync(bool powerOn, CancellationToken cancellationToken)
@@ -289,6 +316,17 @@ public sealed class LocalWebRtcPublisherService
 
         if (requirePowerOn)
         {
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Keepalive ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
             var powerResult = await _rokuDevDeploymentService.SendPowerCommandAsync(display, powerOn: true).ConfigureAwait(false);
             AppLog.Write(
                 "StreamKeepAlive",
@@ -315,7 +353,31 @@ public sealed class LocalWebRtcPublisherService
             !string.IsNullOrWhiteSpace(display.ChannelVersion) &&
             !string.Equals(display.ChannelVersion, expectedVersion, StringComparison.OrdinalIgnoreCase))
         {
-            return await _rokuDevDeploymentService.DeployNowAsync(display, expectedVersion).ConfigureAwait(false);
+            if (!AutomaticRokuSideloadEnabled)
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Sideload automatico desabilitado. Ignorando mismatch para TV '{0}' ({1}): atual={2}, esperado={3}.",
+                        target.Name,
+                        target.NetworkAddress,
+                        display.ChannelVersion,
+                        expectedVersion));
+                return "auto_sideload_disabled";
+            }
+
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Sideload ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
+            return await _rokuDevDeploymentService.DeployNowAsync(display, expectedVersion, "ensure_display_version_mismatch").ConfigureAwait(false);
         }
 
         return await LaunchDevChannelWithWakeRetryAsync(target, display, requirePowerOn, cancellationToken).ConfigureAwait(false);
@@ -329,6 +391,17 @@ public sealed class LocalWebRtcPublisherService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+        {
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "ForceWake ignorado para TV '{0}' ({1}) porque ela esta consumindo HLS recentemente.",
+                    target.Name,
+                    target.NetworkAddress));
+            return "streaming_recente";
+        }
 
         var display = _registeredDisplays.Values.FirstOrDefault(x =>
             string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase) ||
@@ -355,7 +428,7 @@ public sealed class LocalWebRtcPublisherService
                 powerResult));
 
         await Task.Delay(1500, cancellationToken).ConfigureAwait(false);
-        return await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+        return await _rokuDevDeploymentService.LaunchDevChannelAsync(display, "force_wake").ConfigureAwait(false);
     }
 
     public IReadOnlyList<RegisteredDisplaySnapshot> GetRegisteredDisplaysSnapshot()
@@ -384,6 +457,21 @@ public sealed class LocalWebRtcPublisherService
         return DateTime.UtcNow - lastSeenUtc.ToUniversalTime() < maxAge;
     }
 
+    public bool IsDisplayStreamingRecently(DisplayTarget target, TimeSpan maxAge)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return false;
+        }
+
+        if (!_lastPanelHlsRequestUtcByDisplay.TryGetValue(target.NetworkAddress, out var lastRequestUtc))
+        {
+            return false;
+        }
+
+        return DateTime.UtcNow - lastRequestUtc < maxAge;
+    }
+
     private async Task<string> LaunchDevChannelWithWakeRetryAsync(
         DisplayTarget target,
         RegisteredDisplaySnapshot display,
@@ -398,7 +486,20 @@ public sealed class LocalWebRtcPublisherService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            lastResult = await _rokuDevDeploymentService.LaunchDevChannelAsync(display).ConfigureAwait(false);
+            if (IsDisplayStreamingRecently(target, TimeSpan.FromSeconds(20)))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Tentativa {0}/{1} de abrir app Roku ignorada para TV '{2}' ({3}) porque ela esta consumindo HLS recentemente.",
+                        attempt,
+                        attempts,
+                        target.Name,
+                        target.NetworkAddress));
+                return "streaming_recente";
+            }
+
+            lastResult = await _rokuDevDeploymentService.LaunchDevChannelAsync(display, requirePowerOn ? "ensure_display_with_power" : "ensure_display").ConfigureAwait(false);
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
@@ -484,15 +585,29 @@ public sealed class LocalWebRtcPublisherService
         var port = serverPort <= 0 ? 8090 : serverPort;
         var endpoint = LinkRtcAddressBuilder.ResolveListenerEndpoint(bindMode, specificIp, port);
         var listenerKey = string.Format("{0}:{1}", endpoint.Address, endpoint.Port);
-
+        _currentServerPort = port;
+        _currentBindMode = bindMode;
+        _currentSpecificIp = specificIp;
         EnsureListener(endpoint, listenerKey);
 
         var activeIds = new HashSet<Guid>();
         foreach (var window in windows)
         {
+            var desiredStreamingMode = NormalizeStreamingMode(window.StreamingMode);
+            EnsureDisplayModeSwitchSeed(window, desiredStreamingMode);
             _browserAudioHlsService.EnsureWindow(window.Id);
-            _browserPanelRollingHlsService.EnsureWindow(window.Id);
-            var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp);
+            if (string.Equals(desiredStreamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+            {
+                _browserPanelInteractionHlsService.EnsureWindow(window.Id);
+                _browserPanelRollingHlsService.Unregister(window.Id);
+            }
+            else
+            {
+                _browserPanelRollingHlsService.EnsureWindow(window.Id);
+                _browserPanelInteractionHlsService.Unregister(window.Id);
+            }
+            var snapshot = BuildWindowSnapshot(window, port, bindMode, specificIp, desiredStreamingMode);
+            _runtimeWindows[window.Id] = window;
             _windowSnapshots[window.Id] = snapshot;
             activeIds.Add(window.Id);
         }
@@ -502,7 +617,9 @@ public sealed class LocalWebRtcPublisherService
             if (!activeIds.Contains(existingId))
             {
                 _windowSnapshots.TryRemove(existingId, out _);
+                _runtimeWindows.TryRemove(existingId, out _);
                 _browserAudioHlsService.Unregister(existingId);
+                _browserPanelInteractionHlsService.Unregister(existingId);
                 _browserPanelRollingHlsService.Unregister(existingId);
             }
         }
@@ -637,7 +754,24 @@ public sealed class LocalWebRtcPublisherService
 
             if (normalizedPath.StartsWith("/panel-roll/", StringComparison.OrdinalIgnoreCase))
             {
+                if (!string.IsNullOrWhiteSpace(remoteAddress))
+                {
+                    _lastPanelHlsRequestUtcByDisplay[remoteAddress] = DateTime.UtcNow;
+                }
+
                 var panelHlsResponseBytes = await BuildPanelHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (normalizedPath.StartsWith("/panel-interaction/", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(remoteAddress))
+                {
+                    _lastPanelHlsRequestUtcByDisplay[remoteAddress] = DateTime.UtcNow;
+                }
+
+                var panelHlsResponseBytes = await BuildPanelInteractionHlsResponseAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
                 await stream.WriteAsync(panelHlsResponseBytes, 0, panelHlsResponseBytes.Length, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -675,6 +809,19 @@ public sealed class LocalWebRtcPublisherService
         if (string.Equals(normalizedPath, "/api/register-display", StringComparison.OrdinalIgnoreCase))
         {
             RegisterDisplay(requestTarget, remoteAddress);
+            return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
+        }
+
+        if (string.Equals(normalizedPath, "/api/display-ready", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkDisplayReady(requestTarget, remoteAddress);
+            return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
+        }
+
+        if (string.Equals(normalizedPath, "/api/mode-switch-applied", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedPath, "/api/mode-switch-stopped", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkModeSwitchApplied(requestTarget, remoteAddress);
             return BuildHttpResponse(200, "{\"ok\":true}", "application/json; charset=utf-8");
         }
 
@@ -752,6 +899,12 @@ public sealed class LocalWebRtcPublisherService
                 !string.Equals(previous.NetworkAddress, snapshot.NetworkAddress, StringComparison.OrdinalIgnoreCase);
         }
 
+        if (_registeredDisplays.TryGetValue(key, out var previousRegistered) &&
+            !string.Equals(previousRegistered.ChannelVersion, snapshot.ChannelVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            _displayReadyUtcByDeviceId.TryRemove(key, out _);
+        }
+
         _registeredDisplays[key] = snapshot;
 
         if (changed)
@@ -789,9 +942,123 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.DeviceId,
                         snapshot.ChannelVersion,
                         snapshot.ExpectedChannelVersion));
-                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "register_display");
             }
         }
+    }
+
+    private void MarkDisplayReady(string requestTarget, string remoteAddress)
+    {
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
+        {
+            return;
+        }
+
+        var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+        var deviceId = GetValue(values, "deviceId");
+        if (string.IsNullOrWhiteSpace(deviceId) && !string.IsNullOrWhiteSpace(remoteAddress))
+        {
+            deviceId = _registeredDisplays.Values
+                .FirstOrDefault(x => string.Equals(x.NetworkAddress, remoteAddress, StringComparison.OrdinalIgnoreCase))
+                ?.DeviceId ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return;
+        }
+
+        _displayReadyUtcByDeviceId[deviceId] = DateTime.UtcNow;
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Display-ready recebido: id={0}, ip={1}",
+                deviceId,
+                remoteAddress));
+    }
+
+    private void MarkModeSwitchApplied(string requestTarget, string remoteAddress)
+    {
+        var queryIndex = requestTarget.IndexOf('?');
+        if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
+        {
+            return;
+        }
+
+        var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+        var deviceId = GetValue(values, "deviceId");
+        var windowId = GetValue(values, "windowId");
+        if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(windowId))
+        {
+            return;
+        }
+
+        var key = BuildDisplayWindowKey(deviceId, windowId);
+        if (!_displayModeSwitchStates.TryGetValue(key, out var state) || string.IsNullOrWhiteSpace(state.PendingTargetMode))
+        {
+            return;
+        }
+
+        var targetMode = NormalizeStreamingMode(state.PendingTargetMode);
+        state.LastUpdatedUtc = DateTime.UtcNow;
+
+        if (Guid.TryParse(windowId, out var runtimeWindowId) && _runtimeWindows.TryGetValue(runtimeWindowId, out var runtimeWindow))
+        {
+            _browserAudioHlsService.EnsureWindow(runtimeWindow.Id);
+            if (string.Equals(targetMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+            {
+                _browserPanelInteractionHlsService.EnsureWindow(runtimeWindow.Id);
+                _browserPanelRollingHlsService.Unregister(runtimeWindow.Id);
+            }
+            else
+            {
+                _browserPanelRollingHlsService.EnsureWindow(runtimeWindow.Id);
+                _browserPanelInteractionHlsService.Unregister(runtimeWindow.Id);
+            }
+
+            var refreshedSnapshot = BuildWindowSnapshot(
+                runtimeWindow,
+                _currentServerPort,
+                _currentBindMode,
+                _currentSpecificIp,
+                targetMode);
+
+            if (string.Equals(targetMode, VideoStreamingMode, StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(refreshedSnapshot.StreamUrl))
+            {
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "ACK recebido, mas Video ainda nao esta pronto: janela={0}, stream={1}, autoFullscreen={2}. Mantendo troca pendente.",
+                        windowId,
+                        string.IsNullOrWhiteSpace(refreshedSnapshot.StreamUrl) ? "<sem-stream>" : refreshedSnapshot.StreamUrl,
+                        refreshedSnapshot.AutoOpenFullscreen));
+                return;
+            }
+
+            state.ExposedMode = targetMode;
+            state.PendingTargetMode = string.Empty;
+            _windowSnapshots[runtimeWindow.Id] = refreshedSnapshot;
+
+            AppLog.Write(
+                "StreamingMode",
+                string.Format(
+                    "Snapshot recomposto apos ACK: janela={0}, modo={1}, stream={2}, autoFullscreen={3}",
+                    windowId,
+                    refreshedSnapshot.StreamingMode,
+                    string.IsNullOrWhiteSpace(refreshedSnapshot.StreamUrl) ? "<sem-stream>" : refreshedSnapshot.StreamUrl,
+                    refreshedSnapshot.AutoOpenFullscreen));
+        }
+
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Mode switch aplicado confirmado: device={0}, janela={1}, novoModo={2}, ip={3}",
+                deviceId,
+                windowId,
+                targetMode,
+                remoteAddress));
     }
 
     private void LogInputRequest(string requestTarget, string remoteAddress)
@@ -899,7 +1166,7 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.DeviceId,
                         snapshot.ChannelVersion,
                         snapshot.ExpectedChannelVersion));
-                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion);
+                _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "input_log");
             }
         }
     }
@@ -926,9 +1193,94 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var result = await _browserSnapshotService.SendRemoteCommandAsync(windowId, command, x, y, text, cancellationToken);
-        AppLog.Write("RokuControl", string.Format("/api/control => janela={0}, comando={1}, x={2}, y={3}, ok={4}, editable={5}", windowId.ToString("N"), command, x, y, result.Ok, result.Editable));
+        MaybeRequestInteractionReload(windowId, command, result);
         var body = SerializeJson(result);
         return BuildHttpResponse(result.Ok ? 200 : 404, body, "application/json; charset=utf-8");
+    }
+
+    private void MaybeRequestInteractionReload(Guid windowId, string command, RemoteCommandResult result)
+    {
+        if (!result.Ok)
+        {
+            return;
+        }
+
+        if (!IsVideoStreamingMode(windowId))
+        {
+            return;
+        }
+
+        if (!ShouldReloadAfterControl(command))
+        {
+            return;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var shouldReload = false;
+
+        _lastInteractionReloadUtc.AddOrUpdate(
+            windowId,
+            _ =>
+            {
+                shouldReload = true;
+                return nowUtc;
+            },
+            (_, previousUtc) =>
+            {
+                if (nowUtc - previousUtc >= InteractionReloadDebounce)
+                {
+                    shouldReload = true;
+                    return nowUtc;
+                }
+
+                return previousUtc;
+            });
+
+        if (!shouldReload)
+        {
+            return;
+        }
+
+        RequestStreamReload(windowId);
+    }
+
+    private static bool ShouldReloadAfterControl(string command)
+    {
+        switch ((command ?? string.Empty).Trim().ToLowerInvariant())
+        {
+            case "click":
+            case "ok":
+            case "select":
+            case "set-text":
+            case "back":
+            case "reload":
+            case "history-back":
+            case "history-forward":
+            case "scroll-up":
+            case "scroll-down":
+            case "media-seek-backward":
+            case "media-seek-forward":
+            case "enter":
+            case "media-play-pause":
+            case "play":
+            case "tab":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool IsVideoStreamingMode(Guid windowId)
+    {
+        if (_windowSnapshots.TryGetValue(windowId, out var snapshot))
+        {
+            return string.Equals(
+                NormalizeStreamingMode(snapshot.StreamingMode),
+                VideoStreamingMode,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private async Task<byte[]> BuildThumbnailResponseAsync(string normalizedPath, CancellationToken cancellationToken)
@@ -1009,26 +1361,71 @@ public sealed class LocalWebRtcPublisherService
             return BuildHttpResponse(404, "Janela HLS do painel invalida.", "text/plain; charset=utf-8");
         }
 
-        if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
+        if (filePart.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
         {
-            if (!_browserPanelRollingHlsService.TryGetPlaylistPath(windowId, out var playlistPath))
+            var requestedPlaylist = filePart;
+            if (string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase))
             {
-                MaybeLogPanelHlsServe(windowId, filePart, false);
+                filePart = "medium.m3u8";
+            }
+
+            if (!_browserPanelRollingHlsService.TryGetOutputBytes(windowId, filePart, out var playlistBytes))
+            {
+                MaybeLogPanelHlsServe(windowId, requestedPlaylist, false);
                 return BuildHttpResponse(404, "Playlist HLS do painel indisponivel.", "text/plain; charset=utf-8");
             }
 
-            var playlistText = File.ReadAllText(playlistPath);
-            MaybeLogPanelHlsServe(windowId, filePart, true);
-            return BuildHttpResponse(200, playlistText, "application/vnd.apple.mpegurl");
+            MaybeLogPanelHlsServe(windowId, requestedPlaylist, true);
+            return BuildBinaryHttpResponse(200, playlistBytes, "application/vnd.apple.mpegurl");
         }
 
-        if (!_browserPanelRollingHlsService.TryGetSegmentPath(windowId, filePart, out var segmentPath))
+        if (!_browserPanelRollingHlsService.TryGetOutputBytes(windowId, filePart, out var segmentBytes))
         {
             MaybeLogPanelHlsServe(windowId, filePart, false);
             return BuildHttpResponse(404, "Segmento HLS do painel indisponivel.", "text/plain; charset=utf-8");
         }
 
-        var segmentBytes = File.ReadAllBytes(segmentPath);
+        MaybeLogPanelHlsServe(windowId, filePart, true);
+        return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
+    }
+
+    private async Task<byte[]> BuildPanelInteractionHlsResponseAsync(string normalizedPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var relativePath = normalizedPath.Substring("/panel-interaction/".Length);
+        var slashIndex = relativePath.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= relativePath.Length - 1)
+        {
+            return BuildHttpResponse(404, "Playlist HLS de interacao do painel nao encontrada.", "text/plain; charset=utf-8");
+        }
+
+        var windowPart = relativePath.Substring(0, slashIndex);
+        var filePart = relativePath.Substring(slashIndex + 1);
+        if (!Guid.TryParseExact(windowPart, "N", out var windowId))
+        {
+            return BuildHttpResponse(404, "Janela HLS de interacao invalida.", "text/plain; charset=utf-8");
+        }
+
+        if (filePart.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(filePart, "index.m3u8", StringComparison.OrdinalIgnoreCase) ||
+                !_browserPanelInteractionHlsService.TryGetPlaylistBytes(windowId, out var playlistBytes))
+            {
+                MaybeLogPanelHlsServe(windowId, filePart, false);
+                return BuildHttpResponse(404, "Playlist HLS de interacao indisponivel.", "text/plain; charset=utf-8");
+            }
+
+            MaybeLogPanelHlsServe(windowId, filePart, true);
+            return BuildBinaryHttpResponse(200, playlistBytes, "application/vnd.apple.mpegurl");
+        }
+
+        if (!_browserPanelInteractionHlsService.TryGetSegmentBytes(windowId, filePart, out var segmentBytes))
+        {
+            MaybeLogPanelHlsServe(windowId, filePart, false);
+            return BuildHttpResponse(404, "Segmento HLS de interacao indisponivel.", "text/plain; charset=utf-8");
+        }
+
         MaybeLogPanelHlsServe(windowId, filePart, true);
         return BuildBinaryHttpResponse(200, segmentBytes, "video/mp2t");
     }
@@ -1131,6 +1528,14 @@ public sealed class LocalWebRtcPublisherService
     {
         var payload = new WindowsBridgePayload();
         var filteredWindows = ResolveWindowsForBridgeRequest(requestTarget, remoteAddress);
+        var queryIndex = requestTarget.IndexOf('?');
+        var deviceId = string.Empty;
+        if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
+        {
+            var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
+            deviceId = GetValue(values, "deviceId");
+        }
+
         foreach (var snapshot in filteredWindows)
         {
             payload.Windows.Add(snapshot);
@@ -1149,6 +1554,29 @@ public sealed class LocalWebRtcPublisherService
         payload.Windows.Sort((left, right) => string.Compare(left.Title, right.Title, StringComparison.OrdinalIgnoreCase));
         payload.WindowCount = payload.Windows.Count;
 
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            var diagnosticsCount = _bridgeDiagnosticsCountByDevice.AddOrUpdate(deviceId, 1, (_, current) => current + 1);
+            if (diagnosticsCount <= 1)
+            {
+                foreach (var window in payload.Windows)
+                {
+                    AppLog.Write(
+                        "BridgeDiag",
+                        string.Format(
+                            "payload#{0}: device={1}, janela={2}, modo={3}, alvo={4}, pendente={5}, autoFullscreen={6}, stream={7}",
+                            diagnosticsCount,
+                            deviceId,
+                            window.Id,
+                            window.StreamingMode,
+                            window.RequestedStreamingMode,
+                            window.ModeSwitchPending,
+                            window.AutoOpenFullscreen,
+                            string.IsNullOrWhiteSpace(window.StreamUrl) ? "<sem-stream>" : window.StreamUrl));
+                }
+            }
+        }
+
         using (var stream = new MemoryStream())
         {
             var serializer = new DataContractJsonSerializer(typeof(WindowsBridgePayload));
@@ -1159,7 +1587,19 @@ public sealed class LocalWebRtcPublisherService
 
     private List<BridgeWindowSnapshot> ResolveWindowsForBridgeRequest(string requestTarget, string remoteAddress)
     {
-        var allWindows = _windowSnapshots.Values.ToList();
+        var allWindows = _runtimeWindows.Values
+            .Select(window =>
+            {
+                var desiredStreamingMode = NormalizeStreamingMode(window.StreamingMode);
+                return BuildWindowSnapshot(window, _currentServerPort, _currentBindMode, _currentSpecificIp, desiredStreamingMode);
+            })
+            .ToList();
+
+        if (allWindows.Count == 0)
+        {
+            allWindows = _windowSnapshots.Values.ToList();
+        }
+
         var queryIndex = requestTarget.IndexOf('?');
         if (queryIndex < 0 || queryIndex >= requestTarget.Length - 1)
         {
@@ -1202,12 +1642,226 @@ public sealed class LocalWebRtcPublisherService
             return new List<BridgeWindowSnapshot>();
         }
 
-        return allWindows
+        var resolvedWindows = allWindows
             .Where(x => sessionIds.Contains(x.ActiveSessionId))
             .Concat(directlyAssignedWindows)
             .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
             .ToList();
+
+        var projectedWindows = resolvedWindows
+            .Select(x => ProjectWindowSnapshotForDisplay(x, display.DeviceId))
+            .ToList();
+
+        if (string.IsNullOrWhiteSpace(deviceId) || _displayReadyUtcByDeviceId.ContainsKey(deviceId))
+        {
+            return projectedWindows;
+        }
+
+        AppLog.Write(
+            "RokuDeploy",
+            string.Format(
+                "Bridge respondeu antes do display-ready para TV id={0}. Mantendo payload completo para nao atrasar o bootstrap do modo atual.",
+                deviceId));
+
+        return projectedWindows;
+    }
+
+    private BridgeWindowSnapshot ProjectWindowSnapshotForDisplay(BridgeWindowSnapshot source, string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(source.Id))
+        {
+            return source;
+        }
+
+        if (!Guid.TryParse(source.Id, out var windowId) || !_runtimeWindows.TryGetValue(windowId, out var runtimeWindow))
+        {
+            return source;
+        }
+
+        var desiredMode = NormalizeStreamingMode(runtimeWindow.StreamingMode);
+        var key = BuildDisplayWindowKey(deviceId, source.Id);
+        var switchState = _displayModeSwitchStates.GetOrAdd(
+            key,
+            _ => new DisplayModeSwitchState
+            {
+                ExposedMode = desiredMode,
+                PendingTargetMode = string.Empty,
+                LastUpdatedUtc = DateTime.UtcNow
+            });
+
+        if (string.IsNullOrWhiteSpace(switchState.ExposedMode))
+        {
+            switchState.ExposedMode = desiredMode;
+        }
+
+        if (!string.Equals(switchState.ExposedMode, desiredMode, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(switchState.PendingTargetMode, desiredMode, StringComparison.OrdinalIgnoreCase))
+        {
+            switchState.PendingTargetMode = desiredMode;
+            switchState.LastUpdatedUtc = DateTime.UtcNow;
+            AppLog.Write(
+                "StreamingMode",
+                string.Format(
+                    "Mode switch solicitado: device={0}, janela={1}, atual={2}, alvo={3}",
+                    deviceId,
+                    source.Id,
+                    switchState.ExposedMode,
+                    desiredMode));
+        }
+
+        if (string.IsNullOrWhiteSpace(switchState.PendingTargetMode))
+        {
+            return source;
+        }
+
+        var pendingMode = NormalizeStreamingMode(switchState.PendingTargetMode);
+        if (DateTime.UtcNow - switchState.LastUpdatedUtc >= ModeSwitchAckTimeout)
+        {
+            var fallbackSnapshot = BuildWindowSnapshot(runtimeWindow, _currentServerPort, _currentBindMode, _currentSpecificIp, pendingMode);
+            if (!string.IsNullOrWhiteSpace(fallbackSnapshot.StreamUrl))
+            {
+                switchState.ExposedMode = pendingMode;
+                switchState.PendingTargetMode = string.Empty;
+                switchState.LastUpdatedUtc = DateTime.UtcNow;
+                AppLog.Write(
+                    "StreamingMode",
+                    string.Format(
+                        "Mode switch promovido por timeout sem ACK: device={0}, janela={1}, novoModo={2}, stream={3}",
+                        deviceId,
+                        source.Id,
+                        pendingMode,
+                        fallbackSnapshot.StreamUrl));
+                return fallbackSnapshot;
+            }
+        }
+
+        var projected = BuildWindowSnapshot(runtimeWindow, _currentServerPort, _currentBindMode, _currentSpecificIp, pendingMode);
+        projected.RequestedStreamingMode = switchState.PendingTargetMode;
+        projected.ModeSwitchPending = true;
+        projected.AutoOpenFullscreen = runtimeWindow.IsPrimaryExclusive;
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Mode switch pendente: device={0}, janela={1}, exposto={2}, alvo={3}, stream={4}, autoFullscreen={5}",
+                deviceId,
+                source.Id,
+                projected.StreamingMode,
+                projected.RequestedStreamingMode,
+                string.IsNullOrWhiteSpace(projected.StreamUrl) ? "<sem-stream>" : projected.StreamUrl,
+                projected.AutoOpenFullscreen));
+        return projected;
+    }
+
+    private void EnsureDisplayModeSwitchSeed(WindowSession window, string desiredMode)
+    {
+        var assignedAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(assignedAddress))
+        {
+            return;
+        }
+
+        var display = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, assignedAddress, StringComparison.OrdinalIgnoreCase));
+        if (display is null || string.IsNullOrWhiteSpace(display.DeviceId))
+        {
+            return;
+        }
+
+        var windowKey = window.Id.ToString("N");
+        var stateKey = BuildDisplayWindowKey(display.DeviceId, windowKey);
+        var previousSnapshot = _windowSnapshots.TryGetValue(window.Id, out var snapshot) ? snapshot : null;
+        if (previousSnapshot is null || string.IsNullOrWhiteSpace(previousSnapshot.StreamingMode))
+        {
+            if (_displayModeSwitchStates.TryGetValue(stateKey, out var initialState))
+            {
+                if (string.IsNullOrWhiteSpace(initialState.PendingTargetMode))
+                {
+                    initialState.ExposedMode = desiredMode;
+                    initialState.LastUpdatedUtc = DateTime.UtcNow;
+                }
+            }
+
+            return;
+        }
+
+        var previousMode = NormalizeStreamingMode(previousSnapshot.StreamingMode);
+
+        if (string.Equals(previousMode, desiredMode, StringComparison.OrdinalIgnoreCase))
+        {
+            if (_displayModeSwitchStates.TryGetValue(stateKey, out var existingState) &&
+                string.IsNullOrWhiteSpace(existingState.PendingTargetMode) &&
+                !string.Equals(existingState.ExposedMode, desiredMode, StringComparison.OrdinalIgnoreCase))
+            {
+                existingState.ExposedMode = desiredMode;
+                existingState.LastUpdatedUtc = DateTime.UtcNow;
+            }
+
+            return;
+        }
+
+        var switchState = _displayModeSwitchStates.GetOrAdd(
+            stateKey,
+            _ => new DisplayModeSwitchState
+            {
+                ExposedMode = previousMode,
+                PendingTargetMode = string.Empty,
+                LastUpdatedUtc = DateTime.UtcNow
+            });
+
+        var exposedMode = NormalizeStreamingMode(string.IsNullOrWhiteSpace(switchState.ExposedMode) ? previousMode : switchState.ExposedMode);
+        if (string.Equals(exposedMode, desiredMode, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(previousSnapshot?.StreamingMode))
+        {
+            exposedMode = previousMode;
+        }
+
+        switchState.ExposedMode = exposedMode;
+        switchState.PendingTargetMode = desiredMode;
+        switchState.LastUpdatedUtc = DateTime.UtcNow;
+
+        AppLog.Write(
+            "StreamingMode",
+            string.Format(
+                "Mode switch semeado no publish: device={0}, janela={1}, exposto={2}, alvo={3}",
+                display.DeviceId,
+                windowKey,
+                switchState.ExposedMode,
+                switchState.PendingTargetMode));
+    }
+
+    private string ResolveEffectiveStreamingMode(WindowSession window, string desiredMode)
+    {
+        var assignedAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(assignedAddress))
+        {
+            return desiredMode;
+        }
+
+        var display = _registeredDisplays.Values.FirstOrDefault(x =>
+            string.Equals(x.NetworkAddress, assignedAddress, StringComparison.OrdinalIgnoreCase));
+        if (display is null || string.IsNullOrWhiteSpace(display.DeviceId))
+        {
+            return desiredMode;
+        }
+
+        var key = BuildDisplayWindowKey(display.DeviceId, window.Id.ToString("N"));
+        if (!_displayModeSwitchStates.TryGetValue(key, out var state))
+        {
+            return desiredMode;
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.PendingTargetMode))
+        {
+            return NormalizeStreamingMode(state.ExposedMode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.ExposedMode))
+        {
+            return NormalizeStreamingMode(state.ExposedMode);
+        }
+
+        return desiredMode;
     }
 
     private List<BridgeActiveSessionSnapshot> ResolveSessionsForBridgeRequest(IEnumerable<BridgeWindowSnapshot> windows)
@@ -1275,17 +1929,89 @@ public sealed class LocalWebRtcPublisherService
         return int.TryParse(value, out var parsed) ? parsed : (int?)null;
     }
 
-    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp)
+    private BridgeWindowSnapshot BuildWindowSnapshot(WindowSession window, int port, WebRtcBindMode bindMode, string specificIp, string? streamingModeOverride = null)
     {
+        var streamingMode = NormalizeStreamingMode(streamingModeOverride ?? window.StreamingMode);
         var publishedUrl = string.IsNullOrWhiteSpace(window.PublishedWebRtcUrl)
             ? string.Empty
             : window.PublishedWebRtcUrl;
-        var streamReloadVersion = _streamReloadVersions.TryGetValue(window.Id, out var reloadVersion)
+        var manualReloadVersion = _streamReloadVersions.TryGetValue(window.Id, out var reloadVersion)
             ? reloadVersion
             : 0;
-        var unifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
-            ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
-            : string.Empty;
+        var rollingGeneration = _browserPanelRollingHlsService.GetStreamGeneration(window.Id);
+        var streamReloadVersion = manualReloadVersion + rollingGeneration;
+
+        string unifiedPanelStreamUrl;
+        bool panelHlsReady;
+
+        if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+        {
+            unifiedPanelStreamUrl = string.Empty;
+            panelHlsReady = true;
+        }
+        else
+        {
+            var candidateUnifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
+                : string.Empty;
+            panelHlsReady =
+                _browserPanelRollingHlsService.IsAvailable &&
+                _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8");
+            unifiedPanelStreamUrl = panelHlsReady ? candidateUnifiedPanelStreamUrl : string.Empty;
+        }
+
+        var interactionSuppressionEnabled = string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase);
+        _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled);
+        var directVideoOverlay = interactionSuppressionEnabled
+            ? ResolveDirectVideoOverlay(window.Id)
+            : DirectVideoOverlayBridgeSnapshot.None;
+        MaybeLogDirectOverlay(window.Id, directVideoOverlay);
+
+        var autoOpenFullscreen =
+            string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase)
+                ? window.IsPrimaryExclusive
+                : window.IsPrimaryExclusive && !string.IsNullOrWhiteSpace(unifiedPanelStreamUrl);
+
+        var videoDiagnostics =
+            !panelHlsReady && string.Equals(streamingMode, VideoStreamingMode, StringComparison.OrdinalIgnoreCase)
+                ? ", diag=" + _browserPanelRollingHlsService.GetDiagnosticStatus(window.Id)
+                : string.Empty;
+
+
+
+        if (string.IsNullOrWhiteSpace(unifiedPanelStreamUrl))
+        {
+            AppLog.Write("PanelRollingHls", $"[BridgeSnapshot] Stream URL vazio para janela {window.Id:N}. HLS disponível: {_browserPanelRollingHlsService.IsAvailable}, medium.m3u8: {_browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8")}, modo={streamingMode}, publishedUrl={publishedUrl}");
+        }
+        else
+        {
+            AppLog.Write("PanelRollingHls", $"[BridgeSnapshot] Stream URL atribuído para janela {window.Id:N}: {unifiedPanelStreamUrl}");
+        }
+
+        var bridgeSnapshotMessage = string.Format(
+            "Bridge snapshot => janela={0}, modo={1}, stream={2}, autoFullscreen={3}, hlsReady={4}{5}",
+            window.Id.ToString("N"),
+            streamingMode,
+            string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? "<sem-stream>" : unifiedPanelStreamUrl,
+            autoOpenFullscreen,
+            panelHlsReady,
+            videoDiagnostics);
+        MaybeLogBridgeSnapshot(window.Id, bridgeSnapshotMessage);
+
+        // Log detalhado para diagnóstico
+        AppLog.Write(
+            "PanelRollingHls",
+            "[DEBUG] BuildWindowSnapshot: Id=" + window.Id.ToString("N") +
+            ", StreamingMode=" + streamingMode +
+            ", PublishedWebRtcUrl=" + publishedUrl +
+            ", UnifiedPanelStreamUrl=" + unifiedPanelStreamUrl +
+            ", StreamUrl=" + (string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? publishedUrl : unifiedPanelStreamUrl) +
+            ", AutoOpenFullscreen=" + autoOpenFullscreen +
+            ", IsPrimaryExclusive=" + window.IsPrimaryExclusive +
+            ", PanelHlsReady=" + panelHlsReady +
+            ", HlsAvailable=" + _browserPanelRollingHlsService.IsAvailable +
+            ", HasMediumM3u8=" + _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8")
+        );
 
         return new BridgeWindowSnapshot
         {
@@ -1294,22 +2020,234 @@ public sealed class LocalWebRtcPublisherService
             State = window.State.ToString(),
             InitialUrl = window.InitialUri?.ToString() ?? string.Empty,
             PublishedWebRtcUrl = publishedUrl,
+            // StreamUrl: always set to the HLS URL if available and ready, otherwise fallback to publishedUrl
             StreamUrl = string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) ? publishedUrl : unifiedPanelStreamUrl,
             IsPublishing = window.IsWebRtcPublishingEnabled,
             ServerUrl = string.Format("http://{0}:{1}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port),
             ThumbnailUrl = string.Format("http://{0}:{1}/thumbnails/{2}.jpg", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioStreamUrl = _browserAudioHlsService.IsAvailable
-                ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
-                : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")),
-            AudioAvailable = _browserAudioCaptureService.HasRecentAudio(window.Id),
+            AudioStreamUrl = directVideoOverlay.Enabled
+                ? string.Empty
+                : string.IsNullOrWhiteSpace(unifiedPanelStreamUrl)
+                ? (_browserAudioHlsService.IsAvailable
+                    ? string.Format("http://{0}:{1}/audio-hls/{2}/index.m3u8", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"))
+                    : string.Format("http://{0}:{1}/audio/{2}.wav?seconds=2.5", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N")))
+                : string.Empty,
+            AudioAvailable = !directVideoOverlay.Enabled && string.IsNullOrWhiteSpace(unifiedPanelStreamUrl) && _browserAudioCaptureService.HasRecentAudio(window.Id),
             ProfileName = window.ProfileName ?? string.Empty,
             ActiveSessionId = window.ActiveSessionId == Guid.Empty ? string.Empty : window.ActiveSessionId.ToString("N"),
             ActiveSessionName = window.ActiveSessionName ?? string.Empty,
-            AutoOpenFullscreen = window.IsPrimaryExclusive,
+            StreamingMode = streamingMode,
+            RequestedStreamingMode = string.Empty,
+            ModeSwitchPending = false,
+            AutoOpenFullscreen = autoOpenFullscreen,
             AssignedDisplayId = window.AssignedTarget?.Id.ToString("N") ?? string.Empty,
             AssignedDisplayName = window.AssignedTarget?.Name ?? string.Empty,
-            AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty
+            AssignedDisplayAddress = window.AssignedTarget?.NetworkAddress ?? string.Empty,
+            DirectVideoOverlayEnabled = directVideoOverlay.Enabled,
+            DirectVideoSourceUrl = directVideoOverlay.SourceUrl,
+            DirectVideoStreamUrl = directVideoOverlay.StreamUrl,
+            DirectVideoStreamFormat = directVideoOverlay.StreamFormat,
+            DirectVideoNormalizedLeft = directVideoOverlay.NormalizedLeft,
+            DirectVideoNormalizedTop = directVideoOverlay.NormalizedTop,
+            DirectVideoNormalizedWidth = directVideoOverlay.NormalizedWidth,
+            DirectVideoNormalizedHeight = directVideoOverlay.NormalizedHeight,
+            DirectVideoQualityLabel = directVideoOverlay.QualityLabel,
+            DirectVideoQualityOptions = directVideoOverlay.QualityOptions
         };
+    }
+
+    private DirectVideoOverlayBridgeSnapshot ResolveDirectVideoOverlay(Guid windowId)
+    {
+        var detected = _browserSnapshotService.GetDirectVideoOverlayState(windowId);
+        if (!detected.Detected || string.IsNullOrWhiteSpace(detected.SourceUrl))
+        {
+            return DirectVideoOverlayBridgeSnapshot.None;
+        }
+
+        var normalizedSourceUrl = NormalizeYoutubeDirectSourceUrl(detected.SourceUrl);
+        if (string.IsNullOrWhiteSpace(normalizedSourceUrl))
+        {
+            return DirectVideoOverlayBridgeSnapshot.None;
+        }
+
+        var resolved = TryGetResolvedDirectPlayback(normalizedSourceUrl);
+        if (resolved is null || !resolved.Result.Ok || string.IsNullOrWhiteSpace(resolved.Result.StreamUrl))
+        {
+            return DirectVideoOverlayBridgeSnapshot.None;
+        }
+
+        return new DirectVideoOverlayBridgeSnapshot
+        {
+            Enabled = true,
+            SourceUrl = normalizedSourceUrl,
+            StreamUrl = resolved.Result.StreamUrl,
+            StreamFormat = resolved.Result.StreamFormat,
+            QualityLabel = resolved.Result.QualityLabel,
+            QualityOptions = resolved.Result.QualityOptions
+                .Select(x => new BridgeDirectVideoQualityOption
+                {
+                    Label = x.Label,
+                    StreamUrl = x.StreamUrl,
+                    StreamFormat = x.StreamFormat
+                })
+                .ToList(),
+            NormalizedLeft = ClampNormalizedCoordinate(detected.NormalizedLeft),
+            NormalizedTop = ClampNormalizedCoordinate(detected.NormalizedTop),
+            NormalizedWidth = ClampNormalizedCoordinate(detected.NormalizedWidth),
+            NormalizedHeight = ClampNormalizedCoordinate(detected.NormalizedHeight)
+        };
+    }
+
+    private void MaybeLogDirectOverlay(Guid windowId, DirectVideoOverlayBridgeSnapshot overlay)
+    {
+        var message = overlay.Enabled
+            ? string.Format(
+                "Overlay direto ativo => janela={0}, source={1}, format={2}, quality={3}, qualities={4}, stream={5}, rect={6:0.000},{7:0.000},{8:0.000},{9:0.000}",
+                windowId.ToString("N"),
+                overlay.SourceUrl,
+                overlay.StreamFormat,
+                overlay.QualityLabel,
+                overlay.QualityOptions is null ? 0 : overlay.QualityOptions.Count,
+                overlay.StreamUrl,
+                overlay.NormalizedLeft,
+                overlay.NormalizedTop,
+                overlay.NormalizedWidth,
+                overlay.NormalizedHeight)
+            : string.Format("Overlay direto inativo => janela={0}", windowId.ToString("N"));
+        if (_lastDirectOverlayLogByWindow.TryGetValue(windowId, out var previous) &&
+            string.Equals(previous, message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDirectOverlayLogByWindow[windowId] = message;
+        AppLog.Write("DirectOverlay", message);
+    }
+
+    private CachedDirectPlaybackResolveResult? TryGetResolvedDirectPlayback(string youtubeUrl)
+    {
+        if (string.IsNullOrWhiteSpace(youtubeUrl))
+        {
+            return null;
+        }
+
+        if (_cachedDirectPlaybackByYoutubeUrl.TryGetValue(youtubeUrl, out var cached))
+        {
+            var ttl = cached.Result.Ok ? DirectYoutubeResolveSuccessTtl : DirectYoutubeResolveFailureTtl;
+            if (DateTime.UtcNow - cached.UpdatedUtc <= ttl)
+            {
+                return cached;
+            }
+        }
+
+        _ = _directPlaybackResolveTasks.GetOrAdd(
+            youtubeUrl,
+            url => Task.Run(() =>
+            {
+                try
+                {
+                    AppLog.Write("DirectOverlay", string.Format("Resolvendo YouTube direto => {0}", url));
+                    var resolved = ResolveYoutubeDirectPlayback(url);
+                    var entry = new CachedDirectPlaybackResolveResult
+                    {
+                        Result = resolved,
+                        UpdatedUtc = DateTime.UtcNow
+                    };
+                    _cachedDirectPlaybackByYoutubeUrl[url] = entry;
+                    AppLog.Write(
+                        "DirectOverlay",
+                        resolved.Ok
+                            ? string.Format("YouTube direto resolvido => format={0}, url={1}", resolved.StreamFormat, resolved.StreamUrl)
+                            : string.Format("Falha ao resolver YouTube direto => erro={0}, source={1}", resolved.Error, url));
+                    return entry;
+                }
+                finally
+                {
+                    _directPlaybackResolveTasks.TryRemove(url, out _);
+                }
+            }));
+
+        return null;
+    }
+
+    private static string NormalizeYoutubeDirectSourceUrl(string sourceUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUrl))
+        {
+            AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] sourceUrl vazio ou nulo");
+            return string.Empty;
+        }
+
+        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Recebido: {sourceUrl}");
+        string normalized = sourceUrl;
+        try
+        {
+            var uri = new Uri(sourceUrl, UriKind.Absolute);
+            var host = uri.Host ?? string.Empty;
+            if (host.IndexOf("youtu.be", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var videoId = uri.AbsolutePath.Trim('/').Split('/')[0];
+                normalized = string.IsNullOrWhiteSpace(videoId)
+                    ? sourceUrl
+                    : string.Format("https://www.youtube.com/watch?v={0}", videoId);
+                AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtu.be detectado, normalizado: {normalized}");
+                return normalized;
+            }
+
+            if (host.IndexOf("youtube.com", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                host.IndexOf("youtube-nocookie.com", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                if (uri.AbsolutePath.StartsWith("/watch", StringComparison.OrdinalIgnoreCase))
+                {
+                    var query = ParseQueryString(uri.Query.TrimStart('?'));
+                    var videoId = GetValue(query, "v");
+                    normalized = string.IsNullOrWhiteSpace(videoId)
+                        ? sourceUrl
+                        : string.Format("https://www.youtube.com/watch?v={0}", videoId);
+                    AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtube.com/watch detectado, normalizado: {normalized}");
+                    return normalized;
+                }
+
+                if (uri.AbsolutePath.IndexOf("/embed/", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    var segments = uri.AbsolutePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                    var embedIndex = Array.FindIndex(segments, segment => string.Equals(segment, "embed", StringComparison.OrdinalIgnoreCase));
+                    if (embedIndex >= 0 && embedIndex + 1 < segments.Length && !string.IsNullOrWhiteSpace(segments[embedIndex + 1]))
+                    {
+                        normalized = string.Format("https://www.youtube.com/watch?v={0}", segments[embedIndex + 1]);
+                        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] youtube.com/embed detectado, normalizado: {normalized}");
+                        return normalized;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Exceção ao normalizar: {ex.Message}");
+        }
+
+        AppLog.Write("DirectOverlay", $"[NormalizeYoutubeDirectSourceUrl] Retornando original: {normalized}");
+        return normalized;
+    }
+
+    private static double ClampNormalizedCoordinate(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return 0d;
+        }
+
+        if (value < 0d)
+        {
+            return 0d;
+        }
+
+        if (value > 1d)
+        {
+            return 1d;
+        }
+
+        return value;
     }
 
     private void RemoveExistingRoute(Guid windowId)
@@ -1386,13 +2324,439 @@ public sealed class LocalWebRtcPublisherService
 
     private static bool ShouldAutoSideloadOnRegistration(string expectedVersion)
     {
-        if (string.IsNullOrWhiteSpace(expectedVersion))
+        return AutomaticRokuSideloadEnabled;
+    }
+
+    private static BridgeWindowSnapshot CloneWindowSnapshotWithoutStreams(BridgeWindowSnapshot source)
+    {
+        return new BridgeWindowSnapshot
         {
-            return false;
+            Id = source.Id,
+            Title = source.Title,
+            State = source.State,
+            InitialUrl = source.InitialUrl,
+            PublishedWebRtcUrl = source.PublishedWebRtcUrl,
+            StreamUrl = string.Empty,
+            IsPublishing = source.IsPublishing,
+            ServerUrl = source.ServerUrl,
+            ThumbnailUrl = source.ThumbnailUrl,
+            AudioStreamUrl = string.Empty,
+            AudioAvailable = false,
+            ProfileName = source.ProfileName,
+            ActiveSessionId = source.ActiveSessionId,
+            ActiveSessionName = source.ActiveSessionName,
+            StreamingMode = source.StreamingMode,
+            RequestedStreamingMode = source.RequestedStreamingMode,
+            ModeSwitchPending = source.ModeSwitchPending,
+            AutoOpenFullscreen = source.AutoOpenFullscreen,
+            AssignedDisplayId = source.AssignedDisplayId,
+            AssignedDisplayName = source.AssignedDisplayName,
+            AssignedDisplayAddress = source.AssignedDisplayAddress,
+            DirectVideoOverlayEnabled = source.DirectVideoOverlayEnabled,
+            DirectVideoSourceUrl = source.DirectVideoSourceUrl,
+            DirectVideoStreamUrl = source.DirectVideoStreamUrl,
+            DirectVideoStreamFormat = source.DirectVideoStreamFormat,
+            DirectVideoNormalizedLeft = source.DirectVideoNormalizedLeft,
+            DirectVideoNormalizedTop = source.DirectVideoNormalizedTop,
+            DirectVideoNormalizedWidth = source.DirectVideoNormalizedWidth,
+            DirectVideoNormalizedHeight = source.DirectVideoNormalizedHeight,
+            DirectVideoQualityLabel = source.DirectVideoQualityLabel,
+            DirectVideoQualityOptions = source.DirectVideoQualityOptions
+        };
+    }
+
+    private static YouTubeDirectResolveResult ResolveYoutubeDirectPlayback(string youtubeUrl)
+    {
+        var repoRoot = TryFindMonorepoRoot();
+        string ytDlpPath = string.Empty;
+        if (!string.IsNullOrWhiteSpace(repoRoot))
+        {
+            ytDlpPath = Path.Combine(repoRoot, "tools", "yt-dlp", "yt-dlp.exe");
+        }
+        // fallback: procurar no caminho do executável
+        if (string.IsNullOrWhiteSpace(ytDlpPath) || !File.Exists(ytDlpPath))
+        {
+            var exeDir = AppContext.BaseDirectory;
+            var fallbackPath = Path.Combine(exeDir, "tools", "yt-dlp", "yt-dlp.exe");
+            if (File.Exists(fallbackPath))
+            {
+                ytDlpPath = fallbackPath;
+            }
+        }
+        var nodePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
+        if (string.IsNullOrWhiteSpace(ytDlpPath) || !File.Exists(ytDlpPath))
+        {
+            return YouTubeDirectResolveResult.Fail("yt_dlp_ausente");
+        }
+        if (!File.Exists(nodePath))
+        {
+            return YouTubeDirectResolveResult.Fail("node_ausente");
+        }
+        var jsRuntime = string.Format("node:{0}", nodePath);
+        var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl);
+        if (scannedQualityOptions.Count > 0)
+        {
+            var preferred = scannedQualityOptions
+                .OrderByDescending(GetDirectQualityPreferenceScore)
+                .First();
+            AppLog.Write(
+                "DirectOverlay",
+                string.Format(
+                    "Quality scan => muxed={0}, selected={1} format={2}",
+                    string.Join(", ", scannedQualityOptions.Select(x => string.Format("{0}:{1}", x.Label, x.StreamFormat)).Distinct(StringComparer.OrdinalIgnoreCase)),
+                    preferred.Label,
+                    preferred.StreamFormat));
+            return YouTubeDirectResolveResult.Success(preferred.StreamUrl, preferred.StreamFormat, preferred.Label, scannedQualityOptions);
         }
 
-        var currentChannel = UpdateChannelNames.Normalize(BuildVersionInfo.CurrentBuildChannel);
-        return !string.Equals(currentChannel, UpdateChannelNames.Local, StringComparison.OrdinalIgnoreCase);
+        var qualityOptions = new List<YouTubeDirectQualityOption>();
+        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"22\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"59/78\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"18\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+
+        if (qualityOptions.Count > 0)
+        {
+            var preferred = qualityOptions
+                .OrderByDescending(x => ParseQualityRank(x.Label))
+                .First();
+            return YouTubeDirectResolveResult.Success(preferred.StreamUrl, preferred.StreamFormat, preferred.Label, qualityOptions);
+        }
+
+        var compatibleHlsUrl = RunProcessCaptureFirstNonEmptyLine(
+            ytDlpPath,
+            string.Format("--js-runtimes \"{0}\" -g -f \"95-2/95-1/95-0/94-2/94-1/94-0/93-2/93-1/93-0/best[ext=mp4]\" \"{1}\"", jsRuntime, youtubeUrl));
+        if (!string.IsNullOrWhiteSpace(compatibleHlsUrl) && !string.Equals(compatibleHlsUrl, "NA", StringComparison.OrdinalIgnoreCase))
+        {
+            if (compatibleHlsUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                compatibleHlsUrl.IndexOf("manifest/hls_", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return YouTubeDirectResolveResult.Success(
+                    compatibleHlsUrl,
+                    "hls",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = compatibleHlsUrl,
+                            StreamFormat = "hls"
+                        }
+                    });
+            }
+
+            return YouTubeDirectResolveResult.Success(
+                compatibleHlsUrl,
+                "mp4",
+                "Auto",
+                new List<YouTubeDirectQualityOption>
+                {
+                    new YouTubeDirectQualityOption
+                    {
+                        Label = "Auto",
+                        StreamUrl = compatibleHlsUrl,
+                        StreamFormat = "mp4"
+                    }
+                });
+        }
+
+        var manifestUrl = RunProcessCaptureFirstNonEmptyLine(
+            ytDlpPath,
+            string.Format("--js-runtimes \"{0}\" --print manifest_url \"{1}\"", jsRuntime, youtubeUrl));
+        if (!string.IsNullOrWhiteSpace(manifestUrl) && !string.Equals(manifestUrl, "NA", StringComparison.OrdinalIgnoreCase))
+        {
+            if (manifestUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                manifestUrl.IndexOf("manifest/hls_", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return YouTubeDirectResolveResult.Success(
+                    manifestUrl,
+                    "hls",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = manifestUrl,
+                            StreamFormat = "hls"
+                        }
+                    });
+            }
+
+            if (manifestUrl.IndexOf(".mpd", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return YouTubeDirectResolveResult.Success(
+                    manifestUrl,
+                    "dash",
+                    "Auto",
+                    new List<YouTubeDirectQualityOption>
+                    {
+                        new YouTubeDirectQualityOption
+                        {
+                            Label = "Auto",
+                            StreamUrl = manifestUrl,
+                            StreamFormat = "dash"
+                        }
+                    });
+            }
+        }
+
+        return YouTubeDirectResolveResult.Fail("sem_url_compativel");
+    }
+
+    private static void TryAppendDirectQualityOption(List<YouTubeDirectQualityOption> options, string label, string streamUrl, string streamFormat)
+    {
+        if (options is null || string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(streamUrl) || string.Equals(streamUrl, "NA", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (options.Any(x => string.Equals(x.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        options.Add(new YouTubeDirectQualityOption
+        {
+            Label = label,
+            StreamUrl = streamUrl,
+            StreamFormat = streamFormat
+        });
+    }
+
+    private static int ParseQualityRank(string label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return 0;
+        }
+
+        var digits = new string(label.Where(char.IsDigit).ToArray());
+        if (int.TryParse(digits, out var parsed))
+        {
+            return parsed;
+        }
+
+        return 0;
+    }
+
+    private static int GetDirectQualityPreferenceScore(YouTubeDirectQualityOption option)
+    {
+        if (option is null)
+        {
+            return 0;
+        }
+
+        var score = ParseQualityRank(option.Label) * 10;
+        if (option.Label.IndexOf("60", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            score += 1;
+        }
+
+        if (string.Equals(option.StreamFormat, "hls", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 2;
+        }
+
+        return score;
+    }
+
+    private static List<YouTubeDirectQualityOption> ScanYoutubeDirectQualityOptions(string ytDlpPath, string jsRuntime, string youtubeUrl)
+    {
+        var json = RunProcessCaptureOutput(
+            ytDlpPath,
+            string.Format("--no-warnings --no-playlist --js-runtimes \"{0}\" -J \"{1}\"", jsRuntime, youtubeUrl));
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            AppLog.Write("DirectOverlay", "Quality scan => yt-dlp nao retornou JSON");
+            return new List<YouTubeDirectQualityOption>();
+        }
+
+        try
+        {
+            var root = JObject.Parse(json);
+            var formats = root["formats"] as JArray;
+            if (formats is null || formats.Count == 0)
+            {
+                AppLog.Write("DirectOverlay", "Quality scan => JSON sem formats");
+                return new List<YouTubeDirectQualityOption>();
+            }
+
+            var options = new List<YouTubeDirectQualityOption>();
+            var adaptiveHeights = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var formatToken in formats.OfType<JObject>())
+            {
+                var vcodec = formatToken.Value<string>("vcodec") ?? string.Empty;
+                var acodec = formatToken.Value<string>("acodec") ?? string.Empty;
+                var protocol = formatToken.Value<string>("protocol") ?? string.Empty;
+                var ext = formatToken.Value<string>("ext") ?? string.Empty;
+                var height = formatToken.Value<int?>("height") ?? 0;
+                var fps = formatToken.Value<double?>("fps") ?? 0;
+
+                if (!string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(acodec, "none", StringComparison.OrdinalIgnoreCase) &&
+                    height > 0)
+                {
+                    adaptiveHeights.Add(BuildQualityLabel(height, fps));
+                }
+
+                if (string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(acodec, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (height <= 0)
+                {
+                    continue;
+                }
+
+                if (string.Equals(protocol, "m3u8_native", StringComparison.OrdinalIgnoreCase))
+                {
+                    var hlsUrl = formatToken.Value<string>("url") ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(hlsUrl))
+                    {
+                        hlsUrl = formatToken.Value<string>("manifest_url") ?? string.Empty;
+                    }
+
+                    TryAppendDirectQualityOption(options, BuildQualityLabel(height, fps), hlsUrl, "hls");
+                    continue;
+                }
+
+                if (string.Equals(protocol, "https", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ext, "mp4", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryAppendDirectQualityOption(options, BuildQualityLabel(height, fps), formatToken.Value<string>("url") ?? string.Empty, "mp4");
+                }
+            }
+
+            AppLog.Write(
+                "DirectOverlay",
+                string.Format(
+                    "Quality scan => muxed={0}, adaptiveOnly={1}",
+                    options.Count == 0 ? "<nenhuma>" : string.Join(", ", options.Select(x => string.Format("{0}:{1}", x.Label, x.StreamFormat)).Distinct(StringComparer.OrdinalIgnoreCase)),
+                    adaptiveHeights.Count == 0 ? "<nenhuma>" : string.Join(", ", adaptiveHeights)));
+            return options
+                .GroupBy(x => x.Label + "|" + x.StreamFormat, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(GetDirectQualityPreferenceScore)
+                    .First())
+                .OrderByDescending(GetDirectQualityPreferenceScore)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("DirectOverlay", string.Format("Quality scan => falha ao processar JSON do yt-dlp: {0}", ex.Message));
+            return new List<YouTubeDirectQualityOption>();
+        }
+    }
+
+    private static string BuildQualityLabel(int height, double fps)
+    {
+        if (height <= 0)
+        {
+            return "Auto";
+        }
+
+        var roundedFps = (int)Math.Round(fps, MidpointRounding.AwayFromZero);
+        if (roundedFps >= 50)
+        {
+            return string.Format("{0}p60", height);
+        }
+
+        return string.Format("{0}p", height);
+    }
+
+    private static string RunProcessCaptureFirstNonEmptyLine(string fileName, string arguments)
+    {
+        using (var process = new Process())
+        {
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(fileName) ?? AppContext.BaseDirectory
+            };
+
+            process.Start();
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit(120000);
+
+            if (process.ExitCode != 0)
+            {
+                AppLog.Write("RokuDirect", string.Format("yt-dlp falhou: exit={0}, stderr={1}", process.ExitCode, standardError));
+                return string.Empty;
+            }
+
+            var lines = standardOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return lines.FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static string RunProcessCaptureOutput(string fileName, string arguments)
+    {
+        using (var process = new Process())
+        {
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(fileName) ?? AppContext.BaseDirectory
+            };
+
+            process.Start();
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit(120000);
+
+            if (process.ExitCode != 0)
+            {
+                AppLog.Write("RokuDirect", string.Format("yt-dlp JSON falhou: exit={0}, stderr={1}", process.ExitCode, standardError));
+                return string.Empty;
+            }
+
+            return standardOutput.Trim();
+        }
+    }
+
+    private static string TryFindMonorepoRoot()
+    {
+        try
+        {
+            var current = new DirectoryInfo(AppContext.BaseDirectory);
+            while (current is not null)
+            {
+                var manifestPath = Path.Combine(current.FullName, "manifest");
+                var toolsPath = Path.Combine(current.FullName, "tools");
+                var sourcePath = Path.Combine(current.FullName, "source");
+                if (File.Exists(manifestPath) && Directory.Exists(toolsPath) && Directory.Exists(sourcePath))
+                {
+                    return current.FullName;
+                }
+
+                current = current.Parent;
+            }
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
+    }
+
+    private static string BuildDisplayWindowKey(string deviceId, string windowId)
+    {
+        return string.Format("{0}|{1}", deviceId.Trim(), windowId.Trim());
     }
 
     private static string TryReadLocalRokuPackageReleaseId()
@@ -1469,21 +2833,48 @@ public sealed class LocalWebRtcPublisherService
 
     private void MaybeLogPanelHlsServe(Guid windowId, string fileName, bool ok)
     {
-        var key = windowId.ToString("N") + "|" + fileName;
+        var normalizedFileName =
+            fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                ? "<segment>"
+                : fileName;
+        var key = windowId.ToString("N") + "|" + normalizedFileName;
         var now = DateTime.UtcNow;
-        if (_lastPanelHlsLogUtc.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(2))
+        var hadPreviousStatus = _lastPanelHlsStatusByKey.TryGetValue(key, out var previousStatus);
+        var statusChanged = !hadPreviousStatus || previousStatus != ok;
+        var minInterval = ok ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(2);
+        if (!statusChanged &&
+            _lastPanelHlsLogUtc.TryGetValue(key, out var previous) &&
+            now - previous < minInterval)
         {
             return;
         }
 
         _lastPanelHlsLogUtc[key] = now;
+        _lastPanelHlsStatusByKey[key] = ok;
         AppLog.Write(
             "PanelHls",
             string.Format(
                 "Requisicao HLS do painel: janela={0}, arquivo={1}, ok={2}",
                 windowId.ToString("N"),
-                fileName,
+                normalizedFileName,
                 ok));
+    }
+
+    private void MaybeLogBridgeSnapshot(Guid windowId, string message)
+    {
+        var now = DateTime.UtcNow;
+        var changed = !_lastBridgeSnapshotLogByWindow.TryGetValue(windowId, out var previousMessage) ||
+                      !string.Equals(previousMessage, message, StringComparison.Ordinal);
+        if (!changed &&
+            _lastBridgeSnapshotLogUtcByWindow.TryGetValue(windowId, out var previousUtc) &&
+            now - previousUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastBridgeSnapshotLogByWindow[windowId] = message;
+        _lastBridgeSnapshotLogUtcByWindow[windowId] = now;
+        AppLog.Write("StreamingMode", message);
     }
 
     private static bool IsPowerCompatibleRokuDisplay(RegisteredDisplaySnapshot display)
@@ -1500,6 +2891,13 @@ public sealed class LocalWebRtcPublisherService
 
         return !string.IsNullOrWhiteSpace(display.DeviceId) &&
                display.DeviceId.StartsWith("roku-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeStreamingMode(string? value)
+    {
+        return string.Equals((value ?? string.Empty).Trim(), VideoStreamingMode, StringComparison.OrdinalIgnoreCase)
+            ? VideoStreamingMode
+            : InteractionStreamingMode;
     }
 }
 
@@ -1564,17 +2962,65 @@ public sealed class BridgeWindowSnapshot
     [DataMember(Name = "activeSessionName", Order = 14)]
     public string ActiveSessionName { get; set; } = string.Empty;
 
-    [DataMember(Name = "autoOpenFullscreen", Order = 15)]
+    [DataMember(Name = "streamingMode", Order = 15)]
+    public string StreamingMode { get; set; } = "Interacao";
+
+    [DataMember(Name = "requestedStreamingMode", Order = 16)]
+    public string RequestedStreamingMode { get; set; } = string.Empty;
+
+    [DataMember(Name = "modeSwitchPending", Order = 17)]
+    public bool ModeSwitchPending { get; set; }
+
+    [DataMember(Name = "autoOpenFullscreen", Order = 18)]
     public bool AutoOpenFullscreen { get; set; }
 
-    [DataMember(Name = "assignedDisplayId", Order = 16)]
+    [DataMember(Name = "assignedDisplayId", Order = 19)]
     public string AssignedDisplayId { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayName", Order = 17)]
+    [DataMember(Name = "assignedDisplayName", Order = 20)]
     public string AssignedDisplayName { get; set; } = string.Empty;
 
-    [DataMember(Name = "assignedDisplayAddress", Order = 18)]
+    [DataMember(Name = "assignedDisplayAddress", Order = 21)]
     public string AssignedDisplayAddress { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoOverlayEnabled", Order = 22)]
+    public bool DirectVideoOverlayEnabled { get; set; }
+
+    [DataMember(Name = "directVideoSourceUrl", Order = 23)]
+    public string DirectVideoSourceUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoStreamUrl", Order = 24)]
+    public string DirectVideoStreamUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoStreamFormat", Order = 25)]
+    public string DirectVideoStreamFormat { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoNormalizedLeft", Order = 26)]
+    public double DirectVideoNormalizedLeft { get; set; }
+
+    [DataMember(Name = "directVideoNormalizedTop", Order = 27)]
+    public double DirectVideoNormalizedTop { get; set; }
+
+    [DataMember(Name = "directVideoNormalizedWidth", Order = 28)]
+    public double DirectVideoNormalizedWidth { get; set; }
+
+    [DataMember(Name = "directVideoNormalizedHeight", Order = 29)]
+    public double DirectVideoNormalizedHeight { get; set; }
+
+    [DataMember(Name = "directVideoQualityLabel", Order = 30)]
+    public string DirectVideoQualityLabel { get; set; } = string.Empty;
+
+    [DataMember(Name = "directVideoQualityOptions", Order = 31)]
+    public List<BridgeDirectVideoQualityOption> DirectVideoQualityOptions { get; set; } = new List<BridgeDirectVideoQualityOption>();
+}
+
+internal sealed class DisplayModeSwitchState
+{
+    public string ExposedMode { get; set; } = "Interacao";
+
+    public string PendingTargetMode { get; set; } = string.Empty;
+
+    public DateTime LastUpdatedUtc { get; set; }
 }
 
 [DataContract]
@@ -1631,6 +3077,96 @@ public sealed class RegisteredDisplaySnapshot
 
     [DataMember(Name = "lastSeenUtc", Order = 11)]
     public string LastSeenUtc { get; set; } = string.Empty;
+}
+
+internal sealed class DirectVideoOverlayBridgeSnapshot
+{
+    public static DirectVideoOverlayBridgeSnapshot None => new DirectVideoOverlayBridgeSnapshot();
+
+    public bool Enabled { get; set; }
+
+    public string SourceUrl { get; set; } = string.Empty;
+
+    public string StreamUrl { get; set; } = string.Empty;
+
+    public string StreamFormat { get; set; } = string.Empty;
+
+    public string QualityLabel { get; set; } = string.Empty;
+
+    public List<BridgeDirectVideoQualityOption> QualityOptions { get; set; } = new List<BridgeDirectVideoQualityOption>();
+
+    public double NormalizedLeft { get; set; }
+
+    public double NormalizedTop { get; set; }
+
+    public double NormalizedWidth { get; set; }
+
+    public double NormalizedHeight { get; set; }
+}
+
+[DataContract]
+public sealed class BridgeDirectVideoQualityOption
+{
+    [DataMember(Name = "label", Order = 1)]
+    public string Label { get; set; } = string.Empty;
+
+    [DataMember(Name = "streamUrl", Order = 2)]
+    public string StreamUrl { get; set; } = string.Empty;
+
+    [DataMember(Name = "streamFormat", Order = 3)]
+    public string StreamFormat { get; set; } = string.Empty;
+}
+
+internal sealed class CachedDirectPlaybackResolveResult
+{
+    public YouTubeDirectResolveResult Result { get; set; } = YouTubeDirectResolveResult.Fail("pendente");
+
+    public DateTime UpdatedUtc { get; set; }
+}
+
+public sealed class YouTubeDirectResolveResult
+{
+    public bool Ok { get; set; }
+
+    public string StreamUrl { get; set; } = string.Empty;
+
+    public string StreamFormat { get; set; } = string.Empty;
+
+    public string QualityLabel { get; set; } = string.Empty;
+
+    public List<YouTubeDirectQualityOption> QualityOptions { get; set; } = new List<YouTubeDirectQualityOption>();
+
+    public string Error { get; set; } = string.Empty;
+
+    public static YouTubeDirectResolveResult Success(string streamUrl, string streamFormat, string qualityLabel, List<YouTubeDirectQualityOption> qualityOptions)
+    {
+        return new YouTubeDirectResolveResult
+        {
+            Ok = true,
+            StreamUrl = streamUrl ?? string.Empty,
+            StreamFormat = streamFormat ?? string.Empty,
+            QualityLabel = qualityLabel ?? string.Empty,
+            QualityOptions = qualityOptions ?? new List<YouTubeDirectQualityOption>()
+        };
+    }
+
+    public static YouTubeDirectResolveResult Fail(string error)
+    {
+        return new YouTubeDirectResolveResult
+        {
+            Ok = false,
+            Error = error ?? string.Empty
+        };
+    }
+}
+
+public sealed class YouTubeDirectQualityOption
+{
+    public string Label { get; set; } = string.Empty;
+
+    public string StreamUrl { get; set; } = string.Empty;
+
+    public string StreamFormat { get; set; } = string.Empty;
 }
 
 public sealed class RokuPowerBatchResult

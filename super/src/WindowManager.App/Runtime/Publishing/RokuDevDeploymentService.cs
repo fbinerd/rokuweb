@@ -32,7 +32,7 @@ public sealed class RokuDevDeploymentService
         _appUpdatePreferenceStore = appUpdatePreferenceStore;
     }
 
-    public void TryScheduleUpdate(RegisteredDisplaySnapshot display, string expectedVersion)
+    public void TryScheduleUpdate(RegisteredDisplaySnapshot display, string expectedVersion, string source = "auto_schedule")
     {
         if (display is null || string.IsNullOrWhiteSpace(display.DeviceId) || string.IsNullOrWhiteSpace(expectedVersion))
         {
@@ -55,25 +55,26 @@ public sealed class RokuDevDeploymentService
 
         _ = Task.Run(async () =>
         {
-            var result = await DeployAsync(display, expectedVersion).ConfigureAwait(false);
+            var result = await DeployAsync(display, expectedVersion, source).ConfigureAwait(false);
             AppLog.Write(
                 "RokuDeploy",
                 string.Format(
-                    "Deploy automatico para TV id={0}, alvo={1}, resultado={2}",
+                    "Deploy automatico para TV id={0}, alvo={1}, resultado={2}, origem={3}",
                     display.DeviceId,
                     expectedVersion,
-                    result));
+                    result,
+                    source));
         });
     }
 
-    public Task<string> DeployNowAsync(RegisteredDisplaySnapshot display, string expectedVersion)
+    public Task<string> DeployNowAsync(RegisteredDisplaySnapshot display, string expectedVersion, string source = "manual")
     {
         if (display is null || string.IsNullOrWhiteSpace(expectedVersion))
         {
             return Task.FromResult("parametros_invalidos");
         }
 
-        return DeployAsync(display, expectedVersion);
+        return DeployAsync(display, expectedVersion, source);
     }
 
     public async Task<string> SendPowerCommandAsync(RegisteredDisplaySnapshot display, bool powerOn)
@@ -222,7 +223,7 @@ public sealed class RokuDevDeploymentService
         }
     }
 
-    public async Task<string> LaunchDevChannelAsync(RegisteredDisplaySnapshot display)
+    public async Task<string> LaunchDevChannelAsync(RegisteredDisplaySnapshot display, string source = "unknown")
     {
         if (display is null)
         {
@@ -274,23 +275,24 @@ public sealed class RokuDevDeploymentService
                 AppLog.Write(
                     "RokuDeploy",
                     string.Format(
-                        "Launch/dev solicitado para TV id={0}, host={1}, status={2}, body={3}",
+                        "Launch/dev solicitado para TV id={0}, host={1}, status={2}, body={3}, origem={4}",
                         display.DeviceId,
                         host,
                         (int)response.StatusCode,
-                        SummarizeResponseBody(responseBody)));
+                        SummarizeResponseBody(responseBody),
+                        source));
 
                 return response.IsSuccessStatusCode ? "ok" : "launch_falhou_" + (int)response.StatusCode;
             }
         }
         catch (Exception ex)
         {
-            AppLog.Write("RokuDeploy", string.Format("Falha ao relancar canal dev para TV id={0}: {1}", display.DeviceId, ex.Message));
+            AppLog.Write("RokuDeploy", string.Format("Falha ao relancar canal dev para TV id={0}, origem={1}: {2}", display.DeviceId, source, ex.Message));
             return "erro_" + ex.GetType().Name;
         }
     }
 
-    private async Task<string> DeployAsync(RegisteredDisplaySnapshot display, string expectedVersion)
+    private async Task<string> DeployAsync(RegisteredDisplaySnapshot display, string expectedVersion, string source)
     {
         try
         {
@@ -373,11 +375,12 @@ public sealed class RokuDevDeploymentService
                     AppLog.Write(
                         "RokuDeploy",
                         string.Format(
-                            "Canal Roku relancado apos sideload: host={0}, status={1}, body={2}, dump={3}",
+                            "Canal Roku relancado apos sideload: host={0}, status={1}, body={2}, dump={3}, origem={4}",
                             host,
                             (int)launchResponse.StatusCode,
                             SummarizeResponseBody(launchBody),
-                            launchDumpPath));
+                            launchDumpPath,
+                            source));
                 }
                 catch
                 {

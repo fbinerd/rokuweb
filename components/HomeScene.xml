@@ -9,6 +9,7 @@
   <children>
     <BridgeRequestTask id="bridgeRequestTask" />
     <InputLogTask id="inputLogTask" />
+    <ModeSwitchNotifyTask id="modeSwitchNotifyTask" />
     <ControlTask id="controlTask" />
     <ControlTask id="clickControlTask" />
     <ControlTask id="textControlTask" />
@@ -16,21 +17,16 @@
     <Timer id="previewRefreshTimer" repeat="false" duration="0.08" />
     <Timer id="editableActivationTimer" repeat="false" duration="0.7" />
     <Timer id="autoConnectTimer" repeat="false" duration="1.0" />
-    <Timer id="fullscreenStreamTimer" repeat="true" duration="0.12" />
+    <Timer id="fullscreenStreamTimer" repeat="true" duration="0.75" />
     <Timer id="fullscreenVideoWatchTimer" repeat="true" duration="1.0" />
     <Timer id="scrollModeToastTimer" repeat="false" duration="1.2" />
     <Timer id="cursorMoveTimer" repeat="true" duration="0.04" />
+    <Timer id="interactionOverlayControlsTimer" repeat="true" duration="0.25" />
     <Timer id="audioRetryTimer" repeat="false" duration="1.2" />
     <Timer id="audioFallbackTimer" repeat="false" duration="1.2" />
     <Timer id="audioHlsRestartTimer" repeat="false" duration="0.35" />
     <Audio id="panelAudioNode" />
     <Video id="panelAudioVideo" width="2" height="2" translation="[-10, -10]" visible="false" />
-    <Video
-      id="fullscreenVideo"
-      width="1280"
-      height="720"
-      translation="[0,0]"
-      visible="false" />
     <Rectangle
       id="background"
       width="1280"
@@ -115,6 +111,272 @@
       translation="[0, 0]"
       visible="false"
       loadDisplayMode="zoomToFill" />
+    <Video
+      id="fullscreenInteractionVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
+    <Group
+      id="fullscreenInteractionOverlayViewport"
+      translation="[0,0]"
+      visible="false">
+      <Video
+        id="fullscreenInteractionOverlayVideo"
+        width="1"
+        height="1"
+        translation="[0,0]"
+        visible="false" />
+    </Group>
+    <Group id="interactionOverlayControlsGroup" translation="[0,0]" visible="false">
+      <Rectangle
+        id="interactionOverlayControlsBackground"
+        width="320"
+        height="82"
+        color="0x00000000" />
+      <Rectangle
+        id="interactionOverlayProgressTrack"
+        width="292"
+        height="4"
+        translation="[14,8]"
+        color="0x3A3A40DD" />
+      <Rectangle
+        id="interactionOverlayProgressFill"
+        width="0"
+        height="4"
+        translation="[14,8]"
+        color="0xFF3B5CFF" />
+      <Rectangle
+        id="interactionOverlayLeftCapsule"
+        width="262"
+        height="40"
+        translation="[14,22]"
+        color="0x111111D8" />
+      <Rectangle
+        id="interactionOverlayTitleCapsule"
+        width="320"
+        height="40"
+        translation="[238,22]"
+        color="0x111111CC" />
+      <Rectangle
+        id="interactionOverlayRightCapsule"
+        width="126"
+        height="40"
+        translation="[572,22]"
+        color="0x111111D8" />
+      <Label
+        id="interactionOverlayTimeLabel"
+        width="164"
+        height="20"
+        translation="[94,32]"
+        color="0xE2E8F0FF"
+        font="font:SmallSystemFont"
+        text="00:00 / 00:00" />
+      <Rectangle
+        id="interactionOverlayPlayButton"
+        width="52"
+        height="28"
+        translation="[24,28]"
+        color="0xFFFFFF18" />
+      <Label
+        id="interactionOverlayPlayLabel"
+        width="52"
+        height="28"
+        translation="[24,28]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="II" />
+      <Label
+        id="interactionOverlayTitleLabel"
+        width="292"
+        height="24"
+        translation="[252,30]"
+        color="0xF8FAFCFF"
+        font="font:SmallSystemFont"
+        text="YouTube direto" />
+      <Rectangle
+        id="interactionOverlayQualityButton"
+        width="204"
+        height="28"
+        translation="[506,28]"
+        color="0xFFFFFF18" />
+      <Label
+        id="interactionOverlayQualityLabel"
+        width="204"
+        height="28"
+        translation="[506,28]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="Auto" />
+      <Group id="interactionOverlayQualityMenuGroup" translation="[0,0]" visible="false">
+        <Rectangle
+          id="interactionOverlayQualityMenuBackground"
+          width="214"
+          height="36"
+          translation="[0,0]"
+          color="0x111111EE" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg0"
+          width="206"
+          height="30"
+          translation="[4,3]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel0"
+          width="206"
+          height="30"
+          translation="[4,3]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg1"
+          width="206"
+          height="30"
+          translation="[4,35]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel1"
+          width="206"
+          height="30"
+          translation="[4,35]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg2"
+          width="206"
+          height="30"
+          translation="[4,67]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel2"
+          width="206"
+          height="30"
+          translation="[4,67]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg3"
+          width="206"
+          height="30"
+          translation="[4,99]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel3"
+          width="206"
+          height="30"
+          translation="[4,99]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg4"
+          width="206"
+          height="30"
+          translation="[4,131]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel4"
+          width="206"
+          height="30"
+          translation="[4,131]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg5"
+          width="206"
+          height="30"
+          translation="[4,163]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel5"
+          width="206"
+          height="30"
+          translation="[4,163]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg6"
+          width="206"
+          height="30"
+          translation="[4,195]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel6"
+          width="206"
+          height="30"
+          translation="[4,195]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+        <Rectangle
+          id="interactionOverlayQualityMenuItemBg7"
+          width="206"
+          height="30"
+          translation="[4,227]"
+          color="0xFFFFFF18" />
+        <Label
+          id="interactionOverlayQualityMenuItemLabel7"
+          width="206"
+          height="30"
+          translation="[4,227]"
+          horizAlign="center"
+          vertAlign="center"
+          color="0xFFFFFFFF"
+          font="font:SmallSystemFont"
+          text="" />
+      </Group>
+      <Rectangle
+        id="interactionOverlayFullscreenButton"
+        width="92"
+        height="28"
+        translation="[590,28]"
+        color="0xFFFFFF18" />
+      <Label
+        id="interactionOverlayFullscreenLabel"
+        width="92"
+        height="28"
+        translation="[590,28]"
+        horizAlign="center"
+        vertAlign="center"
+        color="0xFFFFFFFF"
+        font="font:SmallSystemFont"
+        text="[ ]" />
+    </Group>
+    <Video
+      id="fullscreenVideoModeVideo"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
+    <Video
+      id="fullscreenVideoStage"
+      width="1280"
+      height="720"
+      translation="[0,0]"
+      visible="false" />
     <Poster
       id="cursorMarker"
       width="56"

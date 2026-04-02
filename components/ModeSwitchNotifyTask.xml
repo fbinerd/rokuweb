@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ModeSwitchNotifyTask" extends="Task">
+  <interface>
+    <field id="bridgeHost" type="string" />
+    <field id="deviceId" type="string" />
+    <field id="windowId" type="string" />
+    <field id="previousMode" type="string" />
+    <field id="targetMode" type="string" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ModeSwitchNotifyTask.brs" />
+</component>

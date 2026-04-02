@@ -85,6 +85,11 @@ public partial class WindowProfileSetupDialog : Window
 
     private void OnWindowsSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (e.OriginalSource is not ListView)
+        {
+            return;
+        }
+
         if (ViewModel.SelectedWindow is null)
         {
             return;

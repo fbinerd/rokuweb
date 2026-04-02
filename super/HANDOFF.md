@@ -1,55 +1,63 @@
 # Handoff
 
-## Estado atual
-- Projeto WPF para Windows em `.NET Framework 4.8.1`.
-- CEF voltou a funcionar no app.
-- Navegacao por janela funcionando.
-- Previews simultaneos funcionando.
-- Clique duplo abre janela ampliada.
-- Menu de contexto do painel inclui configuracoes e `Ir para LinkRTC`.
-- `Ir para LinkRTC` agora publica automaticamente e abre via `localhost`.
-- Pagina LinkRTC abre limpa, sem a tarja preta.
-- Perfil persiste porta do servidor, modo de acesso, IP especifico, janelas, paines estaticos, TVs persistidas e configuracoes especificas de painel.
-- Perfil padrao de abertura suportado.
+## Estado Atual (Branch: experiments/roku-interactive-next)
+- **Merge Base:** Esta branch divergiu da `develop` no commit **`8649fa3`** (Tag `v0.1.0`).
+- Projeto WPF híbrido: Localmente em `.NET Framework 4.8.1` (binários legado), CI preparado para `.NET 10`.
+- **Interactive Bridge Operacional:** A TV agora não é apenas um monitor, mas um terminal de entrada. Endpoint `/api/control` injeta eventos de mouse/teclado no CEF.
+- **Streaming HLS Dinâmico:** Implementado `BrowserPanelRollingHlsService` para broadcast de janelas em tempo real via playlists `.m3u8`.
+- **Integração Inteligente YouTube:** Uso de `yt-dlp.exe` para extrair streams diretos, contornando o overhead de renderização do player web no Roku.
+- **Modos de Streaming:** Suporte a `Interacao` (latência mínima) e `Video` (estabilidade HLS), com troca de modo coordenada entre Windows e TV via ACKs.
+- **Automação de Ciclo de Vida Roku:** Gerenciamento de energia (ECP PowerOn/Off) e Sideload automático de canais via `RokuDevDeploymentService`.
+- **Sistema de Perfis Avançado:** Persistência completa de `TvProfiles` (IPs/MACs) e `WindowProfiles` (Nickname/URL/Modo/Perfil de Navegador).
 
-## Commits recentes importantes
-- `8649fa3` feat: persist display targets and panel-specific profile state
-- `6c3f64a` fix: remove linkrtc overlay banner
-- `c91f1cc` fix: auto-publish and open linkrtc via localhost
-- `149141a` fix: point cef locales path to output locales folder
-- `3608536` fix: remove unsupported cef settings members
-- `42903d9` fix: align cef startup with nullable api
-- `79d79f8` fix: re-enable cef startup initialization
-- `3322c32` fix: replace linkrtc listener with tcp server
-- `7d27c66` fix: make panel deletion visible and stop reopening last profile
+## Funcionalidades de Vídeo Avançadas
+- `LocalWebRtcPublisherService`: Agora é o servidor central de rotas dinâmicas, servindo HLS, thumbnails e API de comando.
+- `DirectVideoOverlay`: Sistema de detecção de vídeo que normaliza coordenadas e resolve qualidades (720p, 480p, 360p) para o `Video Node` da Roku.
+- `StreamReloadVersions`: Sistema de controle de versão de stream para forçar refresh na TV após interações críticas.
 
-## Tag util
-- `v0.1.0`
+## Automação e DevLoop
+- `Dev-LocalBuildAndSideload.ps1`: Script mestre que faz build, gera o `.zip` da Roku com timestamp local e faz o deploy via porta 80.
+- `Start-LocalDiagnosticsMonitor`: Monitor de logs unificado que funde a saída do SuperPainel com o Telnet (porta 8085) da Roku.
+- `build-monorepo.yml`: Pipeline completo com Delta Patches e publicação em GitHub Pages.
 
-## Arquivos-chave
-- `src/WindowManager.App/App.xaml.cs`
-- `src/WindowManager.App/ViewModels/MainViewModel.cs`
-- `src/WindowManager.App/Runtime/Publishing/LocalWebRtcPublisherService.cs`
-- `src/WindowManager.App/Runtime/Publishing/LinkRtcAddressBuilder.cs`
-- `src/WindowManager.App/Profiles/AppProfile.cs`
-- `src/WindowManager.App/ViewModels/StaticDisplayPanelViewModel.cs`
+## Arquivos-Chave do "Interactive Next"
+- `src/WindowManager.App/Runtime/Publishing/LocalWebRtcPublisherService.cs`: O coração do servidor de streaming e controle.
+- `src/WindowManager.App/ViewModels/MainViewModel.cs`: Orquestração de sessões ativas e comandos de hardware.
+- `src/WindowManager.App/Runtime/Publishing/BrowserPanelRollingHlsService.cs`: Engine de geração de segmentos de vídeo.
+- `tools/yt-dlp/yt-dlp.exe`: Dependência externa para extração de vídeo direto.
 
-## Decisoes importantes
-- O app usa CEF embutido, nao WebView2.
-- O servidor do LinkRTC nao usa mais `HttpListener`; usa `TcpListener` para evitar dependencia de `urlacl`.
-- O clique em `Ir para LinkRTC` abre a rota local em `localhost`, mesmo quando o modo publico estiver em `Lan` ou `SpecificIp`.
-- O startup nao reabre mais automaticamente o ultimo perfil; sem perfil padrao, abre `default`.
+## Decisões de Engenharia
+- **Porta 8090:** Padronizada para evitar conflitos com a porta 8088 de testes anteriores.
+- **Coordenadas Normalizadas (0.0 a 1.0):** Implementadas para garantir que o clique na TV (independente da resolução) caia no lugar certo do CEF.
+- **Supressão de DirectVideo no Modo Interação:** O sistema desabilita o bypass de YT quando o usuário está interagindo para evitar loops de UI.
+- **Persistence-First:** Toda alteração de perfil dispara um `QueueAutoSave` para evitar perda de configuração de janelas.
 
 ## Limitacoes conhecidas
-- A parte "WebRTC" hoje publica uma pagina local com iframe da URL da janela; ainda nao e streaming real de frames.
-- Descoberta de TVs continua em camada simulada/preparada, nao integracao Miracast real do Windows.
-- As configuracoes especificas dos paines estaticos ja persistem, mas ainda nao estao plenamente expostas para edicao dedicada na UI.
+- **Áudio:** O áudio via HLS ainda apresenta dessincronização em relação ao vídeo em redes com jitter alto.
+- **Bypass de YouTube:** Depende da atualização constante do `yt-dlp.exe` para não quebrar com mudanças no player do Google.
 
 ## Proximos passos recomendados
-1. Expor na UI as configuracoes especificas de cada painel estatico.
-2. Permitir editar painel estatico: apelido, janela preferida, nickname de rota, WebRTC ligado/desligado.
-3. Refinar o fluxo de LinkRTC para cenarios de acesso por IP externo.
-4. Evoluir de pagina local para pipeline real de captura/transmissao, se esse continuar sendo o objetivo.
+1. **Sincronização A/V:** Ajustar os timestamps do `BrowserAudioHlsService` com o `BrowserPanelRollingHlsService`.
+2. **Roku Video Node:** Atualizar o BrightScript do `rokuweb` para gerenciar a transição suave entre o modo `Interacao` (poster/image) e `Video` (Video Node).
+3. **UI de Edição de Janelas:** Adicionar controles na UI para forçar o `RequestStreamReload` manualmente.
+4. **Keep-Alive:** Refinar o `EnsureKeepAliveStreamsAsync` para evitar que a TV entre em sleep durante sessões longas de vídeo.
+
+## Como Compilar
+```powershell
+.\build.ps1 -Restore -Build
+```
+
+## Como Testar (Local Loop)
+```powershell
+.\Dev-LocalBuildAndSideload.ps1 -RokuIp "SEU_IP_AQUI" -LaunchSuper -LaunchRokuApp
+```
+
+## Prompt de Retomada
+```text
+Trabalhando na branch experiments/roku-interactive-next.
+Status: Bridge interativa e HLS H.264 funcionais. yt-dlp integrado.
+Foco: Refinar a transição automática de modos no lado da Roku.
+```
 
 ## Como compilar
 ```powershell

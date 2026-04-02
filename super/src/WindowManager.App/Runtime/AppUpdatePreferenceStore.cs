@@ -53,11 +53,14 @@ public sealed class AppUpdatePreferenceStore
 public sealed class AppUpdatePreferences
 {
     [DataMember(Order = 1)]
-    public bool AutoUpdateEnabled { get; set; } = true;
+    public bool AutoUpdateEnabled { get; set; }
 
     [DataMember(Order = 2)]
     public string UpdateChannel { get; set; } = UpdateChannelNames.Stable;
 
     [DataMember(Order = 3)]
+    public bool RememberUpdateChannelSelection { get; set; }
+
+    [DataMember(Order = 4)]
     public string AdditionalDiscoveryCidrs { get; set; } = string.Empty;
 }

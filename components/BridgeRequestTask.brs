@@ -65,6 +65,19 @@ function registerDisplay(bridgeHost as string) as string
     return deviceId
 end function
 
+sub notifyDisplayReady(bridgeHost as string, deviceId as string)
+    if bridgeHost = invalid or bridgeHost = "" or deviceId = invalid or deviceId = ""
+        return
+    end if
+
+    readyUrl = "http://" + bridgeHost + "/api/display-ready"
+    readyUrl = readyUrl + "?deviceId=" + urlEncode(deviceId)
+
+    transfer = CreateObject("roUrlTransfer")
+    transfer.SetUrl(readyUrl)
+    ignored = transfer.GetToString()
+end sub
+
 function urlEncode(value as string) as string
     result = ""
     for i = 1 to Len(value)
@@ -73,10 +86,17 @@ function urlEncode(value as string) as string
         if (code >= 48 and code <= 57) or (code >= 65 and code <= 90) or (code >= 97 and code <= 122) or char = "-" or char = "_" or char = "."
             result = result + char
         else
-            hex = Right("0" + Hex(code), 2)
+            hex = toHexByte(code)
             result = result + "%" + hex
         end if
     end for
 
     return result
+end function
+
+function toHexByte(value as integer) as string
+    digits = "0123456789ABCDEF"
+    high = Int(value / 16)
+    low = value Mod 16
+    return Mid(digits, high + 1, 1) + Mid(digits, low + 1, 1)
 end function

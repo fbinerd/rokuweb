@@ -185,8 +185,21 @@ public sealed class StubDisplayDiscoveryService : IDisplayDiscoveryService
 
             foreach (var searchTarget in SearchTargets)
             {
-                var requestBytes = Encoding.ASCII.GetBytes(BuildSearchRequest(searchTarget));
-                await client.SendAsync(requestBytes, requestBytes.Length, SsdpEndpoint);
+                try
+                {
+                    var requestBytes = Encoding.ASCII.GetBytes(BuildSearchRequest(searchTarget));
+                    await client.SendAsync(requestBytes, requestBytes.Length, SsdpEndpoint);
+                }
+                catch (SocketException ex)
+                {
+                    AppLog.Write(
+                        "Startup",
+                        string.Format(
+                            "SSDP indisponivel para discovery target '{0}': {1}",
+                            searchTarget,
+                            ex.Message));
+                    return results;
+                }
             }
 
             var deadline = DateTime.UtcNow.AddSeconds(4);

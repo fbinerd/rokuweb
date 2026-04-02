@@ -25,6 +25,7 @@ public sealed class WindowSession : INotifyPropertyChanged
     private bool _isPrimaryExclusive;
     private bool _isNavigationBarEnabled;
     private string _browserProfileName = string.Empty;
+    private string _streamingMode = "Interacao";
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -140,6 +141,12 @@ public sealed class WindowSession : INotifyPropertyChanged
     {
         get => _browserProfileName;
         set => SetProperty(ref _browserProfileName, value);
+    }
+
+    public string StreamingMode
+    {
+        get => _streamingMode;
+        set => SetProperty(ref _streamingMode, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

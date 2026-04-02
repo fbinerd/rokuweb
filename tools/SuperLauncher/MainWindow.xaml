@@ -1,0 +1,17 @@
+<Window x:Class="SuperLauncher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SuperLauncher" Height="420" Width="600">
+    <Grid Margin="10">
+        <StackPanel>
+            <TextBlock Text="SuperLauncher - Ambiente e Atualização" FontWeight="Bold" FontSize="18" Margin="0,0,0,10"/>
+            <Button Name="btnCheckTools" Content="Verificar/Instalar Ferramentas" Height="32" Margin="0,0,0,8"/>
+            <Button Name="btnSelectChannel" Content="Selecionar Canal de Atualização" Height="32" Margin="0,0,0,8"/>
+            <Button Name="btnCheckUpdate" Content="Checar/Aplicar Update" Height="32" Margin="0,0,0,8"/>
+            <Button Name="btnBackupRestore" Content="Backup/Restaurar Dados" Height="32" Margin="0,0,0,8"/>
+            <Button Name="btnLaunchApp" Content="Iniciar SuperPainel" Height="32" Margin="0,0,0,8"/>
+            <TextBlock Text="Logs:" FontWeight="Bold" Margin="0,10,0,0"/>
+            <TextBox Name="txtLogs" Height="120" Margin="0,2,0,0" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" IsReadOnly="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

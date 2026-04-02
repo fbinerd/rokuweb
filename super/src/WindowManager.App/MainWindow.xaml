@@ -39,8 +39,13 @@
             <TextBlock Text="Gerenciador de Janelas e Rotas"
                        FontSize="24"
                        FontWeight="SemiBold" />
-            <StackPanel Orientation="Horizontal"
-                        HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+                <Button Content="Configuração de Atualização"
+                    Width="200"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Click="OnUpdateConfigClick" />
                 <Button Content="Ligar TVs e abrir app"
                         Width="160"
                         Height="34"
@@ -277,6 +282,10 @@
                         <CheckBox Content="Baixar e aplicar atualizações automaticamente ao iniciar"
                                   IsChecked="{Binding AutoUpdateEnabled, UpdateSourceTrigger=PropertyChanged}"
                                   IsEnabled="{Binding IsAutomaticUpdateToggleEnabled}" />
+                        <CheckBox Margin="0,8,0,0"
+                                  Content="Marcar branch atual como default"
+                                  IsChecked="{Binding RememberUpdateChannelSelection, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding IsUpdateChannelDefaultToggleEnabled}" />
                         <TextBlock Margin="0,8,0,0"
                                    Text="Canal de atualização"
                                    FontWeight="SemiBold" />

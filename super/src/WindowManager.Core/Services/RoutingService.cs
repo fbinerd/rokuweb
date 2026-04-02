@@ -39,6 +39,17 @@ public sealed class RoutingService
             throw new InvalidOperationException("O destino selecionado esta offline.");
         }
 
+        if (target.TransportKind == DisplayTransportKind.LanStreaming)
+        {
+            windowSession.AssignedTarget = target;
+            windowSession.State = WindowSessionState.Streaming;
+            return new CaptureSession
+            {
+                WindowSessionId = windowSession.Id,
+                IsActive = false
+            };
+        }
+
         var captureSession = await _captureSessionFactory.StartAsync(windowSession, cancellationToken);
         var transport = _displayTransportResolver.Resolve(target.TransportKind);
 

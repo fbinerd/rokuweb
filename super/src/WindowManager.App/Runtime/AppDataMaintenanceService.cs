@@ -13,86 +13,118 @@ public sealed class AppDataMaintenanceService
 
     public Task ExportAsync(string destinationZipPath, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(destinationZipPath))
-        {
-            throw new InvalidOperationException("Informe um caminho valido para o backup.");
-        }
-
-        var destinationDirectory = Path.GetDirectoryName(destinationZipPath);
-        if (!string.IsNullOrWhiteSpace(destinationDirectory))
-        {
-            Directory.CreateDirectory(destinationDirectory);
-        }
-
-        if (File.Exists(destinationZipPath))
-        {
-            File.Delete(destinationZipPath);
-        }
-
-        using var archive = ZipFile.Open(destinationZipPath, ZipArchiveMode.Create);
-
-        if (Directory.Exists(DataRoot))
-        {
-            foreach (var file in Directory.GetFiles(DataRoot, "*", SearchOption.AllDirectories)
-                .Where(ShouldIncludeInBackup))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var relativePath = GetRelativePath(DataRoot, file);
-                archive.CreateEntryFromFile(file, relativePath);
-            }
-        }
-
-        return Task.CompletedTask;
+        return ExportAsync(destinationZipPath, progress: null, cancellationToken);
     }
 
-    public Task ImportAsync(string sourceZipPath, CancellationToken cancellationToken)
+    public Task ExportAsync(string destinationZipPath, Action<string, double>? progress, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(sourceZipPath) || !File.Exists(sourceZipPath))
+        return Task.Run(() =>
         {
-            throw new FileNotFoundException("Nao foi possivel localizar o backup informado.", sourceZipPath);
-        }
-
-        ResetCoreData();
-        Directory.CreateDirectory(DataRoot);
-
-        using var archive = ZipFile.OpenRead(sourceZipPath);
-        foreach (var entry in archive.Entries)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (string.IsNullOrWhiteSpace(entry.FullName))
+            if (string.IsNullOrWhiteSpace(destinationZipPath))
             {
-                continue;
+                throw new InvalidOperationException("Informe um caminho valido para o backup.");
             }
 
-            if (ShouldSkipImportEntry(entry.FullName))
-            {
-                continue;
-            }
-
-            var destinationPath = Path.Combine(DataRoot, entry.FullName);
-            var destinationDirectory = Path.GetDirectoryName(destinationPath);
+            var destinationDirectory = Path.GetDirectoryName(destinationZipPath);
             if (!string.IsNullOrWhiteSpace(destinationDirectory))
             {
                 Directory.CreateDirectory(destinationDirectory);
             }
 
-            if (string.IsNullOrEmpty(entry.Name))
+            var files = Directory.Exists(DataRoot)
+                ? Directory.GetFiles(DataRoot, "*", SearchOption.AllDirectories)
+                    .Where(path => ShouldIncludeInBackup(path, destinationZipPath))
+                    .ToArray()
+                : Array.Empty<string>();
+
+            if (File.Exists(destinationZipPath))
             {
-                continue;
+                File.Delete(destinationZipPath);
             }
 
-            entry.ExtractToFile(destinationPath, overwrite: true);
-        }
+            using var archive = ZipFile.Open(destinationZipPath, ZipArchiveMode.Create);
 
-        return Task.CompletedTask;
+            if (files.Length > 0)
+            {
+                var totalFiles = files.Length;
+
+                for (var index = 0; index < totalFiles; index++)
+                {
+                    var file = files[index];
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var relativePath = GetRelativePath(DataRoot, file);
+                    var progressPercent = totalFiles == 0
+                        ? 100
+                        : Math.Min(99, ((index * 100.0) / totalFiles));
+                    progress?.Invoke(
+                        $"Criando backup... {index + 1}/{totalFiles}: {relativePath}",
+                        progressPercent);
+                    archive.CreateEntryFromFile(file, relativePath);
+                }
+
+                if (totalFiles > 0)
+                {
+                    progress?.Invoke("Backup criado com sucesso.", 100);
+                }
+            }
+            else
+            {
+                progress?.Invoke("Backup sem arquivos para salvar.", 100);
+            }
+        }, cancellationToken);
+    }
+
+    public Task ImportAsync(string sourceZipPath, CancellationToken cancellationToken)
+    {
+        return Task.Run(() =>
+        {
+            if (string.IsNullOrWhiteSpace(sourceZipPath) || !File.Exists(sourceZipPath))
+            {
+                throw new FileNotFoundException("Nao foi possivel localizar o backup informado.", sourceZipPath);
+            }
+
+            ResetCoreData();
+            Directory.CreateDirectory(DataRoot);
+
+            using var archive = ZipFile.OpenRead(sourceZipPath);
+            foreach (var entry in archive.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrWhiteSpace(entry.FullName))
+                {
+                    continue;
+                }
+
+                if (ShouldSkipImportEntry(entry.FullName))
+                {
+                    continue;
+                }
+
+                var destinationPath = Path.Combine(DataRoot, entry.FullName);
+                var destinationDirectory = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrWhiteSpace(destinationDirectory))
+                {
+                    Directory.CreateDirectory(destinationDirectory);
+                }
+
+                if (string.IsNullOrEmpty(entry.Name))
+                {
+                    continue;
+                }
+
+                entry.ExtractToFile(destinationPath, overwrite: true);
+            }
+        }, cancellationToken);
     }
 
     public Task ResetAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        ResetCoreData();
-        return Task.CompletedTask;
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ResetCoreData();
+        }, cancellationToken);
     }
 
     private void ResetCoreData()
@@ -132,7 +164,20 @@ public sealed class AppDataMaintenanceService
         return path.Substring(normalizedRoot.Length).Replace("\\", "/");
     }
 
-    private static bool ShouldIncludeInBackup(string path) => !IsInsideCefDirectory(path);
+    private static bool ShouldIncludeInBackup(string path, string destinationZipPath)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        if (string.Equals(path, destinationZipPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !IsInsideCefDirectory(path) && !IsInsideBackupsDirectory(path);
+    }
 
     private static bool IsInsideCefDirectory(string path)
     {
@@ -144,6 +189,12 @@ public sealed class AppDataMaintenanceService
     {
         var browserProfilesRoot = AppDataPaths.CefBrowserProfilesRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         return path.StartsWith(browserProfilesRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInsideBackupsDirectory(string path)
+    {
+        var backupsRoot = AppDataPaths.BackupsRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return path.StartsWith(backupsRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldSkipImportEntry(string entryName)

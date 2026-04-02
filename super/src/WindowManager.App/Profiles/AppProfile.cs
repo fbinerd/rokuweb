@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.Serialization;
+using WindowManager.App.Runtime;
 using WindowManager.App.Runtime.Publishing;
 using WindowManager.Core.Models;
 
@@ -56,6 +57,15 @@ public sealed class AppProfile
 
     [DataMember(Order = 16)]
     public bool ShowWindowPreviews { get; set; } = true;
+
+    [DataMember(Order = 17)]
+    public bool AutoUpdateEnabled { get; set; }
+
+    [DataMember(Order = 18)]
+    public string UpdateChannel { get; set; } = UpdateChannelNames.Stable;
+
+    [DataMember(Order = 19)]
+    public bool RememberUpdateChannelSelection { get; set; }
 }
 
 [DataContract]
@@ -111,6 +121,9 @@ public sealed class WindowSessionProfile
 
     [DataMember(Order = 17)]
     public string BrowserProfileName { get; set; } = string.Empty;
+
+    [DataMember(Order = 18)]
+    public string StreamingMode { get; set; } = "Interacao";
 }
 
 [DataContract]
@@ -295,6 +308,9 @@ public sealed class WindowLinkProfile
 
     [DataMember(Order = 6)]
     public bool IsNavigationBarEnabled { get; set; }
+
+    [DataMember(Order = 7)]
+    public string StreamingMode { get; set; } = "Interacao";
 }
 
 [DataContract]

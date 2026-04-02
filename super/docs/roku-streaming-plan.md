@@ -1,8 +1,8 @@
-# Plano Minimo Para Exibir `emei.lovable.app` No Roku
+# Plano Minimo Para Exibir `SEU_SITE_AQUI` No Roku
 
 ## Objetivo
 
-Permitir que o `super` carregue `https://emei.lovable.app` em uma janela CEF no Windows e disponibilize esse conteudo para o `rokuweb` em um formato que a Roku consiga reproduzir.
+Permitir que o `super` carregue `https://SEU_SITE_AQUI` em uma janela CEF no Windows e disponibilize esse conteudo para o `rokuweb` em um formato que a Roku consiga reproduzir.
 
 ## Situacao Atual
 
@@ -24,7 +24,7 @@ Hoje ainda nao existe:
 ## Arquitetura Minima Recomendada
 
 ```text
-emei.lovable.app
+SEU_SITE_AQUI
         |
         v
 CEF Window no super
@@ -54,7 +54,7 @@ Video node do Roku reproduzindo HLS
 
 O `rokuweb` precisa consultar:
 
-`GET http://10.1.0.10:8090/api/windows`
+`GET http://SERVIDOR_IP:PORTA/api/windows`
 
 Resposta proposta:
 
@@ -63,11 +63,11 @@ Resposta proposta:
   "windowCount": 1,
   "windows": [
     {
-      "id": "emei-main",
-      "title": "EMEI",
+        "id": "janela-principal",
+        "title": "TITULO_EXEMPLO",
       "state": "Streaming",
-      "initialUrl": "https://emei.lovable.app",
-      "streamUrl": "http://10.1.0.10:8090/streams/emei-main/index.m3u8"
+        "initialUrl": "https://SEU_SITE_AQUI",
+        "streamUrl": "http://SERVIDOR_IP:PORTA/streams/janela-principal/index.m3u8"
     }
   ]
 }
@@ -106,7 +106,7 @@ Adicionar uma etapa de captura por janela usando uma tecnologia do Windows, por 
 
 Saida esperada:
 
-- frames da janela CEF associada ao `emei.lovable.app`
+- frames da janela CEF associada ao `SEU_SITE_AQUI`
 
 ### Fase 3: Encoder e HLS
 
@@ -145,7 +145,7 @@ O app Roku precisa deixar de ser so uma lista textual e passar a:
 ## Requisitos Que Ja Temos
 
 - maquina Windows hospedeira
-- app CEF capaz de abrir `emei.lovable.app`
+- app CEF capaz de abrir `SEU_SITE_AQUI`
 - app Roku customizado
 - comunicacao HTTP basica dentro da rede local
 
@@ -162,13 +162,13 @@ O app Roku precisa deixar de ser so uma lista textual e passar a:
 
 1. Criar `/api/windows` no `super`.
 2. Fazer o `rokuweb` exibir e selecionar streams reais.
-3. Publicar apenas uma janela fixa: `https://emei.lovable.app`.
+3. Publicar apenas uma janela fixa: `https://SEU_SITE_AQUI`.
 4. Implementar HLS so para essa janela.
 5. Depois generalizar para varias janelas.
 
 ## Decisao Tecnica Recomendada
 
-Se o objetivo imediato for fazer a Roku mostrar `emei.lovable.app`, o melhor MVP nao e tentar "abrir o site no Roku". O melhor MVP e:
+Se o objetivo imediato for fazer a Roku mostrar `SEU_SITE_AQUI`, o melhor MVP nao e tentar "abrir o site no Roku". O melhor MVP e:
 
 - abrir o site no CEF no Windows
 - capturar essa janela
