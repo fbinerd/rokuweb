@@ -10,6 +10,7 @@ $env:DOTNET_CLI_HOME = (Resolve-Path ".").Path
 $env:NUGET_PACKAGES = Join-Path $env:DOTNET_CLI_HOME ".nuget\packages"
 $script:NuGetConfigPath = Join-Path $env:DOTNET_CLI_HOME "NuGet.Config"
 $script:AppProjectPath = Join-Path $env:DOTNET_CLI_HOME "src\WindowManager.App\WindowManager.App.csproj"
+$script:LauncherProjectPath = Join-Path $env:DOTNET_CLI_HOME "src\SuperLauncher\SuperLauncher.csproj"
 
 function Get-SolutionPath {
     $slnPath = Join-Path $env:DOTNET_CLI_HOME "WindowManager.sln"
@@ -82,13 +83,15 @@ Assert-DotNetSdk
 $solutionPath = Ensure-Solution
 Ensure-ProjectInSolution -ProjectPath "src\WindowManager.Core\WindowManager.Core.csproj"
 Ensure-ProjectInSolution -ProjectPath "src\WindowManager.App\WindowManager.App.csproj"
+Ensure-ProjectInSolution -ProjectPath "src\SuperLauncher\SuperLauncher.csproj"
 
 if ($Restore) {
-    Invoke-DotNet restore $script:AppProjectPath --configfile $script:NuGetConfigPath
+    Invoke-DotNet restore $solutionPath --configfile $script:NuGetConfigPath
 }
 
 if ($Build) {
     Invoke-DotNet build $script:AppProjectPath -c Release --no-restore --configfile $script:NuGetConfigPath
+    Invoke-DotNet build $script:LauncherProjectPath -c Release --no-restore --configfile $script:NuGetConfigPath
 }
 
 Write-Host "Bootstrap concluido."

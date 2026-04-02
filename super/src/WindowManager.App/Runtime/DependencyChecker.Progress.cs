@@ -12,11 +12,11 @@ namespace WindowManager.App.Runtime
         {
             try
             {
-                progress("Verificando dependencias...", 0);
+                progress("Verificando dependências...", 0);
                 var plan = PlanMissingDependencies(toolsDir);
                 await DownloadDependenciesAsync(plan, (message, value) => progress(message, value * 0.7), CancellationToken.None);
                 await InstallDownloadedDependenciesAsync(plan, (message, value) => progress(message, 70 + (value * 0.3)), CancellationToken.None);
-                progress("Dependencias prontas!", 100);
+                progress("Dependências prontas!", 100);
             }
             catch (Exception ex)
             {
@@ -29,7 +29,7 @@ namespace WindowManager.App.Runtime
         {
             if (plan is null || !plan.HasPendingDownloads)
             {
-                progress("Dependencias ja existem.", 100);
+                progress("Dependências já existem.", 100);
                 return;
             }
 
@@ -68,7 +68,7 @@ namespace WindowManager.App.Runtime
             {
                 if (plan is null || !plan.HasPendingDownloads)
                 {
-                    progress("Dependencias ja existem.", 100);
+                    progress("Dependências já existem.", 100);
                     return;
                 }
 

@@ -17,6 +17,7 @@ Add-Type -AssemblyName System.Net.Http
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $superRoot = Join-Path $repoRoot "super"
 $superExePath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperPainel.exe"
+$superLauncherPath = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481\SuperLauncher.exe"
 $localRokuZip = Join-Path $repoRoot "local-roku.zip"
 $sideloadLogRoot = Join-Path $repoRoot "tmp\sideload"
 $diagnosticsRoot = Join-Path $repoRoot "tmp\diagnostics"
@@ -353,27 +354,40 @@ function Start-LocalDiagnosticsMonitor {
 
 function Start-SuperLocal {
     Stop-ExistingSuperLaunchers
+    Get-Process -Name "SuperLauncher" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 600
 
-    if (-not (Test-Path $superExePath)) {
-        throw "Executavel do SuperPainel nao encontrado: $superExePath"
+    if (-not (Test-Path $superLauncherPath)) {
+        throw "Executavel do SuperLauncher nao encontrado: $superLauncherPath"
     }
 
-    $process = Start-Process -FilePath $superExePath -WorkingDirectory (Split-Path -Parent $superExePath) -WindowStyle Normal -PassThru
-    Start-Sleep -Milliseconds 1200
+    $launcherProcess = Start-Process -FilePath $superLauncherPath -WorkingDirectory (Split-Path -Parent $superLauncherPath) -WindowStyle Normal -PassThru
+    $deadline = (Get-Date).AddSeconds(20)
 
-    try {
-        $process.Refresh()
-        if ($process.HasExited) {
-            throw "O SuperPainel encerrou logo apos a abertura. ExitCode=$($process.ExitCode)"
+    while ((Get-Date) -lt $deadline) {
+        $process = Get-Process -Name "SuperPainel" -ErrorAction SilentlyContinue |
+            Sort-Object StartTime -Descending |
+            Select-Object -First 1
+
+        if ($process) {
+            return $process
         }
-    }
-    catch {
-        throw
+
+        try {
+            $launcherProcess.Refresh()
+            if ($launcherProcess.HasExited -and $launcherProcess.ExitCode -ne 0) {
+                throw "O SuperLauncher encerrou com falha. ExitCode=$($launcherProcess.ExitCode)"
+            }
+        }
+        catch {
+            throw
+        }
+
+        Start-Sleep -Milliseconds 500
     }
 
-    return $process
+    throw "O SuperPainel nao iniciou a partir do SuperLauncher a tempo."
 }
 
 function Wait-SuperWindowReady {
@@ -474,10 +488,10 @@ Invoke-Step -Label "Empacotar canal Roku local" -Action {
 
 Invoke-Step -Label "Atualizar atalho local do SuperPainel" -Action {
     Update-SuperDesktopShortcut `
-        -TargetPath $superExePath `
+        -TargetPath $superLauncherPath `
         -ShortcutPath $desktopShortcutPath `
         -Arguments "" `
-        -WorkingDirectory (Split-Path -Parent $superExePath)
+        -WorkingDirectory (Split-Path -Parent $superLauncherPath)
 }
 
 if ($launchSuperBeforeSideload) {
@@ -533,6 +547,7 @@ if (-not $SkipSideload) {
 Write-Host ""
 Write-Host "Fluxo local concluido."
 Write-Host "Super: $superExePath"
+Write-Host "Launcher: $superLauncherPath"
 Write-Host "Roku zip: $localRokuZip"
 if (-not [string]::IsNullOrWhiteSpace($activeDiagnosticsSession)) {
     Write-Host "Diagnostico:"

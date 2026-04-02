@@ -56,6 +56,7 @@ public partial class App : Application
         {
             LogStep("OnStartup inicializando updater");
             splash = new SplashScreen();
+            var skipUpdater = HasArgument(e.Args, "--skip-updater");
 
             var startupProfileName = await profileStore.GetStartupProfileNameAsync(CancellationToken.None);
             var startupProfile = await profileStore.LoadAsync(startupProfileName, CancellationToken.None);
@@ -67,9 +68,15 @@ public partial class App : Application
 
             var manifestService = new AppUpdateManifestService();
             var channels = new[] { UpdateChannelNames.Stable, UpdateChannelNames.Develop, UpdateChannelNames.Local };
-            var prefetchedUpdates = await PrefetchUpdateInfoAsync(manifestService, channels, LogStep);
+            var prefetchedUpdates = skipUpdater
+                ? null
+                : await PrefetchUpdateInfoAsync(manifestService, channels, LogStep);
 
-            if (prefetchedUpdates is not null)
+            if (skipUpdater)
+            {
+                LogStep("Launcher solicitou pular updater no startup.");
+            }
+            else if (prefetchedUpdates is not null)
             {
                 var initialAutoStart = startupSettings.RememberDefaultBranch && startupSettings.AutoUpdateEnabled;
                 splash.SetInstalledVersion(FormatInstalledVersion(startupSettings.Channel));
@@ -168,7 +175,7 @@ public partial class App : Application
                         await splash.Dispatcher.InvokeAsync(() =>
                         {
                             splash.ShowProgressBar(true);
-                            splash.SetStatus("Iniciando atualizacao...", 1);
+                            splash.SetStatus("Iniciando atualização...", 1);
                             splash.SetProgressDetails(string.Empty);
                             splash.GetOkButton().IsEnabled = false;
                             splash.ChannelCombo.IsEnabled = false;
@@ -254,7 +261,7 @@ public partial class App : Application
                                 : $"{status} {suffix}";
                         }
 
-                        SetProgress("Verificando atualizacao...", 5);
+                        SetProgress("Verificando atualizações...", 5);
 
                         var normalizedBranch = UpdateChannelNames.Normalize(branch);
                         var updateResult = prefetchedUpdates.TryGetValue(normalizedBranch, out var cached)
@@ -275,7 +282,7 @@ public partial class App : Application
                         if (updateResult.UpdateAvailable)
                         {
                             SetProgress(
-                                $"Update disponivel: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})",
+                                $"Atualização disponível: {updateResult.LatestVersion} (build {updateResult.LatestReleaseId})",
                                 12);
 
                             var maintenanceService = new AppDataMaintenanceService();
@@ -288,7 +295,7 @@ public partial class App : Application
                                     "WindowManagerBroadcast",
                                     "backups",
                                     $"pre-update-{DateTime.Now:yyyyMMdd-HHmmss}-{updateResult.LatestReleaseId}.zip");
-                                SetProgress("Criando backup antes da atualizacao...", 18);
+                                SetProgress("Criando backup antes da atualização...", 18);
                                 await maintenanceService.ExportAsync(
                                     backupPath,
                                     (message, progress) => SetProgress(message, MapProgress(18, 25, progress)),
@@ -305,7 +312,7 @@ public partial class App : Application
 
                             if (hasDependencyDownloads)
                             {
-                                SetProgress("Baixando update...", 30);
+                                SetProgress("Baixando atualização...", 30);
                                 updateDownload = await selfUpdateService.DownloadPackagesAsync(
                                     updateResult,
                                     (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 55, progress)),
@@ -313,11 +320,11 @@ public partial class App : Application
 
                                 if (!updateDownload.Succeeded)
                                 {
-                                    SetProgress($"Falha ao baixar update: {updateDownload.Message}", 100);
+                                    SetProgress($"Falha ao baixar atualização: {updateDownload.Message}", 100);
                                     return false;
                                 }
 
-                                SetProgress("Baixando dependencias...", 55);
+                                SetProgress("Baixando dependências...", 55);
                                 await WindowManager.App.Runtime.DependencyChecker.DownloadDependenciesAsync(
                                     dependencyPlan,
                                     (message, progress) => SetProgress(RemapDownloadMessage(message, updateDownloadItemCount, totalDownloadItems), MapProgress(55, 75, progress)),
@@ -325,7 +332,7 @@ public partial class App : Application
                             }
                             else
                             {
-                                SetProgress("Baixando update...", 30);
+                                SetProgress("Baixando atualização...", 30);
                                 updateDownload = await selfUpdateService.DownloadPackagesAsync(
                                     updateResult,
                                     (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 75, progress)),
@@ -333,12 +340,12 @@ public partial class App : Application
 
                                 if (!updateDownload.Succeeded)
                                 {
-                                    SetProgress($"Falha ao baixar update: {updateDownload.Message}", 100);
+                                    SetProgress($"Falha ao baixar atualização: {updateDownload.Message}", 100);
                                     return false;
                                 }
                             }
 
-                            SetProgress("Aplicando update...", hasDependencyDownloads ? 75 : 80);
+                            SetProgress("Aplicando atualização...", hasDependencyDownloads ? 75 : 80);
                             var applyResult = await selfUpdateService.PrepareDownloadedPackagesAsync(
                                 updateResult,
                                 updateDownload!,
@@ -347,7 +354,7 @@ public partial class App : Application
 
                             if (!applyResult.Succeeded)
                             {
-                                SetProgress($"Falha ao aplicar update: {applyResult.Message}", 100);
+                                SetProgress($"Falha ao aplicar atualização: {applyResult.Message}", 100);
 
                                 if (!string.IsNullOrWhiteSpace(backupPath) && File.Exists(backupPath))
                                 {
@@ -357,26 +364,26 @@ public partial class App : Application
                                 }
 
                                 MessageBox.Show(
-                                    $"Falha ao aplicar update: {applyResult.Message}\nBackup restaurado.",
-                                    "Erro de Update",
+                                    $"Falha ao aplicar atualização: {applyResult.Message}\nBackup restaurado.",
+                                    "Erro de Atualização",
                                     MessageBoxButton.OK,
                                     MessageBoxImage.Error);
                                 Shutdown(-1);
                                 return false;
                             }
 
-                            SetProgress("Update aplicado com sucesso!", hasDependencyDownloads ? 88 : 95);
+                            SetProgress("Atualização aplicada com sucesso!", hasDependencyDownloads ? 88 : 95);
                         }
                         else
                         {
-                            SetProgress("Nenhuma atualizacao disponivel.", 30);
+                            SetProgress("Nenhuma atualização disponível.", 30);
                         }
 
                         if (hasDependencyDownloads)
                         {
                             if (updateResult.UpdateAvailable)
                             {
-                                SetProgress("Instalando dependencias baixadas...", 88);
+                                SetProgress("Instalando dependências baixadas...", 88);
                                 await WindowManager.App.Runtime.DependencyChecker.InstallDownloadedDependenciesAsync(
                                     dependencyPlan,
                                     (message, progress) => SetProgress(message, MapProgress(88, 100, progress)),
@@ -384,26 +391,26 @@ public partial class App : Application
                             }
                             else
                             {
-                                SetProgress("Baixando dependencias...", 30);
+                                SetProgress("Baixando dependências...", 30);
                                 await WindowManager.App.Runtime.DependencyChecker.DownloadDependenciesAsync(
                                     dependencyPlan,
                                     (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 75, progress)),
                                     CancellationToken.None);
-                                SetProgress("Instalando dependencias baixadas...", 75);
+                                SetProgress("Instalando dependências baixadas...", 75);
                                 await WindowManager.App.Runtime.DependencyChecker.InstallDownloadedDependenciesAsync(
                                     dependencyPlan,
                                     (message, progress) => SetProgress(message, MapProgress(75, 100, progress)),
                                     CancellationToken.None);
                             }
-                            SetProgress("Dependencias prontas!", 100);
+                            SetProgress("Dependências prontas!", 100);
                         }
                         else
                         {
-                            SetProgress("Verificando e configurando dependencias...", updateResult.UpdateAvailable ? 95 : 80);
+                            SetProgress("Verificando e configurando dependências...", updateResult.UpdateAvailable ? 95 : 80);
                             await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(
                                 toolsDir,
                                 (message, progress) => SetProgress(message, MapProgress(updateResult.UpdateAvailable ? 95 : 80, 100, progress)));
-                            SetProgress("Dependencias prontas!", 100);
+                            SetProgress("Dependências prontas!", 100);
                         }
                         RunOnSplashUi(() => splash.Close());
                         return true;
@@ -458,7 +465,7 @@ public partial class App : Application
                     }
                 }
             }
-            else
+            else if (!skipUpdater)
             {
                 LogStep("Prefetch falhou ou excedeu timeout; abrindo app sem updater");
             }
@@ -696,6 +703,24 @@ public partial class App : Application
         return !string.IsNullOrEmpty(result.LatestVersion)
             ? $"branch {normalizedBranch}: {result.LatestVersion}"
             : $"branch {normalizedBranch}: -";
+    }
+
+    private static bool HasArgument(string[] args, string expected)
+    {
+        if (args is null || args.Length == 0 || string.IsNullOrWhiteSpace(expected))
+        {
+            return false;
+        }
+
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void TryWriteWatchdogExitMarker()

@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $solutionPath = Join-Path $scriptRoot "WindowManager.sln"
 $projectPath = Join-Path $scriptRoot "src\WindowManager.App\WindowManager.App.csproj"
+$launcherProjectPath = Join-Path $scriptRoot "src\SuperLauncher\SuperLauncher.csproj"
 $releaseRoot = Join-Path $scriptRoot "src\WindowManager.App\bin\Release"
 
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
@@ -43,17 +44,18 @@ function Stop-RunningAppInstances {
 
 Stop-RunningAppInstances
 Remove-BuildArtifacts
-Invoke-DotNet restore $projectPath --configfile (Join-Path $scriptRoot "NuGet.Config")
+Invoke-DotNet restore $solutionPath --configfile (Join-Path $scriptRoot "NuGet.Config")
 Invoke-DotNet build $projectPath -c Release --no-restore
+Invoke-DotNet build $launcherProjectPath -c Release --no-restore
 
-$exeFile = Get-ChildItem -Path $releaseRoot -Recurse -Filter "SuperPainel.exe" |
+$exeFile = Get-ChildItem -Path $releaseRoot -Recurse -Filter "SuperLauncher.exe" |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
 if (-not $exeFile) {
-    throw "Executavel nao encontrado em '$releaseRoot'."
+    throw "Launcher nao encontrado em '$releaseRoot'."
 }
 
 Start-Process -FilePath $exeFile.FullName -WorkingDirectory $exeFile.DirectoryName
-Write-Host "Aplicativo compilado e aberto."
+Write-Host "Launcher compilado e aberto."
 exit 0
