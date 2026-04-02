@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -13,6 +14,44 @@ namespace WindowManager.App.Runtime
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
             "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
         };
+
+        public static DependencyDownloadPlan PlanMissingDependencies(string toolsDir)
+        {
+            Directory.CreateDirectory(toolsDir);
+
+            var tempRoot = Path.Combine(
+                Path.GetTempPath(),
+                "WindowManagerBroadcast",
+                "dependency-downloads",
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"));
+
+            var items = new List<DependencyDownloadItem>();
+            for (int i = 0; i < RequiredTools.Length; i++)
+            {
+                string toolSubDir = Path.Combine(toolsDir, ToolFolders[i]);
+                Directory.CreateDirectory(toolSubDir);
+                string toolPath = Path.Combine(toolSubDir, RequiredTools[i]);
+                if (File.Exists(toolPath))
+                {
+                    continue;
+                }
+
+                string tempFileName = RequiredTools[i] == "ffmpeg.exe"
+                    ? "ffmpeg.zip"
+                    : RequiredTools[i];
+                string downloadPath = Path.Combine(tempRoot, ToolFolders[i], tempFileName);
+
+                items.Add(new DependencyDownloadItem(
+                    i,
+                    RequiredTools[i],
+                    DownloadUrls[i],
+                    toolSubDir,
+                    toolPath,
+                    downloadPath));
+            }
+
+            return new DependencyDownloadPlan(toolsDir, tempRoot, items.ToArray());
+        }
 
         public static async Task EnsureDependenciesAsync(string toolsDir)
         {
@@ -104,5 +143,40 @@ namespace WindowManager.App.Runtime
                 throw;
             }
         }
+    }
+
+    public sealed class DependencyDownloadPlan
+    {
+        public DependencyDownloadPlan(string toolsDir, string tempRoot, DependencyDownloadItem[] items)
+        {
+            ToolsDir = toolsDir ?? string.Empty;
+            TempRoot = tempRoot ?? string.Empty;
+            Items = items ?? Array.Empty<DependencyDownloadItem>();
+        }
+
+        public string ToolsDir { get; }
+        public string TempRoot { get; }
+        public DependencyDownloadItem[] Items { get; }
+        public bool HasPendingDownloads => Items.Length > 0;
+    }
+
+    public sealed class DependencyDownloadItem
+    {
+        public DependencyDownloadItem(int index, string displayName, string downloadUrl, string toolSubDir, string toolPath, string downloadPath)
+        {
+            Index = index;
+            DisplayName = displayName ?? string.Empty;
+            DownloadUrl = downloadUrl ?? string.Empty;
+            ToolSubDir = toolSubDir ?? string.Empty;
+            ToolPath = toolPath ?? string.Empty;
+            DownloadPath = downloadPath ?? string.Empty;
+        }
+
+        public int Index { get; }
+        public string DisplayName { get; }
+        public string DownloadUrl { get; }
+        public string ToolSubDir { get; }
+        public string ToolPath { get; }
+        public string DownloadPath { get; }
     }
 }

@@ -17,20 +17,20 @@ namespace WindowManager.App
 
         public void SetInstalledVersion(string version)
         {
-            InstalledVersionText.Text = $"Versão instalada: {version}";
+            InstalledVersionText.Text = $"Versao instalada: {version}";
         }
 
         public void SetRemoteVersion(string version)
         {
-            RemoteVersionText.Text = $"Versão disponível: {version}";
+            RemoteVersionText.Text = $"Versao disponivel: {version}";
         }
 
         public void ShowProgressBar(bool show)
         {
-            ProgressContainer.Visibility = show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            ProgressContainer.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
             if (!show)
             {
-                ProgressDetailsHost.Visibility = System.Windows.Visibility.Collapsed;
+                ProgressDetailsHost.Visibility = Visibility.Collapsed;
                 ProgressDetailsShadowText.Text = string.Empty;
                 ProgressDetailsText.Text = string.Empty;
             }
@@ -48,31 +48,44 @@ namespace WindowManager.App
             var text = hasDetails ? details! : string.Empty;
             ProgressDetailsShadowText.Text = text;
             ProgressDetailsText.Text = text;
-            ProgressDetailsHost.Visibility = hasDetails
-                ? System.Windows.Visibility.Visible
-                : System.Windows.Visibility.Collapsed;
+            ProgressDetailsHost.Visibility = hasDetails ? Visibility.Visible : Visibility.Collapsed;
         }
 
         public bool IsAutoUpdateChecked => AutoUpdateCheckBox.IsChecked == true;
+
         public void SetAutoUpdateChecked(bool value)
         {
             AutoUpdateCheckBox.IsChecked = value;
             SyncUpdateOptionState();
         }
+
         public bool IsSetDefaultBranchChecked => SetDefaultBranchCheckBox.IsChecked == true;
+
         public void SetSetDefaultBranchChecked(bool value)
         {
             SetDefaultBranchCheckBox.IsChecked = value;
             SyncUpdateOptionState();
         }
-        public System.Windows.Controls.ComboBox ChannelCombo => ChannelComboBox;
+
+        public ComboBox ChannelCombo => ChannelComboBox;
+
         public string SelectedChannel => ChannelComboBox.SelectedValue?.ToString() ?? "stable";
-        public void SetChannels(string[] canais, string selected)
+
+        public void SetChannels(string[] channels, string selected)
         {
-            ChannelComboBox.ItemsSource = canais;
+            ChannelComboBox.ItemsSource = channels;
             ChannelComboBox.SelectedValue = selected;
         }
-        public System.Windows.Controls.Button GetOkButton() => OkButton;
+
+        public Button GetOkButton() => OkButton;
+
+        public void SetCompactMode(bool compact)
+        {
+            ChannelComboBox.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            OptionsPanel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            OkButton.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            Height = compact ? 250 : 340;
+        }
 
         private void OnUpdateOptionChanged(object sender, RoutedEventArgs e)
         {

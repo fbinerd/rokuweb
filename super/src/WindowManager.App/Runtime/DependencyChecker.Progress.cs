@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WindowManager.App.Runtime
@@ -10,27 +12,11 @@ namespace WindowManager.App.Runtime
         {
             try
             {
-                progress("Verificando dependências...", 0);
-                Directory.CreateDirectory(toolsDir);
-                int total = RequiredTools.Length;
-                for (int i = 0; i < total; i++)
-                {
-                    string toolSubDir = Path.Combine(toolsDir, ToolFolders[i]);
-                    Directory.CreateDirectory(toolSubDir);
-                    string toolPath = Path.Combine(toolSubDir, RequiredTools[i]);
-                    double pct = (i * 100.0) / total;
-                    if (!File.Exists(toolPath))
-                    {
-                        progress($"Baixando {RequiredTools[i]}...", pct);
-                        await DownloadToolWithProgressAsync(i, toolPath, toolSubDir, (msg, p) => progress(msg, pct + p / total * 100.0 / total));
-                        progress($"{RequiredTools[i]} pronto!", ((i + 1) * 100.0) / total);
-                    }
-                    else
-                    {
-                        progress($"{RequiredTools[i]} já existe", ((i + 1) * 100.0) / total);
-                    }
-                }
-                progress("Dependências prontas!", 100);
+                progress("Verificando dependencias...", 0);
+                var plan = PlanMissingDependencies(toolsDir);
+                await DownloadDependenciesAsync(plan, (message, value) => progress(message, value * 0.7), CancellationToken.None);
+                await InstallDownloadedDependenciesAsync(plan, (message, value) => progress(message, 70 + (value * 0.3)), CancellationToken.None);
+                progress("Dependencias prontas!", 100);
             }
             catch (Exception ex)
             {
@@ -39,69 +25,107 @@ namespace WindowManager.App.Runtime
             }
         }
 
-        private static async Task DownloadToolWithProgressAsync(int index, string toolPath, string toolSubDir, Action<string, double> progress)
+        public static async Task DownloadDependenciesAsync(DependencyDownloadPlan plan, Action<string, double> progress, CancellationToken cancellationToken)
         {
-            if (RequiredTools[index] == "ffmpeg.exe")
+            if (plan is null || !plan.HasPendingDownloads)
             {
-                string url = DownloadUrls[index];
-                string zipPath = Path.Combine(toolSubDir, "ffmpeg.zip");
-                progress("Baixando ffmpeg.zip...", 0);
-                using (var httpClient = new System.Net.Http.HttpClient())
-                using (var response = await httpClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
+                progress("Dependencias ja existem.", 100);
+                return;
+            }
+
+            Directory.CreateDirectory(plan.TempRoot);
+            using var httpClient = new HttpClient();
+            var total = plan.Items.Length;
+
+            for (var i = 0; i < total; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var item = plan.Items[i];
+                var baseProgress = (i * 100.0) / total;
+                var span = 100.0 / total;
+                var packageName = RequiredTools[item.Index] == "ffmpeg.exe"
+                    ? "ffmpeg.zip"
+                    : item.DisplayName;
+                var statusLabel = $"Baixando pacotes {i + 1}/{total}...";
+                var connectingLabel = "Buscando pacotes...";
+
+                progress(connectingLabel, baseProgress);
+                await HttpDownloadHelper.DownloadToFileAsync(
+                    httpClient,
+                    item.DownloadUrl,
+                    item.DownloadPath,
+                    statusLabel,
+                    packageName + " -",
+                    (message, value) => progress(message, baseProgress + (span * value / 100.0)),
+                    cancellationToken).ConfigureAwait(false);
+                progress($"{item.DisplayName} baixado.", baseProgress + span);
+            }
+        }
+
+        public static Task InstallDownloadedDependenciesAsync(DependencyDownloadPlan plan, Action<string, double> progress, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                if (plan is null || !plan.HasPendingDownloads)
                 {
-                    response.EnsureSuccessStatusCode();
-                    var total = response.Content.Headers.ContentLength ?? 1;
-                    using (var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write))
-                    using (var stream = await response.Content.ReadAsStreamAsync())
+                    progress("Dependencias ja existem.", 100);
+                    return;
+                }
+
+                var total = plan.Items.Length;
+                for (var i = 0; i < total; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var item = plan.Items[i];
+                    var baseProgress = (i * 100.0) / total;
+                    var span = 100.0 / total;
+
+                    Directory.CreateDirectory(item.ToolSubDir);
+
+                    if (RequiredTools[item.Index] == "ffmpeg.exe")
                     {
-                        var buffer = new byte[81920];
-                        long read = 0;
-                        int n;
-                        while ((n = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        progress("Extraindo ffmpeg...", baseProgress);
+                        System.IO.Compression.ZipFile.ExtractToDirectory(item.DownloadPath, item.ToolSubDir);
+                        var ffmpegExe = Directory.GetFiles(item.ToolSubDir, "ffmpeg.exe", SearchOption.AllDirectories);
+                        if (ffmpegExe.Length > 0 && !string.Equals(ffmpegExe[0], item.ToolPath, StringComparison.OrdinalIgnoreCase))
                         {
-                            await fs.WriteAsync(buffer, 0, n);
-                            read += n;
-                            progress($"Baixando ffmpeg.zip...", Math.Min(99, (read * 100.0) / total));
+                            if (File.Exists(item.ToolPath))
+                            {
+                                File.Delete(item.ToolPath);
+                            }
+
+                            File.Copy(ffmpegExe[0], item.ToolPath);
+                            File.Delete(ffmpegExe[0]);
+                        }
+
+                        if (File.Exists(item.DownloadPath))
+                        {
+                            File.Delete(item.DownloadPath);
                         }
                     }
-                }
-                progress("Extraindo ffmpeg...", 99);
-                System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, toolSubDir);
-                var ffmpegExe = Directory.GetFiles(toolSubDir, "ffmpeg.exe", SearchOption.AllDirectories);
-                if (ffmpegExe.Length > 0 && !string.Equals(ffmpegExe[0], toolPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (File.Exists(toolPath)) File.Delete(toolPath);
-                    File.Copy(ffmpegExe[0], toolPath);
-                    File.Delete(ffmpegExe[0]);
-                }
-                File.Delete(zipPath);
-                progress("ffmpeg.exe pronto!", 100);
-            }
-            else
-            {
-                string url = DownloadUrls[index];
-                progress("Baixando yt-dlp.exe...", 0);
-                using (var httpClient = new System.Net.Http.HttpClient())
-                using (var response = await httpClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
-                {
-                    response.EnsureSuccessStatusCode();
-                    var total = response.Content.Headers.ContentLength ?? 1;
-                    using (var fs = new FileStream(toolPath, FileMode.Create, FileAccess.Write))
-                    using (var stream = await response.Content.ReadAsStreamAsync())
+                    else
                     {
-                        var buffer = new byte[81920];
-                        long read = 0;
-                        int n;
-                        while ((n = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        progress($"Instalando {item.DisplayName}...", baseProgress);
+                        if (File.Exists(item.ToolPath))
                         {
-                            await fs.WriteAsync(buffer, 0, n);
-                            read += n;
-                            progress($"Baixando yt-dlp.exe...", Math.Min(99, (read * 100.0) / total));
+                            File.Delete(item.ToolPath);
+                        }
+
+                        File.Copy(item.DownloadPath, item.ToolPath, overwrite: true);
+                        if (File.Exists(item.DownloadPath))
+                        {
+                            File.Delete(item.DownloadPath);
                         }
                     }
+
+                    progress($"{item.DisplayName} pronto!", baseProgress + span);
                 }
-                progress("yt-dlp.exe pronto!", 100);
-            }
+
+                if (Directory.Exists(plan.TempRoot))
+                {
+                    Directory.Delete(plan.TempRoot, recursive: true);
+                }
+            }, cancellationToken);
         }
     }
 }

@@ -71,10 +71,12 @@ public partial class App : Application
 
             if (prefetchedUpdates is not null)
             {
-                splash.SetInstalledVersion($"{BuildVersionInfo.Version} ({BuildVersionInfo.ReleaseId})");
+                var initialAutoStart = startupSettings.RememberDefaultBranch && startupSettings.AutoUpdateEnabled;
+                splash.SetInstalledVersion(FormatInstalledVersion(startupSettings.Channel));
                 splash.SetChannels(channels, startupSettings.Channel);
                 splash.SetSetDefaultBranchChecked(startupSettings.RememberDefaultBranch);
                 splash.SetAutoUpdateChecked(startupSettings.AutoUpdateEnabled && startupSettings.RememberDefaultBranch);
+                splash.SetCompactMode(initialAutoStart);
                 splash.ShowProgressBar(false);
                 splash.Show();
 
@@ -147,15 +149,17 @@ public partial class App : Application
                                 return (string.Empty, string.Empty, false);
                             }
 
-                            const string downloadPrefix = "Baixando pacote... ";
-                            if (message.StartsWith(downloadPrefix, StringComparison.OrdinalIgnoreCase))
+                            if (message.StartsWith("Baixando pacotes ", StringComparison.OrdinalIgnoreCase))
                             {
-                                return ("Baixando pacote...", message.Substring(downloadPrefix.Length).Trim(), false);
-                            }
-
-                            if (message.StartsWith("Baixando pacote ", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return (message, string.Empty, true);
+                                var markerIndex = message.IndexOf("...", StringComparison.Ordinal);
+                                if (markerIndex >= 0)
+                                {
+                                    var status = message.Substring(0, markerIndex + 3);
+                                    var details = message.Substring(markerIndex + 3).Trim();
+                                    return string.IsNullOrWhiteSpace(details)
+                                        ? (status, string.Empty, true)
+                                        : (status, details, false);
+                                }
                             }
 
                             return (message, string.Empty, false);
@@ -200,6 +204,56 @@ public partial class App : Application
                             return phaseStart + ((phaseEnd - phaseStart) * normalized);
                         }
 
+                        static int GetUpdateDownloadItemCount(AppUpdateCheckResult updateResult)
+                        {
+                            if (updateResult is null || !updateResult.UpdateAvailable)
+                            {
+                                return 0;
+                            }
+
+                            var packageUrls = updateResult.PackageUrls ?? Array.Empty<string>();
+                            if (packageUrls.Length > 0)
+                            {
+                                return packageUrls.Length;
+                            }
+
+                            return string.IsNullOrWhiteSpace(updateResult.RecommendedPackageUrl) ? 0 : 1;
+                        }
+
+                        static string RemapDownloadMessage(string message, int downloadOffset, int totalDownloadItems)
+                        {
+                            if (string.IsNullOrWhiteSpace(message) || totalDownloadItems <= 0)
+                            {
+                                return message;
+                            }
+
+                            const string prefix = "Baixando pacotes ";
+                            if (!message.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return message;
+                            }
+
+                            var numberStart = prefix.Length;
+                            var slashIndex = message.IndexOf('/', numberStart);
+                            var ellipsisIndex = message.IndexOf("...", StringComparison.Ordinal);
+                            if (slashIndex <= numberStart || ellipsisIndex <= slashIndex)
+                            {
+                                return message;
+                            }
+
+                            if (!int.TryParse(message.Substring(numberStart, slashIndex - numberStart), out var localCurrent))
+                            {
+                                return message;
+                            }
+
+                            var globalCurrent = downloadOffset + localCurrent;
+                            var suffix = message.Substring(ellipsisIndex + 3).Trim();
+                            var status = $"Baixando pacotes {globalCurrent}/{totalDownloadItems}...";
+                            return string.IsNullOrWhiteSpace(suffix)
+                                ? status
+                                : $"{status} {suffix}";
+                        }
+
                         SetProgress("Verificando atualizacao...", 5);
 
                         var normalizedBranch = UpdateChannelNames.Normalize(branch);
@@ -207,7 +261,16 @@ public partial class App : Application
                             ? cached
                             : await manifestService.CheckForUpdateAsync(normalizedBranch, CancellationToken.None);
 
-                        RunOnSplashUi(() => splash.SetRemoteVersion(FormatRemoteVersion(updateResult)));
+                        RunOnSplashUi(() =>
+                        {
+                            splash.SetInstalledVersion(FormatInstalledVersion(normalizedBranch));
+                            splash.SetRemoteVersion(FormatRemoteVersion(normalizedBranch, updateResult));
+                        });
+
+                        var dependencyPlan = WindowManager.App.Runtime.DependencyChecker.PlanMissingDependencies(toolsDir);
+                        var hasDependencyDownloads = dependencyPlan.HasPendingDownloads;
+                        var updateDownloadItemCount = GetUpdateDownloadItemCount(updateResult);
+                        var totalDownloadItems = updateDownloadItemCount + dependencyPlan.Items.Length;
 
                         if (updateResult.UpdateAvailable)
                         {
@@ -237,11 +300,49 @@ public partial class App : Application
                                 SetProgress($"Falha ao criar backup: {ex.Message}", 25);
                             }
 
-                            SetProgress("Baixando e aplicando update...", 30);
                             var selfUpdateService = new AppSelfUpdateService();
-                            var applyResult = await selfUpdateService.DownloadAndPrepareAsync(
+                            AppSelfUpdateDownloadResult? updateDownload = null;
+
+                            if (hasDependencyDownloads)
+                            {
+                                SetProgress("Baixando update...", 30);
+                                updateDownload = await selfUpdateService.DownloadPackagesAsync(
+                                    updateResult,
+                                    (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 55, progress)),
+                                    CancellationToken.None);
+
+                                if (!updateDownload.Succeeded)
+                                {
+                                    SetProgress($"Falha ao baixar update: {updateDownload.Message}", 100);
+                                    return false;
+                                }
+
+                                SetProgress("Baixando dependencias...", 55);
+                                await WindowManager.App.Runtime.DependencyChecker.DownloadDependenciesAsync(
+                                    dependencyPlan,
+                                    (message, progress) => SetProgress(RemapDownloadMessage(message, updateDownloadItemCount, totalDownloadItems), MapProgress(55, 75, progress)),
+                                    CancellationToken.None);
+                            }
+                            else
+                            {
+                                SetProgress("Baixando update...", 30);
+                                updateDownload = await selfUpdateService.DownloadPackagesAsync(
+                                    updateResult,
+                                    (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 75, progress)),
+                                    CancellationToken.None);
+
+                                if (!updateDownload.Succeeded)
+                                {
+                                    SetProgress($"Falha ao baixar update: {updateDownload.Message}", 100);
+                                    return false;
+                                }
+                            }
+
+                            SetProgress("Aplicando update...", hasDependencyDownloads ? 75 : 80);
+                            var applyResult = await selfUpdateService.PrepareDownloadedPackagesAsync(
                                 updateResult,
-                                (message, progress) => SetProgress(message, MapProgress(30, 80, progress)),
+                                updateDownload!,
+                                (message, progress) => SetProgress(message, MapProgress(hasDependencyDownloads ? 75 : 80, hasDependencyDownloads ? 88 : 95, progress)),
                                 CancellationToken.None);
 
                             if (!applyResult.Succeeded)
@@ -264,18 +365,46 @@ public partial class App : Application
                                 return false;
                             }
 
-                            SetProgress("Update aplicado com sucesso!", 80);
+                            SetProgress("Update aplicado com sucesso!", hasDependencyDownloads ? 88 : 95);
                         }
                         else
                         {
-                            SetProgress("Nenhuma atualizacao disponivel. Verificando dependencias...", 30);
+                            SetProgress("Nenhuma atualizacao disponivel.", 30);
                         }
 
-                        SetProgress("Verificando e configurando dependencias...", 80);
-                        await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(
-                            toolsDir,
-                            (message, progress) => SetProgress(message, MapProgress(80, 100, progress)));
-                        SetProgress("Dependencias prontas!", 100);
+                        if (hasDependencyDownloads)
+                        {
+                            if (updateResult.UpdateAvailable)
+                            {
+                                SetProgress("Instalando dependencias baixadas...", 88);
+                                await WindowManager.App.Runtime.DependencyChecker.InstallDownloadedDependenciesAsync(
+                                    dependencyPlan,
+                                    (message, progress) => SetProgress(message, MapProgress(88, 100, progress)),
+                                    CancellationToken.None);
+                            }
+                            else
+                            {
+                                SetProgress("Baixando dependencias...", 30);
+                                await WindowManager.App.Runtime.DependencyChecker.DownloadDependenciesAsync(
+                                    dependencyPlan,
+                                    (message, progress) => SetProgress(RemapDownloadMessage(message, 0, totalDownloadItems), MapProgress(30, 75, progress)),
+                                    CancellationToken.None);
+                                SetProgress("Instalando dependencias baixadas...", 75);
+                                await WindowManager.App.Runtime.DependencyChecker.InstallDownloadedDependenciesAsync(
+                                    dependencyPlan,
+                                    (message, progress) => SetProgress(message, MapProgress(75, 100, progress)),
+                                    CancellationToken.None);
+                            }
+                            SetProgress("Dependencias prontas!", 100);
+                        }
+                        else
+                        {
+                            SetProgress("Verificando e configurando dependencias...", updateResult.UpdateAvailable ? 95 : 80);
+                            await WindowManager.App.Runtime.DependencyChecker.EnsureDependenciesWithProgressAsync(
+                                toolsDir,
+                                (message, progress) => SetProgress(message, MapProgress(updateResult.UpdateAvailable ? 95 : 80, 100, progress)));
+                            SetProgress("Dependencias prontas!", 100);
+                        }
                         RunOnSplashUi(() => splash.Close());
                         return true;
                     }
@@ -527,37 +656,46 @@ public partial class App : Application
 
         if (prefetchedUpdates.TryGetValue(normalizedBranch, out var cachedResult))
         {
-            splash.SetRemoteVersion(FormatRemoteVersion(cachedResult));
+            splash.SetRemoteVersion(FormatRemoteVersion(normalizedBranch, cachedResult));
             return;
         }
 
-        splash.SetRemoteVersion("Buscando...");
+        splash.SetRemoteVersion($"branch {normalizedBranch}: buscando...");
 
         try
         {
             var result = await manifestService.CheckForUpdateAsync(normalizedBranch, CancellationToken.None);
-            splash.SetRemoteVersion(FormatRemoteVersion(result));
+            splash.SetRemoteVersion(FormatRemoteVersion(normalizedBranch, result));
         }
         catch (Exception ex)
         {
             logStep($"Falha ao atualizar versao remota do canal {normalizedBranch}: {ex}");
-            splash.SetRemoteVersion("Erro ao buscar versao");
+            splash.SetRemoteVersion($"branch {normalizedBranch}: erro ao buscar versao");
         }
     }
 
-    private static string FormatRemoteVersion(AppUpdateCheckResult? result)
+    private static string FormatInstalledVersion(string branch)
     {
+        var normalizedBranch = UpdateChannelNames.Normalize(branch);
+        return $"branch {normalizedBranch}: {BuildVersionInfo.Version} ({BuildVersionInfo.ReleaseId})";
+    }
+
+    private static string FormatRemoteVersion(string branch, AppUpdateCheckResult? result)
+    {
+        var normalizedBranch = UpdateChannelNames.Normalize(branch);
         if (result is null)
         {
-            return "-";
+            return $"branch {normalizedBranch}: -";
         }
 
         if (!string.IsNullOrEmpty(result.LatestVersion) && !string.IsNullOrEmpty(result.LatestReleaseId))
         {
-            return $"{result.LatestVersion} (build {result.LatestReleaseId})";
+            return $"branch {normalizedBranch}: {result.LatestVersion} (build {result.LatestReleaseId})";
         }
 
-        return !string.IsNullOrEmpty(result.LatestVersion) ? result.LatestVersion : "-";
+        return !string.IsNullOrEmpty(result.LatestVersion)
+            ? $"branch {normalizedBranch}: {result.LatestVersion}"
+            : $"branch {normalizedBranch}: -";
     }
 
     private void TryWriteWatchdogExitMarker()
