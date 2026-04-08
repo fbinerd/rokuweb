@@ -39,17 +39,14 @@ public partial class App : Application
         var baseDirectory = AppContext.BaseDirectory;
         var startupLogPath = Path.Combine(baseDirectory, "startup.log");
         var toolsDir = Path.Combine(baseDirectory, "tools");
-        var forcedLogPath = "C:/Users/user/Documents/app/rokuweb/startup.log";
         var profileStore = new ProfileStore();
         var preferenceStore = new AppUpdatePreferenceStore();
 
         File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
-        File.AppendAllText(forcedLogPath, $"[{DateTime.Now:O}] OnStartup BEGIN{Environment.NewLine}");
 
         void LogStep(string message)
         {
             File.AppendAllText(startupLogPath, $"[{DateTime.Now:O}] {message}{Environment.NewLine}");
-            File.AppendAllText(forcedLogPath, $"[{DateTime.Now:O}] {message}{Environment.NewLine}");
         }
 
         SplashScreen? splash = null;
