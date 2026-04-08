@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$RokuIp = "",
     [string]$RokuUser = "rokudev",
     [string]$RokuPassword = "1234",
