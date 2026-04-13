@@ -1966,10 +1966,10 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var interactionSuppressionEnabled = string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase);
-        _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled);
         var directVideoOverlay = interactionSuppressionEnabled
             ? ResolveDirectVideoOverlay(window.Id)
             : DirectVideoOverlayBridgeSnapshot.None;
+        _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled && directVideoOverlay.Enabled);
         MaybeLogDirectOverlay(window.Id, directVideoOverlay);
 
         var autoOpenFullscreen =
@@ -2388,16 +2388,14 @@ public sealed class LocalWebRtcPublisherService
                 ytDlpPath = fallbackPath;
             }
         }
-        var nodePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
         if (string.IsNullOrWhiteSpace(ytDlpPath) || !File.Exists(ytDlpPath))
         {
             return YouTubeDirectResolveResult.Fail("yt_dlp_ausente");
         }
-        if (!File.Exists(nodePath))
-        {
-            return YouTubeDirectResolveResult.Fail("node_ausente");
-        }
-        var jsRuntime = string.Format("node:{0}", nodePath);
+        var nodePath = ResolveNodePath();
+        var jsRuntime = string.IsNullOrWhiteSpace(nodePath)
+            ? string.Empty
+            : string.Format("node:{0}", nodePath);
         var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl);
         if (scannedQualityOptions.Count > 0)
         {
@@ -2415,9 +2413,9 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var qualityOptions = new List<YouTubeDirectQualityOption>();
-        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"22\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
-        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"59/78\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
-        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, string.Format("--js-runtimes \"{0}\" -g -f \"18\" \"{1}\"", jsRuntime, youtubeUrl)), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"22\" \"{0}\"", youtubeUrl))), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"59/78\" \"{0}\"", youtubeUrl))), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"18\" \"{0}\"", youtubeUrl))), "mp4");
 
         if (qualityOptions.Count > 0)
         {
@@ -2429,7 +2427,7 @@ public sealed class LocalWebRtcPublisherService
 
         var compatibleHlsUrl = RunProcessCaptureFirstNonEmptyLine(
             ytDlpPath,
-            string.Format("--js-runtimes \"{0}\" -g -f \"95-2/95-1/95-0/94-2/94-1/94-0/93-2/93-1/93-0/best[ext=mp4]\" \"{1}\"", jsRuntime, youtubeUrl));
+            BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"95-2/95-1/95-0/94-2/94-1/94-0/93-2/93-1/93-0/best[ext=mp4]\" \"{0}\"", youtubeUrl)));
         if (!string.IsNullOrWhiteSpace(compatibleHlsUrl) && !string.Equals(compatibleHlsUrl, "NA", StringComparison.OrdinalIgnoreCase))
         {
             if (compatibleHlsUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -2467,7 +2465,7 @@ public sealed class LocalWebRtcPublisherService
 
         var manifestUrl = RunProcessCaptureFirstNonEmptyLine(
             ytDlpPath,
-            string.Format("--js-runtimes \"{0}\" --print manifest_url \"{1}\"", jsRuntime, youtubeUrl));
+            BuildYtDlpArguments(jsRuntime, string.Format("--print manifest_url \"{0}\"", youtubeUrl)));
         if (!string.IsNullOrWhiteSpace(manifestUrl) && !string.Equals(manifestUrl, "NA", StringComparison.OrdinalIgnoreCase))
         {
             if (manifestUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -2570,7 +2568,7 @@ public sealed class LocalWebRtcPublisherService
     {
         var json = RunProcessCaptureOutput(
             ytDlpPath,
-            string.Format("--no-warnings --no-playlist --js-runtimes \"{0}\" -J \"{1}\"", jsRuntime, youtubeUrl));
+            BuildYtDlpArguments(jsRuntime, string.Format("--no-warnings --no-playlist -J \"{0}\"", youtubeUrl)));
         if (string.IsNullOrWhiteSpace(json))
         {
             AppLog.Write("DirectOverlay", "Quality scan => yt-dlp nao retornou JSON");
@@ -2655,6 +2653,48 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write("DirectOverlay", string.Format("Quality scan => falha ao processar JSON do yt-dlp: {0}", ex.Message));
             return new List<YouTubeDirectQualityOption>();
         }
+    }
+
+    private static string ResolveNodePath()
+    {
+        var defaultPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
+        if (File.Exists(defaultPath))
+        {
+            return defaultPath;
+        }
+
+        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var segment in pathValue.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var candidate = Path.Combine(segment.Trim(), "node.exe");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string BuildYtDlpArguments(string jsRuntime, string commandSuffix)
+    {
+        if (string.IsNullOrWhiteSpace(commandSuffix))
+        {
+            return string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(jsRuntime))
+        {
+            return commandSuffix;
+        }
+
+        return string.Format("--js-runtimes \"{0}\" {1}", jsRuntime, commandSuffix);
     }
 
     private static string BuildQualityLabel(int height, double fps)
