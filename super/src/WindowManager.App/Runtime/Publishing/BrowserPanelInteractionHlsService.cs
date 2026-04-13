@@ -13,11 +13,11 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelInteractionHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromMilliseconds(750);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromMilliseconds(750);
-    private static readonly TimeSpan PlaylistTtl = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan SegmentTtl = TimeSpan.FromSeconds(6);
-    private const int PlaylistSize = 3;
+    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SegmentInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan PlaylistTtl = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan SegmentTtl = TimeSpan.FromSeconds(24);
+    private const int PlaylistSize = 6;
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
     private readonly BrowserSnapshotService _snapshotService;
@@ -409,11 +409,6 @@ public sealed class BrowserPanelInteractionHlsService
             for (var i = 0; i < snapshot.Count; i++)
             {
                 var segment = snapshot[i];
-                if (i > 0)
-                {
-                    builder.AppendLine("#EXT-X-DISCONTINUITY");
-                }
-
                 builder.AppendLine("#EXTINF:" + segment.Duration.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + ",");
                 builder.AppendLine(segment.FileName);
             }
