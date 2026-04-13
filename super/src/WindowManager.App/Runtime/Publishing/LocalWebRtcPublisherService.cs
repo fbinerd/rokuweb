@@ -1943,16 +1943,21 @@ public sealed class LocalWebRtcPublisherService
 
         string unifiedPanelStreamUrl;
         bool panelHlsReady;
+        var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
 
         if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
         {
-            unifiedPanelStreamUrl = string.Empty;
-            panelHlsReady = true;
+            panelHlsReady =
+                _browserPanelInteractionHlsService.IsAvailable &&
+                _browserPanelInteractionHlsService.HasPlaylist(window.Id);
+            unifiedPanelStreamUrl = panelHlsReady
+                ? string.Format("http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}", publicHost, port, window.Id.ToString("N"), streamReloadVersion)
+                : string.Empty;
         }
         else
         {
             var candidateUnifiedPanelStreamUrl = _browserPanelRollingHlsService.IsAvailable
-                ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp), port, window.Id.ToString("N"), streamReloadVersion)
+                ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", publicHost, port, window.Id.ToString("N"), streamReloadVersion)
                 : string.Empty;
             panelHlsReady =
                 _browserPanelRollingHlsService.IsAvailable &&

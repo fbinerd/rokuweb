@@ -872,7 +872,7 @@ sub applyBridgeResponse()
         if autoFullscreenIndex >= 0
             nextFullscreenWindowId = getString(m.windowEntries[autoFullscreenIndex].id, "")
             autoStreamingMode = normalizeStreamingMode(getString(m.windowEntries[autoFullscreenIndex].streamingMode, "Interacao"))
-            if autoStreamingMode = "Interacao" and nextFullscreenWindowId <> "" and nextFullscreenWindowId <> previousFullscreenWindowId
+            if autoStreamingMode = "Interacao" and nextFullscreenWindowId <> "" and nextFullscreenWindowId <> previousFullscreenWindowId and nextFullscreenWindowId <> m.fullscreenWindowId
                 m.selectedIndex = autoFullscreenIndex
                 showFullscreen()
                 return
@@ -1045,16 +1045,23 @@ sub showFullscreen()
         return
     end if
 
-    stopPanelAudio()
-
     entry = m.windowEntries[m.selectedIndex]
     entryId = getString(entry.id, "")
     streamUrl = getString(entry.streamUrl, "")
     thumbnailUrl = getString(entry.thumbnailUrl, "")
+    nextStreamingMode = normalizeStreamingMode(getString(entry.streamingMode, "Interacao"))
     if (thumbnailUrl = invalid or thumbnailUrl = "") and streamUrl = ""
         m.statusLabel.text = "Preview indisponivel para o painel selecionado"
         return
     end if
+
+    if m.isFullscreen and m.fullscreenWindowId = entryId and normalizeStreamingMode(m.fullscreenStreamingMode) = nextStreamingMode and getString(m.videoStreamUrl, "") = streamUrl
+        ? "[MODE] showFullscreen ignorado: fullscreen ja ativo => id="; entryId; " modo="; nextStreamingMode; " stream="; streamUrl
+        m.top.setFocus(true)
+        return
+    end if
+
+    stopPanelAudio()
 
     m.isFullscreen = true
     clearPendingEditableActivation()
@@ -1074,7 +1081,7 @@ sub showFullscreen()
     m.bufferFullscreenPoster = m.fullscreenPosterB
     m.videoUsesStream = Instr(1, LCase(streamUrl), ".m3u8") > 0
     m.videoStreamUrl = streamUrl
-    m.fullscreenStreamingMode = normalizeStreamingMode(getString(entry.streamingMode, "Interacao"))
+    m.fullscreenStreamingMode = nextStreamingMode
     m.showFullscreenDiagnosticsCount = m.showFullscreenDiagnosticsCount + 1
     if m.showFullscreenDiagnosticsCount <= 3
         ? "[BOOT] showFullscreen #"; m.showFullscreenDiagnosticsCount; " id="; entryId; " modo="; m.fullscreenStreamingMode; " usesStream="; m.videoUsesStream; " stream="; m.videoStreamUrl
