@@ -13,10 +13,16 @@ internal sealed class StreamingTuning
 
     public double HlsSegmentDurationSeconds { get; private set; } = 0.75;
     public int HlsPlaylistSize { get; private set; } = 3;
+    public double InteractionHlsSegmentDurationSeconds { get; private set; } = 0.5;
+    public int InteractionHlsPlaylistSize { get; private set; } = 2;
     public string HlsResolution { get; private set; } = "854x480";
     public int HlsVideoBitrate { get; private set; } = 850_000;
     public int HlsAudioBitrate { get; private set; } = 96_000;
     public int HlsFrameRate { get; private set; } = 18;
+    public string InteractionHlsResolution { get; private set; } = "512x288";
+    public int InteractionHlsVideoBitrate { get; private set; } = 350_000;
+    public int InteractionHlsAudioBitrate { get; private set; } = 48_000;
+    public int InteractionHlsFrameRate { get; private set; } = 10;
     public double AudioChunkIntervalMs { get; private set; } = 100;
     public double AudioSyncOffsetMs { get; private set; } = 0;
     public double AudioFreshnessMs { get; private set; } = 450;
@@ -60,6 +66,17 @@ internal sealed class StreamingTuning
                 "StreamingConfig",
                 string.Format(
                     CultureInfo.InvariantCulture,
+                    "stream-tuning.ini interaction: hls={0:0.###}s, playlist={1}, resolution={2}, vbitrate={3}, abitrate={4}, fps={5}",
+                    tuning.InteractionHlsSegmentDurationSeconds,
+                    tuning.InteractionHlsPlaylistSize,
+                    tuning.InteractionHlsResolution,
+                    tuning.InteractionHlsVideoBitrate,
+                    tuning.InteractionHlsAudioBitrate,
+                    tuning.InteractionHlsFrameRate));
+            AppLog.Write(
+                "StreamingConfig",
+                string.Format(
+                    CultureInfo.InvariantCulture,
                     "stream-tuning.ini video: resolution={0}, vbitrate={1}, abitrate={2}, fps={3}",
                     tuning.HlsResolution,
                     tuning.HlsVideoBitrate,
@@ -78,10 +95,16 @@ internal sealed class StreamingTuning
     {
         HlsSegmentDurationSeconds = ReadDouble(values, "hls_segment_duration_seconds", HlsSegmentDurationSeconds, 0.3, 2.0);
         HlsPlaylistSize = ReadInt(values, "hls_playlist_size", HlsPlaylistSize, 2, 6);
+        InteractionHlsSegmentDurationSeconds = ReadDouble(values, "interaction_hls_segment_duration_seconds", InteractionHlsSegmentDurationSeconds, 0.35, 2.0);
+        InteractionHlsPlaylistSize = ReadInt(values, "interaction_hls_playlist_size", InteractionHlsPlaylistSize, 2, 6);
         HlsResolution = ReadResolution(values, "hls_resolution", HlsResolution);
         HlsVideoBitrate = ReadInt(values, "hls_video_bitrate", HlsVideoBitrate, 250_000, 2_500_000);
         HlsAudioBitrate = ReadInt(values, "hls_audio_bitrate", HlsAudioBitrate, 48_000, 192_000);
         HlsFrameRate = ReadInt(values, "hls_frame_rate", HlsFrameRate, 10, 24);
+        InteractionHlsResolution = ReadResolution(values, "interaction_hls_resolution", InteractionHlsResolution);
+        InteractionHlsVideoBitrate = ReadInt(values, "interaction_hls_video_bitrate", InteractionHlsVideoBitrate, 180_000, 1_500_000);
+        InteractionHlsAudioBitrate = ReadInt(values, "interaction_hls_audio_bitrate", InteractionHlsAudioBitrate, 32_000, 128_000);
+        InteractionHlsFrameRate = ReadInt(values, "interaction_hls_frame_rate", InteractionHlsFrameRate, 8, 24);
         AudioChunkIntervalMs = ReadDouble(values, "audio_chunk_interval_ms", AudioChunkIntervalMs, 30, 120);
         AudioSyncOffsetMs = ReadDouble(values, "audio_sync_offset_ms", AudioSyncOffsetMs, -5000, 5000);
         AudioFreshnessMs = ReadDouble(values, "audio_freshness_ms", AudioFreshnessMs, 100, 1000);

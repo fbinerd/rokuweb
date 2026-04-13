@@ -1095,7 +1095,8 @@ sub showFullscreen()
     stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
     if m.videoUsesStream
         if m.fullscreenStreamingMode = "Interacao"
-            if m.fullscreenVideo = invalid
+            interactionHlsNode = getFullscreenHlsNodeForMode("Interacao")
+            if interactionHlsNode = invalid
                 return
             end if
             content = CreateObject("roSGNode", "ContentNode")
@@ -1103,10 +1104,12 @@ sub showFullscreen()
             content.streamFormat = "hls"
             content.title = getString(entry.title, "Painel")
             ? "[HLS] play => "; content.url
-            m.fullscreenVideo.content = content
-            m.fullscreenVideo.control = "stop"
-            m.fullscreenVideo.visible = true
-            m.fullscreenVideo.control = "play"
+            m.fullscreenAssignedStreamUrl = m.videoStreamUrl
+            m.fullscreenVideoPendingRestart = true
+            interactionHlsNode.content = content
+            interactionHlsNode.control = "stop"
+            interactionHlsNode.visible = true
+            interactionHlsNode.control = "play"
             m.activeFullscreenPoster.visible = false
             m.bufferFullscreenPoster.visible = false
             m.statusLabel.text = "Iniciando stream HLS do painel..."
@@ -2282,16 +2285,15 @@ sub onInteractionOverlayVideoStateChanged()
 end sub
 
 sub onFullscreenVideoModeStateChanged()
-    handleFullscreenVideoStateChanged("Video")
+    activeMode = normalizeStreamingMode(m.fullscreenStreamingMode)
+    if activeMode = ""
+        activeMode = "Video"
+    end if
+    handleFullscreenVideoStateChanged(activeMode)
 end sub
 
 sub handleFullscreenVideoStateChanged(mode as string)
-    node = invalid
-    if normalizeStreamingMode(mode) = "Interacao"
-        node = m.fullscreenVideo
-    else
-        node = m.fullscreenVideoMode
-    end if
+    node = getFullscreenHlsNodeForMode(mode)
 
     if node = invalid or not m.videoUsesStream or normalizeStreamingMode(m.fullscreenStreamingMode) <> normalizeStreamingMode(mode)
         return
@@ -2355,16 +2357,11 @@ sub onFullscreenVideoWatchTimerFire()
         return
     end if
 
-    if normalizeStreamingMode(m.fullscreenStreamingMode) <> "Video"
+    if normalizeStreamingMode(m.fullscreenStreamingMode) <> "Video" and normalizeStreamingMode(m.fullscreenStreamingMode) <> "Interacao"
         return
     end if
 
-    node = invalid
-    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video"
-        node = m.fullscreenVideoMode
-    else
-        node = m.fullscreenVideo
-    end if
+    node = getFullscreenHlsNodeForMode(m.fullscreenStreamingMode)
 
     if node = invalid
         return
@@ -2396,7 +2393,7 @@ sub onFullscreenVideoWatchTimerFire()
         return
     end if
 
-    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video" and m.fullscreenVideoStallCount >= 5
+    if m.fullscreenVideoStallCount >= 5
         restartFullscreenVideoAtLiveEdge("stall")
     end if
 end sub
@@ -2406,12 +2403,7 @@ sub restartFullscreenVideoAtLiveEdge(reason as string)
         return
     end if
 
-    node = invalid
-    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Video"
-        node = m.fullscreenVideoMode
-    else
-        node = m.fullscreenVideo
-    end if
+    node = getFullscreenHlsNodeForMode(m.fullscreenStreamingMode)
 
     if node = invalid
         return
@@ -3312,15 +3304,21 @@ sub syncFullscreenStreamState(windowId as string)
         m.fullscreenStreamingMode = nextStreamingMode
         m.fullscreenVideoLastPosition = -1
         m.fullscreenVideoStallCount = 0
+        m.fullscreenAssignedStreamUrl = nextStreamUrl
 
         content = CreateObject("roSGNode", "ContentNode")
         content.url = appendCacheBust(m.videoStreamUrl)
         content.streamFormat = "hls"
         content.title = getString(currentEntry.title, "Painel")
-        m.fullscreenVideo.content = content
-        m.fullscreenVideo.control = "stop"
-        m.fullscreenVideo.visible = true
-        m.fullscreenVideo.control = "play"
+        interactionHlsNode = getFullscreenHlsNodeForMode("Interacao")
+        if interactionHlsNode = invalid
+            return
+        end if
+        m.fullscreenVideoPendingRestart = true
+        interactionHlsNode.content = content
+        interactionHlsNode.control = "stop"
+        interactionHlsNode.visible = true
+        interactionHlsNode.control = "play"
         notifyPendingModeSwitchReady(windowId, nextStreamingMode)
         m.statusLabel.text = "Recarregando stream do painel..."
         ? "[HLS] reload => "; content.url
@@ -3362,6 +3360,18 @@ sub syncFullscreenStreamState(windowId as string)
     m.statusLabel.text = "Recarregando stream do painel..."
     ? "[HLS] reload => "; content.url
 end sub
+
+function getFullscreenHlsNodeForMode(mode as string) as object
+    normalizedMode = normalizeStreamingMode(mode)
+    if normalizedMode = "Interacao"
+        if m.videoUsesStream and m.fullscreenVideoMode <> invalid
+            return m.fullscreenVideoMode
+        end if
+        return m.fullscreenVideo
+    end if
+
+    return m.fullscreenVideoMode
+end function
 
 sub setFullscreenPoster(thumbnailUrl as string, windowId as string, forceRefresh as boolean)
     if thumbnailUrl = invalid or thumbnailUrl = ""

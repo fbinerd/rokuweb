@@ -3642,10 +3642,21 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task EnsureKeepAliveStreamsAsync()
     {
+        var exclusiveTargetAddress = GetExclusiveKeepAliveTargetAddress();
         foreach (var stream in WindowProfiles.Where(x => x.KeepDisplayConnected).ToList())
         {
-            await EnsureStreamDisplayConnectedAsync(stream, forceNow: false);
+            await EnsureStreamDisplayConnectedAsync(stream, forceNow: false, exclusiveTargetAddress);
         }
+    }
+
+    private string GetExclusiveKeepAliveTargetAddress()
+    {
+        var exclusiveWindow = Windows.FirstOrDefault(x =>
+            x.IsPrimaryExclusive &&
+            x.AssignedTarget is not null &&
+            !string.IsNullOrWhiteSpace(x.AssignedTarget.NetworkAddress));
+
+        return exclusiveWindow?.AssignedTarget?.NetworkAddress ?? string.Empty;
     }
 
     private List<BrowserProfileDefinition> BuildBrowserProfiles()
@@ -3676,7 +3687,7 @@ public sealed class MainViewModel : ViewModelBase
         return Task.CompletedTask;
     }
 
-    private async Task EnsureStreamDisplayConnectedAsync(WindowProfileViewModel stream, bool forceNow)
+    private async Task EnsureStreamDisplayConnectedAsync(WindowProfileViewModel stream, bool forceNow, string exclusiveTargetAddress = "")
     {
         if (!stream.KeepDisplayConnected)
         {
@@ -3715,6 +3726,21 @@ public sealed class MainViewModel : ViewModelBase
             Targets,
             CancellationToken.None);
         resolvedTarget = PromoteRegisteredDisplayAsOnlineTarget(resolvedTarget, binding);
+
+        if (!string.IsNullOrWhiteSpace(exclusiveTargetAddress) &&
+            resolvedTarget.TransportKind == DisplayTransportKind.LanStreaming &&
+            !string.IsNullOrWhiteSpace(resolvedTarget.NetworkAddress) &&
+            !string.Equals(resolvedTarget.NetworkAddress, exclusiveTargetAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            AppLog.Write(
+                "StreamKeepAlive",
+                string.Format(
+                    "Keep-alive ignorado para stream '{0}' porque a TV exclusiva ativa esta em '{1}' e este stream aponta para '{2}'.",
+                    stream.Name,
+                    exclusiveTargetAddress,
+                    resolvedTarget.NetworkAddress));
+            return;
+        }
 
         var activeProbe = await _manualDisplayProbeService.ProbeAsync(resolvedTarget.NetworkAddress, CancellationToken.None);
         var tvReachable = activeProbe is not null;

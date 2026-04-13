@@ -37,6 +37,8 @@ $shortSha = "local"
 $fullSha = "local"
 $currentChannel = "stable"
 $channelOverride = $env:SUPER_BUILD_CHANNEL
+$localStamp = ""
+$isDirtyWorkingTree = $false
 
 try {
     $resolvedShortSha = (& git -C $repoRoot rev-parse --short HEAD 2>$null).Trim()
@@ -63,11 +65,24 @@ try {
             }
         }
     }
+
+    $statusOutput = (& git -C $repoRoot status --porcelain 2>$null)
+    $isDirtyWorkingTree = -not [string]::IsNullOrWhiteSpace(($statusOutput | Out-String).Trim())
 }
 catch {
 }
 
-$releaseId = "$version-$shortSha"
+if ([string]::Equals($currentChannel, "local", [System.StringComparison]::OrdinalIgnoreCase) -or $isDirtyWorkingTree) {
+    $currentChannel = "local"
+    $localStamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+}
+
+$releaseId = if ([string]::IsNullOrWhiteSpace($localStamp)) {
+    "$version-$shortSha"
+}
+else {
+    "$version-$shortSha-local$localStamp"
+}
 $manifestUrl = "https://fbinerd.github.io/rokuweb/updates/latest-super.json"
 
 $content = @"

@@ -13,11 +13,16 @@ namespace WindowManager.App.Runtime.Publishing;
 
 public sealed class BrowserPanelInteractionHlsService
 {
-    private static readonly TimeSpan SegmentDuration = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan SegmentInterval = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan PlaylistTtl = TimeSpan.FromSeconds(12);
-    private static readonly TimeSpan SegmentTtl = TimeSpan.FromSeconds(24);
-    private const int PlaylistSize = 6;
+    private static StreamingTuning Tuning => StreamingTuning.Current;
+    private static TimeSpan SegmentDuration => TimeSpan.FromSeconds(Tuning.InteractionHlsSegmentDurationSeconds);
+    private static TimeSpan SegmentInterval => SegmentDuration;
+    private static TimeSpan PlaylistTtl => TimeSpan.FromSeconds(Math.Max(4, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 2)));
+    private static TimeSpan SegmentTtl => TimeSpan.FromSeconds(Math.Max(8, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 8)));
+    private static int PlaylistSize => Tuning.InteractionHlsPlaylistSize;
+    private static int FrameRate => Tuning.InteractionHlsFrameRate;
+    private static int VideoBitrate => Tuning.InteractionHlsVideoBitrate;
+    private static int AudioBitrate => Tuning.InteractionHlsAudioBitrate;
+    private static string VideoFilter => BuildVideoFilter(Tuning.InteractionHlsResolution);
     private static readonly bool UseSyntheticAudio = string.Equals(Environment.GetEnvironmentVariable("SUPERPAINEL_SYNTH_AUDIO"), "1", StringComparison.OrdinalIgnoreCase);
 
     private readonly BrowserSnapshotService _snapshotService;
@@ -36,6 +41,19 @@ public sealed class BrowserPanelInteractionHlsService
         if (!string.IsNullOrWhiteSpace(_ffmpegPath))
         {
             AppLog.Write("PanelInteractionHls", $"ffmpeg detectado para HLS de interacao do painel: {_ffmpegPath}");
+            AppLog.Write(
+                "PanelInteractionHls",
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Perfil interacao HLS: segment={0:0.###}s, playlist={1}, playlistTtl={2:0.###}s, segmentTtl={3:0.###}s, resolution={4}, vbitrate={5}, abitrate={6}, fps={7}",
+                    SegmentDuration.TotalSeconds,
+                    PlaylistSize,
+                    PlaylistTtl.TotalSeconds,
+                    SegmentTtl.TotalSeconds,
+                    Tuning.InteractionHlsResolution,
+                    VideoBitrate,
+                    AudioBitrate,
+                    FrameRate));
             if (UseSyntheticAudio)
             {
                 AppLog.Write("PanelInteractionHls", "Modo sintetico habilitado para diagnostico de audio.");
@@ -77,6 +95,16 @@ public sealed class BrowserPanelInteractionHlsService
         }
 
         return _streams.TryGetValue(windowId, out var stream) && stream.HasArtifact("index.m3u8");
+    }
+
+    public bool HasWarmupSegments(Guid windowId, int minimumSegmentCount)
+    {
+        if (!IsAvailable)
+        {
+            return false;
+        }
+
+        return _streams.TryGetValue(windowId, out var stream) && stream.HasWarmupSegments(minimumSegmentCount);
     }
 
     public bool TryGetPlaylistBytes(Guid windowId, out byte[] payload)
@@ -311,12 +339,22 @@ public sealed class BrowserPanelInteractionHlsService
                     File.WriteAllBytes(imagePath, jpegBytes);
                     File.WriteAllBytes(audioPath, wavBytes);
 
+                    var frameRate = Math.Max(10, FrameRate);
+                    var keyFrameInterval = Math.Max(1, (int)Math.Round(frameRate * SegmentDuration.TotalSeconds, MidpointRounding.AwayFromZero));
+                    var forceKeyFrames = $"expr:gte(t,n_forced*{SegmentDuration.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)})";
                     var arguments = string.Format(
                         CultureInfo.InvariantCulture,
-                        "-hide_banner -loglevel error -y -loop 1 -framerate 24 -i \"{0}\" -i \"{1}\" -map 0:v:0 -map 1:a:0 -t {2:0.###} -c:v libx264 -preset ultrafast -profile:v baseline -level 3.1 -tune stillimage -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -ac 2 -af aresample=async=1:first_pts=0 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{3}\"",
+                        "-hide_banner -loglevel error -y -loop 1 -framerate {0} -i \"{1}\" -i \"{2}\" -map 0:v:0 -map 1:a:0 -t {3:0.###} -vf \"{4}\" -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level 3.1 -x264-params \"keyint={5}:min-keyint={5}:scenecut=0:force-cfr=1:aud=1:nal-hrd=cbr\" -force_key_frames \"{6}\" -b:v {7} -maxrate {7} -bufsize {8} -pix_fmt yuv420p -bsf:v h264_metadata=aud=insert -c:a aac -b:a {9} -ar 48000 -ac 2 -af aresample=async=1:first_pts=0:min_hard_comp=0.100 -shortest -fflags +genpts -avoid_negative_ts make_zero -muxpreload 0 -muxdelay 0 -mpegts_flags resend_headers -f mpegts \"{10}\"",
+                        frameRate,
                         imagePath,
                         audioPath,
                         SegmentDuration.TotalSeconds,
+                        VideoFilter,
+                        keyFrameInterval,
+                        forceKeyFrames,
+                        VideoBitrate.ToString(CultureInfo.InvariantCulture),
+                        (VideoBitrate * 2).ToString(CultureInfo.InvariantCulture),
+                        AudioBitrate.ToString(CultureInfo.InvariantCulture),
                         segmentPath);
 
                     using var process = Process.Start(new ProcessStartInfo
@@ -377,10 +415,7 @@ public sealed class BrowserPanelInteractionHlsService
                 _segments.Add(entry);
                 while (_segments.Count > PlaylistSize)
                 {
-                    var stale = _segments[0];
                     _segments.RemoveAt(0);
-                    _artifactStore.Remove(stale.FileName);
-                    TryDelete(Path.Combine(OutputDirectory, stale.FileName));
                 }
             }
         }
@@ -419,6 +454,14 @@ public sealed class BrowserPanelInteractionHlsService
         public bool HasArtifact(string fileName)
         {
             return _artifactStore.Has(fileName);
+        }
+
+        public bool HasWarmupSegments(int minimumSegmentCount)
+        {
+            lock (_gate)
+            {
+                return _segments.Count >= Math.Max(1, minimumSegmentCount);
+            }
         }
 
         public bool TryReadArtifact(string fileName, out byte[] payload)
@@ -500,6 +543,22 @@ public sealed class BrowserPanelInteractionHlsService
         public string FileName { get; }
 
         public TimeSpan Duration { get; }
+    }
+
+    private static string BuildVideoFilter(string resolution)
+    {
+        var normalizedResolution = string.IsNullOrWhiteSpace(resolution) ? "854x480" : resolution.Trim();
+        var parts = normalizedResolution.Split('x');
+        if (parts.Length != 2)
+        {
+            return "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2";
+        }
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "scale={0}:{1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2",
+            parts[0],
+            parts[1]);
     }
 
     private static byte[] BuildSineWaveSnapshot()

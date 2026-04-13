@@ -24,6 +24,7 @@ public sealed class LocalWebRtcPublisherService
     private const string InteractionStreamingMode = "Interacao";
     private const string VideoStreamingMode = "Video";
     private const bool AutomaticRokuSideloadEnabled = false;
+    private const int InteractionFullscreenWarmupSegments = 1;
     private static readonly TimeSpan ModeSwitchAckTimeout = TimeSpan.FromSeconds(2.5);
     private static readonly TimeSpan DirectYoutubeResolveSuccessTtl = TimeSpan.FromMinutes(20);
     private static readonly TimeSpan DirectYoutubeResolveFailureTtl = TimeSpan.FromSeconds(45);
@@ -862,11 +863,7 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-        var key = GetValue(values, "deviceId");
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            key = string.IsNullOrWhiteSpace(remoteAddress) ? Guid.NewGuid().ToString("N") : remoteAddress;
-        }
+        var key = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
 
         var snapshot = new RegisteredDisplaySnapshot
         {
@@ -885,6 +882,11 @@ public sealed class LocalWebRtcPublisherService
         snapshot.UpdateAvailable =
             !string.IsNullOrWhiteSpace(snapshot.ExpectedChannelVersion) &&
             !string.Equals(snapshot.ChannelVersion, snapshot.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
+        if (ShouldSuppressNonExclusiveDisplay(remoteAddress))
+        {
+            snapshot.ExpectedChannelVersion = string.Empty;
+            snapshot.UpdateAvailable = false;
+        }
 
         var changed = true;
         if (_registeredDisplays.TryGetValue(key, out var previous))
@@ -956,7 +958,7 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-        var deviceId = GetValue(values, "deviceId");
+        var deviceId = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
         if (string.IsNullOrWhiteSpace(deviceId) && !string.IsNullOrWhiteSpace(remoteAddress))
         {
             deviceId = _registeredDisplays.Values
@@ -987,7 +989,7 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-        var deviceId = GetValue(values, "deviceId");
+        var deviceId = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
         var windowId = GetValue(values, "windowId");
         if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(windowId))
         {
@@ -1087,15 +1089,10 @@ public sealed class LocalWebRtcPublisherService
 
     private void PromoteInputLogToRegisteredDisplay(Dictionary<string, string> values, string remoteAddress)
     {
-        var deviceId = GetValue(values, "deviceId");
+        var deviceId = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
         if (string.IsNullOrWhiteSpace(deviceId))
         {
-            if (string.IsNullOrWhiteSpace(remoteAddress))
-            {
-                return;
-            }
-
-            deviceId = "roku-" + remoteAddress.Replace(".", "-");
+            return;
         }
 
         var channelVersion = GetValue(values, "channelVersion");
@@ -1119,6 +1116,11 @@ public sealed class LocalWebRtcPublisherService
         snapshot.UpdateAvailable =
             !string.IsNullOrWhiteSpace(snapshot.ExpectedChannelVersion) &&
             !string.Equals(snapshot.ChannelVersion, snapshot.ExpectedChannelVersion, StringComparison.OrdinalIgnoreCase);
+        if (ShouldSuppressNonExclusiveDisplay(remoteAddress))
+        {
+            snapshot.ExpectedChannelVersion = string.Empty;
+            snapshot.UpdateAvailable = false;
+        }
 
         var changed = true;
         if (_registeredDisplays.TryGetValue(deviceId, out var previous))
@@ -1524,6 +1526,29 @@ public sealed class LocalWebRtcPublisherService
             WebUtility.HtmlEncode(route.SourceUrl));
     }
 
+    private string GetExclusiveDisplayAddress()
+    {
+        return _runtimeWindows.Values
+            .Where(x => x.IsPrimaryExclusive &&
+                        x.AssignedTarget is not null &&
+                        !string.IsNullOrWhiteSpace(x.AssignedTarget.NetworkAddress))
+            .Select(x => x.AssignedTarget!.NetworkAddress)
+            .FirstOrDefault() ?? string.Empty;
+    }
+
+    private bool ShouldSuppressNonExclusiveDisplay(string remoteAddress)
+    {
+        if (string.IsNullOrWhiteSpace(remoteAddress))
+        {
+            return false;
+        }
+
+        var exclusiveAddress = GetExclusiveDisplayAddress();
+        return
+            !string.IsNullOrWhiteSpace(exclusiveAddress) &&
+            !string.Equals(remoteAddress, exclusiveAddress, StringComparison.OrdinalIgnoreCase);
+    }
+
     private string BuildWindowsJson(string requestTarget, string remoteAddress)
     {
         var payload = new WindowsBridgePayload();
@@ -1533,7 +1558,7 @@ public sealed class LocalWebRtcPublisherService
         if (queryIndex >= 0 && queryIndex < requestTarget.Length - 1)
         {
             var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-            deviceId = GetValue(values, "deviceId");
+            deviceId = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
         }
 
         foreach (var snapshot in filteredWindows)
@@ -1587,6 +1612,11 @@ public sealed class LocalWebRtcPublisherService
 
     private List<BridgeWindowSnapshot> ResolveWindowsForBridgeRequest(string requestTarget, string remoteAddress)
     {
+        if (ShouldSuppressNonExclusiveDisplay(remoteAddress))
+        {
+            return new List<BridgeWindowSnapshot>();
+        }
+
         var allWindows = _runtimeWindows.Values
             .Select(window =>
             {
@@ -1607,7 +1637,7 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var values = ParseQueryString(requestTarget.Substring(queryIndex + 1));
-        var deviceId = GetValue(values, "deviceId");
+        var deviceId = BuildRegisteredDisplayDeviceId(GetValue(values, "deviceId"), remoteAddress);
         RegisteredDisplaySnapshot? display = null;
         if (!string.IsNullOrWhiteSpace(deviceId) && _registeredDisplays.TryGetValue(deviceId, out var registered))
         {
@@ -1914,6 +1944,34 @@ public sealed class LocalWebRtcPublisherService
         }
     }
 
+    private static string BuildRegisteredDisplayDeviceId(string? reportedDeviceId, string remoteAddress)
+    {
+        var normalizedReportedDeviceId = (reportedDeviceId ?? string.Empty).Trim();
+        var normalizedRemoteAddress = (remoteAddress ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedReportedDeviceId))
+        {
+            return string.IsNullOrWhiteSpace(normalizedRemoteAddress)
+                ? string.Empty
+                : "roku-" + normalizedRemoteAddress.Replace(".", "-");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedRemoteAddress))
+        {
+            return normalizedReportedDeviceId;
+        }
+
+        var normalizedRemoteSuffix = "-" + normalizedRemoteAddress.Replace(".", "-");
+        if (normalizedReportedDeviceId.IndexOf('@') >= 0 ||
+            normalizedReportedDeviceId.EndsWith(normalizedRemoteSuffix, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedReportedDeviceId, normalizedRemoteAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedReportedDeviceId;
+        }
+
+        return normalizedReportedDeviceId + "@" + normalizedRemoteAddress;
+    }
+
     private static string GetValue(Dictionary<string, string> values, string key)
     {
         return values.TryGetValue(key, out var value) ? value : string.Empty;
@@ -1947,12 +2005,22 @@ public sealed class LocalWebRtcPublisherService
 
         if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
         {
-            panelHlsReady =
+            var interactionPlaylistReady =
                 _browserPanelInteractionHlsService.IsAvailable &&
                 _browserPanelInteractionHlsService.HasPlaylist(window.Id);
-            unifiedPanelStreamUrl = panelHlsReady
+            var interactionWarmupReady =
+                interactionPlaylistReady &&
+                _browserPanelInteractionHlsService.HasWarmupSegments(window.Id, InteractionFullscreenWarmupSegments);
+            panelHlsReady = interactionWarmupReady;
+            unifiedPanelStreamUrl = interactionWarmupReady
                 ? string.Format("http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}", publicHost, port, window.Id.ToString("N"), streamReloadVersion)
                 : string.Empty;
+            if (interactionPlaylistReady && !interactionWarmupReady)
+            {
+                AppLog.Write(
+                    "PanelInteractionHls",
+                    $"Warmup pendente para janela {window.Id:N}: aguardando {InteractionFullscreenWarmupSegments} segmentos antes de expor fullscreen.");
+            }
         }
         else
         {
@@ -1969,7 +2037,7 @@ public sealed class LocalWebRtcPublisherService
         var directVideoOverlay = interactionSuppressionEnabled
             ? ResolveDirectVideoOverlay(window.Id)
             : DirectVideoOverlayBridgeSnapshot.None;
-        _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled && directVideoOverlay.Enabled);
+        _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled);
         MaybeLogDirectOverlay(window.Id, directVideoOverlay);
 
         var autoOpenFullscreen =
@@ -2396,7 +2464,28 @@ public sealed class LocalWebRtcPublisherService
         var jsRuntime = string.IsNullOrWhiteSpace(nodePath)
             ? string.Empty
             : string.Format("node:{0}", nodePath);
-        var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl);
+        foreach (var extractorArgs in EnumerateYouTubeExtractorArgs())
+        {
+            var resolved = TryResolveYoutubeDirectPlaybackVariant(ytDlpPath, jsRuntime, youtubeUrl, extractorArgs);
+            if (resolved.Ok)
+            {
+                return resolved;
+            }
+        }
+
+        return YouTubeDirectResolveResult.Fail("sem_url_compativel");
+    }
+
+    private static IEnumerable<string> EnumerateYouTubeExtractorArgs()
+    {
+        yield return string.Empty;
+        yield return "--extractor-args \"youtube:player_client=ios\"";
+        yield return "--extractor-args \"youtube:player_client=tv,ios,web\"";
+    }
+
+    private static YouTubeDirectResolveResult TryResolveYoutubeDirectPlaybackVariant(string ytDlpPath, string jsRuntime, string youtubeUrl, string extractorArgs)
+    {
+        var scannedQualityOptions = ScanYoutubeDirectQualityOptions(ytDlpPath, jsRuntime, youtubeUrl, extractorArgs);
         if (scannedQualityOptions.Count > 0)
         {
             var preferred = scannedQualityOptions
@@ -2405,7 +2494,8 @@ public sealed class LocalWebRtcPublisherService
             AppLog.Write(
                 "DirectOverlay",
                 string.Format(
-                    "Quality scan => muxed={0}, selected={1} format={2}",
+                    "Quality scan => extractor={0}, muxed={1}, selected={2} format={3}",
+                    string.IsNullOrWhiteSpace(extractorArgs) ? "<padrao>" : extractorArgs,
                     string.Join(", ", scannedQualityOptions.Select(x => string.Format("{0}:{1}", x.Label, x.StreamFormat)).Distinct(StringComparer.OrdinalIgnoreCase)),
                     preferred.Label,
                     preferred.StreamFormat));
@@ -2413,9 +2503,9 @@ public sealed class LocalWebRtcPublisherService
         }
 
         var qualityOptions = new List<YouTubeDirectQualityOption>();
-        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"22\" \"{0}\"", youtubeUrl))), "mp4");
-        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"59/78\" \"{0}\"", youtubeUrl))), "mp4");
-        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"18\" \"{0}\"", youtubeUrl))), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "720p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("-g -f \"22\" \"{0}\"", youtubeUrl))), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "480p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("-g -f \"59/78\" \"{0}\"", youtubeUrl))), "mp4");
+        TryAppendDirectQualityOption(qualityOptions, "360p", RunProcessCaptureFirstNonEmptyLine(ytDlpPath, BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("-g -f \"18\" \"{0}\"", youtubeUrl))), "mp4");
 
         if (qualityOptions.Count > 0)
         {
@@ -2427,7 +2517,7 @@ public sealed class LocalWebRtcPublisherService
 
         var compatibleHlsUrl = RunProcessCaptureFirstNonEmptyLine(
             ytDlpPath,
-            BuildYtDlpArguments(jsRuntime, string.Format("-g -f \"95-2/95-1/95-0/94-2/94-1/94-0/93-2/93-1/93-0/best[ext=mp4]\" \"{0}\"", youtubeUrl)));
+            BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("-g -f \"95-2/95-1/95-0/94-2/94-1/94-0/93-2/93-1/93-0/best[ext=mp4]/best\" \"{0}\"", youtubeUrl)));
         if (!string.IsNullOrWhiteSpace(compatibleHlsUrl) && !string.Equals(compatibleHlsUrl, "NA", StringComparison.OrdinalIgnoreCase))
         {
             if (compatibleHlsUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -2465,7 +2555,7 @@ public sealed class LocalWebRtcPublisherService
 
         var manifestUrl = RunProcessCaptureFirstNonEmptyLine(
             ytDlpPath,
-            BuildYtDlpArguments(jsRuntime, string.Format("--print manifest_url \"{0}\"", youtubeUrl)));
+            BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("--print manifest_url \"{0}\"", youtubeUrl)));
         if (!string.IsNullOrWhiteSpace(manifestUrl) && !string.Equals(manifestUrl, "NA", StringComparison.OrdinalIgnoreCase))
         {
             if (manifestUrl.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -2564,11 +2654,11 @@ public sealed class LocalWebRtcPublisherService
         return score;
     }
 
-    private static List<YouTubeDirectQualityOption> ScanYoutubeDirectQualityOptions(string ytDlpPath, string jsRuntime, string youtubeUrl)
+    private static List<YouTubeDirectQualityOption> ScanYoutubeDirectQualityOptions(string ytDlpPath, string jsRuntime, string youtubeUrl, string extractorArgs)
     {
         var json = RunProcessCaptureOutput(
             ytDlpPath,
-            BuildYtDlpArguments(jsRuntime, string.Format("--no-warnings --no-playlist -J \"{0}\"", youtubeUrl)));
+            BuildYtDlpArguments(jsRuntime, extractorArgs, string.Format("--no-warnings --no-playlist -J \"{0}\"", youtubeUrl)));
         if (string.IsNullOrWhiteSpace(json))
         {
             AppLog.Write("DirectOverlay", "Quality scan => yt-dlp nao retornou JSON");
@@ -2682,19 +2772,26 @@ public sealed class LocalWebRtcPublisherService
         return string.Empty;
     }
 
-    private static string BuildYtDlpArguments(string jsRuntime, string commandSuffix)
+    private static string BuildYtDlpArguments(string jsRuntime, string extractorArgs, string commandSuffix)
     {
         if (string.IsNullOrWhiteSpace(commandSuffix))
         {
             return string.Empty;
         }
 
-        if (string.IsNullOrWhiteSpace(jsRuntime))
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(jsRuntime))
         {
-            return commandSuffix;
+            builder.AppendFormat("--js-runtimes \"{0}\" ", jsRuntime);
         }
 
-        return string.Format("--js-runtimes \"{0}\" {1}", jsRuntime, commandSuffix);
+        if (!string.IsNullOrWhiteSpace(extractorArgs))
+        {
+            builder.Append(extractorArgs).Append(' ');
+        }
+
+        builder.Append(commandSuffix);
+        return builder.ToString().Trim();
     }
 
     private static string BuildQualityLabel(int height, double fps)
