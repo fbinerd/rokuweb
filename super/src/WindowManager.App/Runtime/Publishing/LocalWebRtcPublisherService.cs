@@ -137,6 +137,17 @@ public sealed class LocalWebRtcPublisherService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (!IsDisplayLinkedToAnyStream(display))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "TV ignorada no sideload manual em lote por nao possuir stream vinculado: id={0}, ip={1}",
+                        display.DeviceId,
+                        display.NetworkAddress));
+                continue;
+            }
+
             display.ExpectedChannelVersion = expectedVersion;
             display.UpdateAvailable =
                 !string.IsNullOrWhiteSpace(display.ExpectedChannelVersion) &&
@@ -190,6 +201,17 @@ public sealed class LocalWebRtcPublisherService
             return "tv_sem_ip";
         }
 
+        if (!IsDisplayTargetLinkedToAnyStream(target))
+        {
+            AppLog.Write(
+                "RokuDeploy",
+                string.Format(
+                    "Atualizacao ignorada para TV descoberta sem stream vinculado: nome={0}, ip={1}",
+                    target.Name,
+                    target.NetworkAddress));
+            return "tv_sem_stream_vinculado";
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         RegisteredDisplaySnapshot display;
 
@@ -238,6 +260,18 @@ public sealed class LocalWebRtcPublisherService
         foreach (var display in displays)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsDisplayLinkedToAnyStream(display))
+            {
+                result.SkippedCount++;
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "TV ignorada no comando de energia por nao possuir stream vinculado: id={0}, ip={1}",
+                        display.DeviceId,
+                        display.NetworkAddress));
+                continue;
+            }
 
             if (!IsPowerCompatibleRokuDisplay(display))
             {
@@ -935,7 +969,7 @@ public sealed class LocalWebRtcPublisherService
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
 
-            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion))
+            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion) && IsDisplayLinkedToAnyStream(snapshot))
             {
                 AppLog.Write(
                     "RokuDeploy",
@@ -945,6 +979,15 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.ChannelVersion,
                         snapshot.ExpectedChannelVersion));
                 _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "register_display");
+            }
+            else if (!IsDisplayLinkedToAnyStream(snapshot))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Sideload automatico ignorado para TV sem stream vinculado: id={0}, ip={1}",
+                        snapshot.DeviceId,
+                        snapshot.NetworkAddress));
             }
         }
     }
@@ -1159,7 +1202,7 @@ public sealed class LocalWebRtcPublisherService
                     snapshot.ChannelVersion,
                     snapshot.ExpectedChannelVersion));
 
-            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion))
+            if (ShouldAutoSideloadOnRegistration(snapshot.ExpectedChannelVersion) && IsDisplayLinkedToAnyStream(snapshot))
             {
                 AppLog.Write(
                     "RokuDeploy",
@@ -1170,7 +1213,54 @@ public sealed class LocalWebRtcPublisherService
                         snapshot.ExpectedChannelVersion));
                 _rokuDevDeploymentService.TryScheduleUpdate(snapshot, snapshot.ExpectedChannelVersion, "input_log");
             }
+            else if (!IsDisplayLinkedToAnyStream(snapshot))
+            {
+                AppLog.Write(
+                    "RokuDeploy",
+                    string.Format(
+                        "Sideload automatico via input-log ignorado para TV sem stream vinculado: id={0}, ip={1}",
+                        snapshot.DeviceId,
+                        snapshot.NetworkAddress));
+            }
         }
+    }
+
+    private bool IsDisplayTargetLinkedToAnyStream(DisplayTarget target)
+    {
+        if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))
+        {
+            return false;
+        }
+
+        return HasAssignedStreamForAddress(target.NetworkAddress);
+    }
+
+    private bool IsDisplayLinkedToAnyStream(RegisteredDisplaySnapshot snapshot)
+    {
+        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.NetworkAddress))
+        {
+            return false;
+        }
+
+        return HasAssignedStreamForAddress(snapshot.NetworkAddress);
+    }
+
+    private bool HasAssignedStreamForAddress(string networkAddress)
+    {
+        if (string.IsNullOrWhiteSpace(networkAddress))
+        {
+            return false;
+        }
+
+        var normalizedAddress = networkAddress.Trim();
+
+        return _runtimeWindows.Values.Any(x =>
+                   x.AssignedTarget is not null &&
+                   !string.IsNullOrWhiteSpace(x.AssignedTarget.NetworkAddress) &&
+                   string.Equals(x.AssignedTarget.NetworkAddress, normalizedAddress, StringComparison.OrdinalIgnoreCase))
+               || _windowSnapshots.Values.Any(x =>
+                   !string.IsNullOrWhiteSpace(x.AssignedDisplayAddress) &&
+                   string.Equals(x.AssignedDisplayAddress, normalizedAddress, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<byte[]> HandleControlRequestAsync(string requestTarget, CancellationToken cancellationToken)
