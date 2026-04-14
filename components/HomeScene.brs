@@ -3388,12 +3388,8 @@ sub syncFullscreenStreamState(windowId as string)
 
             if interactionState = "buffering" or interactionState = "error" or interactionState = "finished" or interactionState = ""
                 m.fullscreenSameStreamUnhealthyCount = m.fullscreenSameStreamUnhealthyCount + 1
-                if m.fullscreenSameStreamUnhealthyCount <= 2 or m.fullscreenSameStreamUnhealthyCount >= 4
-                    ? "[HLS] same-stream unhealthy => mode=Interacao count="; m.fullscreenSameStreamUnhealthyCount; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " stream="; nextStreamUrl
-                end if
-                if m.fullscreenSameStreamUnhealthyCount >= 4
-                    restartFullscreenVideoAtLiveEdge("same-stream-" + interactionState)
-                    return
+                if m.fullscreenSameStreamUnhealthyCount <= 3 or m.fullscreenSameStreamUnhealthyCount mod 5 = 0
+                    ? "[HLS] same-stream unhealthy => mode=Interacao count="; m.fullscreenSameStreamUnhealthyCount; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " stream="; nextStreamUrl; " assigned="; m.fullscreenAssignedStreamUrl
                 end if
             else if interactionState = "stopped"
                 if m.fullscreenSameStreamUnhealthyCount <> 0
@@ -3404,7 +3400,7 @@ sub syncFullscreenStreamState(windowId as string)
                 m.fullscreenSameStreamUnhealthyCount = 0
             end if
 
-            ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl; " state="; interactionState
+            ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " assigned="; m.fullscreenAssignedStreamUrl
             return
         end if
 
