@@ -19,6 +19,7 @@ $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-ba
 $tempPackageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-package-" + [Guid]::NewGuid().ToString("N"))
 $deltaStatus = "not_attempted"
 $deltaMessage = ""
+$disableRokuDelta = $true
 
 if ([string]::IsNullOrWhiteSpace($Channel)) {
     try {
@@ -718,6 +719,11 @@ try {
         }
     }
 
+    $effectiveRokuDeltaZip = if ($disableRokuDelta) { $null } else { $rokuDeltaZip }
+    $effectiveRokuDeltaFiles = if ($disableRokuDelta) { @() } else { $rokuDeltaFileEntries }
+    $effectiveRokuDeltaStatus = if ($disableRokuDelta) { "disabled" } else { $deltaStatus }
+    $effectiveRokuDeltaMessage = if ($disableRokuDelta) { "Delta do Roku desabilitado; atualizar sempre via pacote completo." } else { $deltaMessage }
+
     $rokuChangesData = [pscustomobject]@{
         app = "rokuweb"
         version = $rokuVersion
@@ -728,18 +734,18 @@ try {
         generatedAtUtc = $generatedAtUtc
         fullPackage = "$Channel-rokuweb-$releaseId-full.zip"
         fullPackageUrl = "$BaseUrl" + "$Channel-rokuweb-$releaseId-full.zip"
-        deltaPackage = if ($rokuDeltaZip) { Split-Path -Leaf $rokuDeltaZip } else { $null }
-        deltaPackageUrl = if ($rokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $rokuDeltaZip) } else { $null }
-        deltaSupportedFromVersions = if ($previousVersion) { (New-JsonArray $previousVersion) } else { (New-JsonArray) }
-        deltaSupportedFromReleases = if ($previousReleaseId) { (New-JsonArray $previousReleaseId) } else { (New-JsonArray) }
-        deltaStatus = $deltaStatus
-        deltaMessage = $deltaMessage
+        deltaPackage = if ($effectiveRokuDeltaZip) { Split-Path -Leaf $effectiveRokuDeltaZip } else { $null }
+        deltaPackageUrl = if ($effectiveRokuDeltaZip) { "$BaseUrl" + (Split-Path -Leaf $effectiveRokuDeltaZip) } else { $null }
+        deltaSupportedFromVersions = if ($disableRokuDelta) { (New-JsonArray) } else { if ($previousVersion) { (New-JsonArray $previousVersion) } else { (New-JsonArray) } }
+        deltaSupportedFromReleases = if ($disableRokuDelta) { (New-JsonArray) } else { if ($previousReleaseId) { (New-JsonArray $previousReleaseId) } else { (New-JsonArray) } }
+        deltaStatus = $effectiveRokuDeltaStatus
+        deltaMessage = $effectiveRokuDeltaMessage
         fullPackageRequiredIfCurrentVersionOlderThan = $previousVersion
         fullPackageRequiredIfCurrentReleaseOlderThan = $previousReleaseId
         changedFiles = (New-JsonArray $rokuChanged)
         deletedFiles = (New-JsonArray $rokuDeleted)
         files = (New-JsonArray $rokuCurrentFileEntries)
-        deltaFiles = (New-JsonArray $rokuDeltaFileEntries)
+        deltaFiles = (New-JsonArray $effectiveRokuDeltaFiles)
     }
     Write-JsonFile -Path (Join-Path $outputRoot ("{0}-rokuweb-{1}-changes.json" -f $Channel, $releaseId)) -Data $rokuChangesData
 
@@ -782,7 +788,7 @@ try {
         -CurrentChangedFiles $rokuChanged `
         -CurrentDeletedFiles $rokuDeleted `
         -CurrentFiles $rokuCurrentFileEntries `
-        -CurrentDeltaFiles $rokuDeltaFileEntries `
+        -CurrentDeltaFiles $effectiveRokuDeltaFiles `
         -BaseUrl $BaseUrl
 
     $superHistory = Get-ReleaseHistory `
