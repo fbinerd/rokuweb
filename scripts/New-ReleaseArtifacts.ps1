@@ -16,6 +16,7 @@ $outputRoot = Join-Path $repoRoot $OutputDirectory
 $superRoot = Join-Path $repoRoot "super"
 $superReleaseRoot = Join-Path $superRoot "src\WindowManager.App\bin\Release\net481"
 $tempWorktree = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-base-" + [Guid]::NewGuid().ToString("N"))
+$tempPackageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rokuweb-release-package-" + [Guid]::NewGuid().ToString("N"))
 $deltaStatus = "not_attempted"
 $deltaMessage = ""
 
@@ -166,7 +167,7 @@ function Get-RokuPackageFiles {
         $files.Add($manifestPath)
     }
 
-    foreach ($folderName in @("components", "source")) {
+    foreach ($folderName in @("components", "images", "source")) {
         $folderPath = Join-Path $Root $folderName
         if (Test-Path $folderPath) {
             Get-ChildItem -Path $folderPath -Recurse -File | ForEach-Object {
@@ -359,6 +360,22 @@ function New-ZipFromDirectory {
     New-ZipFromFiles -Root $DirectoryPath -Files $files -ZipPath $ZipPath
 }
 
+function Expand-ZipToDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZipPath,
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath
+    )
+
+    if (Test-Path $DestinationPath) {
+        Remove-Item $DestinationPath -Recurse -Force
+    }
+
+    New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestinationPath)
+}
+
 function Write-JsonFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -539,7 +556,10 @@ try {
     $releaseId = "$rokuVersion-$currentShortSha"
     $generatedAtUtc = [DateTime]::UtcNow.ToString("O")
 
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Channel $Channel -Output (Join-Path $OutputDirectory ("{0}-rokuweb-{1}-full.zip" -f $Channel, $releaseId))
+    $rokuFullZipName = "{0}-rokuweb-{1}-full.zip" -f $Channel, $releaseId
+    $rokuFullZipOutput = Join-Path $OutputDirectory $rokuFullZipName
+    $rokuFullZip = Join-Path $outputRoot $rokuFullZipName
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "package.ps1") -Channel $Channel -Output $rokuFullZipOutput
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao gerar pacote completo do rokuweb."
     }
@@ -547,9 +567,12 @@ try {
     $superFullZip = Join-Path $outputRoot ("{0}-super-{1}-full.zip" -f $Channel, $releaseId)
     New-ZipFromDirectory -DirectoryPath $superReleaseRoot -ZipPath $superFullZip
 
-    $rokuFiles = Get-RokuPackageFiles -Root $repoRoot
-    $rokuCurrentMap = Get-HashDictionary -Root $repoRoot -Files $rokuFiles
-    $rokuCurrentFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuFiles
+    $currentRokuPackageRoot = Join-Path $tempPackageRoot "current"
+    Expand-ZipToDirectory -ZipPath $rokuFullZip -DestinationPath $currentRokuPackageRoot
+
+    $rokuFiles = Get-RokuPackageFiles -Root $currentRokuPackageRoot
+    $rokuCurrentMap = Get-HashDictionary -Root $currentRokuPackageRoot -Files $rokuFiles
+    $rokuCurrentFileEntries = Get-FileEntryList -Root $currentRokuPackageRoot -Files $rokuFiles
     $superCurrentFiles = Get-SuperPackageFiles -Root $superReleaseRoot
     $superCurrentMap = Get-HashDictionary -Root $superReleaseRoot -Files $superCurrentFiles
     $superCurrentFileEntries = Get-FileEntryList -Root $superReleaseRoot -Files $superCurrentFiles
@@ -623,8 +646,18 @@ try {
             $previousShortSha = Get-GitShortSha -RepositoryRoot $repoRoot -Revision $deltaBaseRef
             $previousReleaseId = "$previousVersion-$previousShortSha"
 
-            $previousRokuFiles = Get-RokuPackageFiles -Root $tempWorktree
-            $rokuPreviousMap = Get-HashDictionary -Root $tempWorktree -Files $previousRokuFiles
+            $previousRokuFullZipName = "previous-roku-full.zip"
+            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tempWorktree "package.ps1") -Channel $Channel -Output $previousRokuFullZipName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Falha ao gerar pacote completo base do rokuweb para delta."
+            }
+
+            $previousRokuFullZip = Join-Path $tempWorktree $previousRokuFullZipName
+            $previousRokuPackageRoot = Join-Path $tempPackageRoot "previous"
+            Expand-ZipToDirectory -ZipPath $previousRokuFullZip -DestinationPath $previousRokuPackageRoot
+
+            $previousRokuFiles = Get-RokuPackageFiles -Root $previousRokuPackageRoot
+            $rokuPreviousMap = Get-HashDictionary -Root $previousRokuPackageRoot -Files $previousRokuFiles
 
             Push-Location (Join-Path $tempWorktree "super")
             try {
@@ -646,11 +679,11 @@ try {
             $superChanged = Get-ChangedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
             $superDeleted = Get-DeletedRelativeFiles -Current $superCurrentMap -Previous $superPreviousMap
 
-            $rokuDeltaFiles = @($rokuChanged | ForEach-Object { Join-Path $repoRoot $_ })
+            $rokuDeltaFiles = @($rokuChanged | ForEach-Object { Join-Path $currentRokuPackageRoot $_ })
             if ($rokuDeltaFiles.Count -gt 0) {
                 $rokuDeltaZip = Join-Path $outputRoot ("{0}-rokuweb-{1}-delta-from-{2}.zip" -f $Channel, $releaseId, $previousReleaseId)
-                New-ZipFromFiles -Root $repoRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
-                $rokuDeltaFileEntries = Get-FileEntryList -Root $repoRoot -Files $rokuDeltaFiles
+                New-ZipFromFiles -Root $currentRokuPackageRoot -Files $rokuDeltaFiles -ZipPath $rokuDeltaZip
+                $rokuDeltaFileEntries = Get-FileEntryList -Root $currentRokuPackageRoot -Files $rokuDeltaFiles
             }
 
             $superDeltaFiles = @($superChanged | ForEach-Object { Join-Path $superReleaseRoot $_ })
@@ -798,6 +831,14 @@ try {
     })
 }
 finally {
+    if (Test-Path $tempPackageRoot) {
+        try {
+            Remove-Item $tempPackageRoot -Recurse -Force
+        }
+        catch {
+        }
+    }
+
     if (Test-Path $tempWorktree) {
         try {
             & git -C $repoRoot worktree remove $tempWorktree --force | Out-Null
