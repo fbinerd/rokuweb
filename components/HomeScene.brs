@@ -89,6 +89,9 @@ sub init()
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
+    m.fullscreenInteractionBufferingCount = 0
+    m.lastFullscreenInteractionRecoveryAttempt = invalid
+    m.fullscreenInteractionRecoveryCooldownMs = 1500
     m.lastVideoDiagEvent = ""
     m.lastVideoDiagHeartbeat = invalid
     m.fullscreenPosterWindowId = ""
@@ -1105,6 +1108,7 @@ sub showFullscreen()
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
+    m.fullscreenInteractionBufferingCount = 0
     m.pendingInteractionAutoPlayWindowId = ""
     stopStagingFullscreenVideo()
     stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
@@ -2322,6 +2326,29 @@ function buildFullscreenHlsDiag(node as object, mode as string) as string
     return "mode=" + mode + " state=" + getString(node.state, "") + " pos=" + positionValue.ToStr() + " dur=" + durationValue.ToStr() + " stall=" + m.fullscreenVideoStallCount.ToStr() + " assigned=" + getString(m.fullscreenAssignedStreamUrl, "") + " active=" + getString(m.videoStreamUrl, "") + " nodeUrl=" + currentUrl
 end function
 
+function tryRecoverFullscreenInteractionStream(reason as string) as boolean
+    if not m.isFullscreen or not m.videoUsesStream or m.videoStreamUrl = ""
+        return false
+    end if
+
+    if normalizeStreamingMode(m.fullscreenStreamingMode) <> "Interacao"
+        return false
+    end if
+
+    if m.lastFullscreenInteractionRecoveryAttempt <> invalid and m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds() < m.fullscreenInteractionRecoveryCooldownMs
+        ? "[HLS] recovery throttled => reason="; reason; " elapsedMs="; m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds()
+        return false
+    end if
+
+    if m.lastFullscreenInteractionRecoveryAttempt = invalid
+        m.lastFullscreenInteractionRecoveryAttempt = CreateObject("roTimespan")
+    end if
+    m.lastFullscreenInteractionRecoveryAttempt.Mark()
+    ? "[HLS] interaction recovery => reason="; reason; " stream="; m.videoStreamUrl
+    restartFullscreenVideoAtLiveEdge(reason)
+    return true
+end function
+
 sub handleFullscreenVideoStateChanged(mode as string)
     node = getFullscreenHlsNodeForMode(mode)
 
@@ -2340,23 +2367,27 @@ sub handleFullscreenVideoStateChanged(mode as string)
         if state = "playing"
             m.fullscreenVideoStallCount = 0
             m.fullscreenSameStreamUnhealthyCount = 0
+            m.fullscreenInteractionBufferingCount = 0
             m.statusLabel.text = "Stream HLS do painel em reproducao"
         else if state = "buffering"
+            m.fullscreenInteractionBufferingCount = m.fullscreenInteractionBufferingCount + 1
             m.statusLabel.text = "Bufferizando stream HLS do painel..."
+            if m.fullscreenInteractionBufferingCount >= 2
+                if tryRecoverFullscreenInteractionStream("interaction-buffering")
+                    return
+                end if
+            end if
         else if state = "error"
             ? "[HLS] interaction error => "; buildFullscreenHlsDiag(node, mode)
             m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
+            if tryRecoverFullscreenInteractionStream("interaction-error")
+                return
+            end if
         else if state = "finished" or state = "stopped"
+            m.fullscreenInteractionBufferingCount = 0
             ? "[HLS] interaction final/transitorio => "; state; " | "; buildFullscreenHlsDiag(node, mode)
-            if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
-                content = CreateObject("roSGNode", "ContentNode")
-                content.url = appendCacheBust(m.videoStreamUrl)
-                content.streamFormat = "hls"
-                content.title = "Painel"
-                node.content = content
-                node.control = "stop"
-                node.control = "play"
-                m.statusLabel.text = "Reiniciando stream HLS do painel..."
+            if tryRecoverFullscreenInteractionStream("interaction-" + state)
+                return
             end if
         end if
         return
@@ -2456,6 +2487,7 @@ sub restartFullscreenVideoAtLiveEdge(reason as string)
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
+    m.fullscreenInteractionBufferingCount = 0
     reportVideoDiag("video-restart", "reason=" + reason)
     node.content = content
     node.control = "stop"
@@ -3373,6 +3405,7 @@ sub syncFullscreenStreamState(windowId as string)
         m.fullscreenVideoLastPosition = -1
         m.fullscreenVideoStallCount = 0
         m.fullscreenSameStreamUnhealthyCount = 0
+        m.fullscreenInteractionBufferingCount = 0
         m.fullscreenAssignedStreamUrl = nextStreamUrl
 
         content = CreateObject("roSGNode", "ContentNode")
@@ -3443,6 +3476,7 @@ sub syncFullscreenStreamState(windowId as string)
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
+    m.fullscreenInteractionBufferingCount = 0
 
     content = CreateObject("roSGNode", "ContentNode")
     content.url = appendCacheBust(m.videoStreamUrl)
