@@ -802,8 +802,9 @@ sub applyBridgeResponse()
     end for
 
     if not m.displayReadySent
-        notifyDisplayReady()
-        m.displayReadySent = true
+        if notifyDisplayReady()
+            m.displayReadySent = true
+        end if
         if not hasInteractionWindow
             m.statusLabel.text = "Bridge conectado em " + m.bridgeHost
             m.subtitleLabel.text = "TV pronta. Solicitando stream na proxima atualizacao..."
@@ -1009,16 +1010,28 @@ sub hideGrid()
     end for
 end sub
 
-sub notifyDisplayReady()
+function notifyDisplayReady() as boolean
     if m.bridgeHost = invalid or m.bridgeHost = "" or m.deviceId = invalid or m.deviceId = ""
-        return
+        ? "[BOOT] display-ready ignorado => bridge/device ausente"
+        return false
     end if
 
     readyUrl = "http://" + m.bridgeHost + "/api/display-ready?deviceId=" + m.deviceId
     transfer = CreateObject("roUrlTransfer")
+    if transfer = invalid
+        ? "[BOOT] display-ready falhou => roUrlTransfer invalido url="; readyUrl
+        return false
+    end if
+
     transfer.SetUrl(readyUrl)
     ignored = transfer.GetToString()
-end sub
+    if ignored = invalid
+        ? "[BOOT] display-ready sem resposta => url="; readyUrl
+    else
+        ? "[BOOT] display-ready enviado => url="; readyUrl
+    end if
+    return true
+end function
 
 sub moveSelection(offset as integer)
     if m.windowEntries.Count() = 0
