@@ -492,6 +492,11 @@ public sealed class LocalWebRtcPublisherService
         return DateTime.UtcNow - lastSeenUtc.ToUniversalTime() < maxAge;
     }
 
+    public bool HasAssignedStreamForTarget(DisplayTarget target)
+    {
+        return IsDisplayTargetLinkedToAnyStream(target);
+    }
+
     public bool IsDisplayStreamingRecently(DisplayTarget target, TimeSpan maxAge)
     {
         if (target is null || string.IsNullOrWhiteSpace(target.NetworkAddress))

@@ -144,6 +144,7 @@ public sealed class MainViewModel : ViewModelBase
         UpdateConnectedTvsCommand = new AsyncRelayCommand(UpdateConnectedTvsAsync);
         UpdateSelectedTargetCommand = new AsyncRelayCommand(UpdateSelectedTargetAsync, CanUpdateSelectedTarget);
         PowerOnConnectedRokusCommand = new AsyncRelayCommand(PowerOnConnectedRokusAsync);
+        PowerOnStreamLinkedRokusCommand = new AsyncRelayCommand(PowerOnStreamLinkedRokusAsync);
         PowerOffConnectedRokusCommand = new AsyncRelayCommand(PowerOffConnectedRokusAsync);
         CreateSessionFromProfileCommand = new AsyncRelayCommand(CreateSessionFromProfileAsync, CanCreateSessionFromProfile);
         BindSelectedTargetToSessionCommand = new AsyncRelayCommand(BindSelectedTargetToSessionAsync, CanBindSelectedTargetToSession);
@@ -223,6 +224,7 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand UpdateConnectedTvsCommand { get; }
     public AsyncRelayCommand UpdateSelectedTargetCommand { get; }
     public AsyncRelayCommand PowerOnConnectedRokusCommand { get; }
+    public AsyncRelayCommand PowerOnStreamLinkedRokusCommand { get; }
     public AsyncRelayCommand PowerOffConnectedRokusCommand { get; }
     public AsyncRelayCommand CreateSessionFromProfileCommand { get; }
     public AsyncRelayCommand BindSelectedTargetToSessionCommand { get; }
@@ -961,6 +963,12 @@ public sealed class MainViewModel : ViewModelBase
     {
         UpdateStatusMessage = "Ligando TVs Roku compativeis e abrindo o app...";
         UpdateStatusMessage = await SendPowerAndLaunchCommandToKnownRokusAsync();
+    }
+
+    private async Task PowerOnStreamLinkedRokusAsync()
+    {
+        UpdateStatusMessage = "Ligando TVs Roku com stream vinculado e abrindo o app...";
+        UpdateStatusMessage = await SendPowerAndLaunchCommandToStreamLinkedRokusAsync();
     }
 
     private async Task PowerOffConnectedRokusAsync()
@@ -2133,6 +2141,89 @@ public sealed class MainViewModel : ViewModelBase
 
         return string.Format(
             "Comando de ligar e abrir app concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}.",
+            rokuTargets.Count,
+            successCount,
+            failureCount);
+    }
+
+    private async Task<string> SendPowerAndLaunchCommandToStreamLinkedRokusAsync()
+    {
+        var rokuTargets = Targets
+            .Where(IsRokuUpdatableTarget)
+            .Where(_webRtcPublisherService.HasAssignedStreamForTarget)
+            .GroupBy(x => !string.IsNullOrWhiteSpace(x.DeviceUniqueId) ? x.DeviceUniqueId : x.NetworkAddress ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+
+        foreach (var registered in _webRtcPublisherService.GetRegisteredDisplaysSnapshot())
+        {
+            if (string.IsNullOrWhiteSpace(registered.NetworkAddress))
+            {
+                continue;
+            }
+
+            var target = new DisplayTarget
+            {
+                Id = Guid.NewGuid(),
+                Name = string.IsNullOrWhiteSpace(registered.DeviceModel) ? "Roku TV" : registered.DeviceModel,
+                NetworkAddress = registered.NetworkAddress,
+                DeviceUniqueId = registered.DeviceId,
+                TransportKind = DisplayTransportKind.LanStreaming,
+                IsOnline = true
+            };
+
+            if (!IsRokuUpdatableTarget(target) || !_webRtcPublisherService.HasAssignedStreamForTarget(target))
+            {
+                continue;
+            }
+
+            if (rokuTargets.Any(x =>
+                    (!string.IsNullOrWhiteSpace(x.DeviceUniqueId) &&
+                     string.Equals(x.DeviceUniqueId, target.DeviceUniqueId, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(x.NetworkAddress) &&
+                     string.Equals(x.NetworkAddress, target.NetworkAddress, StringComparison.OrdinalIgnoreCase))))
+            {
+                continue;
+            }
+
+            rokuTargets.Add(target);
+        }
+
+        if (rokuTargets.Count == 0)
+        {
+            return "Nenhuma TV Roku com stream vinculado foi encontrada para ligar e abrir o app.";
+        }
+
+        var successCount = 0;
+        var failureCount = 0;
+
+        foreach (var target in rokuTargets)
+        {
+            var appAlreadyConnected = _webRtcPublisherService.IsDisplayRegisteredRecently(target, TimeSpan.FromSeconds(8));
+            string result;
+
+            if (appAlreadyConnected)
+            {
+                result = await _webRtcPublisherService.SendPowerCommandToDisplayTargetAsync(target, true, CancellationToken.None);
+            }
+            else
+            {
+                result = await _webRtcPublisherService.EnsureDisplayAppRunningAsync(target, requirePowerOn: true, CancellationToken.None);
+            }
+
+            if (string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(result, "ok_fallback_Power", StringComparison.OrdinalIgnoreCase))
+            {
+                successCount++;
+            }
+            else
+            {
+                failureCount++;
+            }
+        }
+
+        return string.Format(
+            "Comando de ligar e abrir app para TVs com stream concluido. Alvo(s): {0}, sucesso(s): {1}, falha(s): {2}.",
             rokuTargets.Count,
             successCount,
             failureCount);

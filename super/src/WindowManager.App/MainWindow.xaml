@@ -51,6 +51,11 @@
                         Height="34"
                         Margin="0,0,8,0"
                         Command="{Binding PowerOnConnectedRokusCommand}" />
+                <Button Content="Ligar TVs com stream"
+                        Width="170"
+                        Height="34"
+                        Margin="0,0,8,0"
+                        Command="{Binding PowerOnStreamLinkedRokusCommand}" />
                 <Button Content="Desligar todas as TVs"
                         Width="160"
                         Height="34"
