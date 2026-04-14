@@ -2345,7 +2345,8 @@ function tryRecoverFullscreenInteractionStream(reason as string) as boolean
         m.lastFullscreenInteractionRecoveryAttempt = CreateObject("roTimespan")
     end if
     m.lastFullscreenInteractionRecoveryAttempt.Mark()
-    ? "[HLS] interaction recovery => reason="; reason; " stream="; m.videoStreamUrl
+    node = getFullscreenHlsNodeForMode("Interacao")
+    ? "[HLS] interaction recovery => reason="; reason; " | "; buildFullscreenHlsDiag(node, "Interacao")
     restartFullscreenVideoAtLiveEdge(reason)
     return true
 end function
@@ -2488,15 +2489,17 @@ sub restartFullscreenVideoAtLiveEdge(reason as string)
     content.url = appendCacheBust(m.videoStreamUrl)
     content.streamFormat = "hls"
     content.title = "Painel"
-    ? "[HLS] restart live-edge => reason="; reason; " url="; content.url
+    ? "[HLS] restart live-edge => reason="; reason; " url="; content.url; " previous="; buildFullscreenHlsDiag(node, m.fullscreenStreamingMode)
     m.fullscreenVideoPendingRestart = true
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
     m.fullscreenInteractionBufferingCount = 0
     reportVideoDiag("video-restart", "reason=" + reason)
-    node.content = content
     node.control = "stop"
+    node.visible = false
+    node.content = invalid
+    node.content = content
     node.visible = true
     node.control = "play"
     m.statusLabel.text = "Atualizando stream ao vivo..."
@@ -3390,6 +3393,11 @@ sub syncFullscreenStreamState(windowId as string)
                 m.fullscreenSameStreamUnhealthyCount = m.fullscreenSameStreamUnhealthyCount + 1
                 if m.fullscreenSameStreamUnhealthyCount <= 3 or m.fullscreenSameStreamUnhealthyCount mod 5 = 0
                     ? "[HLS] same-stream unhealthy => mode=Interacao count="; m.fullscreenSameStreamUnhealthyCount; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " stream="; nextStreamUrl; " assigned="; m.fullscreenAssignedStreamUrl
+                end if
+                if interactionState = "error" or interactionState = "finished" or m.fullscreenSameStreamUnhealthyCount >= 3
+                    if tryRecoverFullscreenInteractionStream("same-stream-" + interactionState)
+                        return
+                    end if
                 end if
             else if interactionState = "stopped"
                 if m.fullscreenSameStreamUnhealthyCount <> 0
