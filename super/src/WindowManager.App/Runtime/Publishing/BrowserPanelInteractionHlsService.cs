@@ -16,8 +16,8 @@ public sealed class BrowserPanelInteractionHlsService
     private static StreamingTuning Tuning => StreamingTuning.Current;
     private static TimeSpan SegmentDuration => TimeSpan.FromSeconds(Tuning.InteractionHlsSegmentDurationSeconds);
     private static TimeSpan SegmentInterval => SegmentDuration;
-    private static TimeSpan PlaylistTtl => TimeSpan.FromSeconds(Math.Max(4, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 2)));
-    private static TimeSpan SegmentTtl => TimeSpan.FromSeconds(Math.Max(8, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 8)));
+    private static TimeSpan PlaylistTtl => TimeSpan.FromSeconds(Math.Max(8, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 6)));
+    private static TimeSpan SegmentTtl => TimeSpan.FromSeconds(Math.Max(16, Tuning.InteractionHlsSegmentDurationSeconds * (Tuning.InteractionHlsPlaylistSize + 12)));
     private static int PlaylistSize => Tuning.InteractionHlsPlaylistSize;
     private static int FrameRate => Tuning.InteractionHlsFrameRate;
     private static int VideoBitrate => Tuning.InteractionHlsVideoBitrate;
@@ -261,6 +261,8 @@ public sealed class BrowserPanelInteractionHlsService
         private DateTime _lastTouchedUtc;
         private int _sequence;
         private bool _loggedPlaylistReady;
+        private byte[]? _lastGoodJpegBytes;
+        private byte[]? _lastGoodWavBytes;
 
         public WindowRollingStream(Guid windowId, string outputDirectory)
         {
@@ -334,7 +336,26 @@ public sealed class BrowserPanelInteractionHlsService
                     var wavBytes = UseSyntheticAudio
                         ? BuildSineWaveSnapshot()
                         : audioCaptureService.CaptureWaveSnapshot(_windowId, SegmentDuration) ?? BuildSilentWaveSnapshot();
-                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes.Length < 4096)
+
+                    if (jpegBytes is not null && jpegBytes.Length >= 1024)
+                    {
+                        _lastGoodJpegBytes = jpegBytes;
+                    }
+                    else
+                    {
+                        jpegBytes = _lastGoodJpegBytes;
+                    }
+
+                    if (wavBytes is not null && wavBytes.Length >= 4096)
+                    {
+                        _lastGoodWavBytes = wavBytes;
+                    }
+                    else
+                    {
+                        wavBytes = _lastGoodWavBytes;
+                    }
+
+                    if (jpegBytes is null || jpegBytes.Length < 1024 || wavBytes is null || wavBytes.Length < 4096)
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
                         continue;
@@ -533,6 +554,8 @@ public sealed class BrowserPanelInteractionHlsService
                     _segments.Clear();
                     _sequence = 0;
                     _loggedPlaylistReady = false;
+                    _lastGoodJpegBytes = null;
+                    _lastGoodWavBytes = null;
                     _artifactStore.Clear();
                     TryDelete(Path.Combine(OutputDirectory, "index.m3u8"));
                     foreach (var stale in Directory.GetFiles(OutputDirectory, "segment-*.ts"))
