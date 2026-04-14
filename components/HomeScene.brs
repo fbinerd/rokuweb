@@ -88,6 +88,7 @@ sub init()
     m.fullscreenVideoPendingRestart = false
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.fullscreenSameStreamUnhealthyCount = 0
     m.lastVideoDiagEvent = ""
     m.lastVideoDiagHeartbeat = invalid
     m.fullscreenPosterWindowId = ""
@@ -1103,6 +1104,7 @@ sub showFullscreen()
     m.fullscreenWindowId = entryId
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.fullscreenSameStreamUnhealthyCount = 0
     m.pendingInteractionAutoPlayWindowId = ""
     stopStagingFullscreenVideo()
     stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
@@ -2305,6 +2307,21 @@ sub onFullscreenVideoModeStateChanged()
     handleFullscreenVideoStateChanged(activeMode)
 end sub
 
+function buildFullscreenHlsDiag(node as object, mode as string) as string
+    if node = invalid
+        return "mode=" + mode + " node=invalid"
+    end if
+
+    currentUrl = ""
+    if node.content <> invalid
+        currentUrl = getString(node.content.url, "")
+    end if
+
+    positionValue = getNumber(node.position, -1.0)
+    durationValue = getNumber(node.duration, -1.0)
+    return "mode=" + mode + " state=" + getString(node.state, "") + " pos=" + positionValue.ToStr() + " dur=" + durationValue.ToStr() + " stall=" + m.fullscreenVideoStallCount.ToStr() + " assigned=" + getString(m.fullscreenAssignedStreamUrl, "") + " active=" + getString(m.videoStreamUrl, "") + " nodeUrl=" + currentUrl
+end function
+
 sub handleFullscreenVideoStateChanged(mode as string)
     node = getFullscreenHlsNodeForMode(mode)
 
@@ -2317,17 +2334,20 @@ sub handleFullscreenVideoStateChanged(mode as string)
         return
     end if
 
-    ? "[HLS] video state => "; mode; " => "; state
+    ? "[HLS] video state => "; mode; " => "; state; " | "; buildFullscreenHlsDiag(node, mode)
 
     if normalizeStreamingMode(mode) = "Interacao"
         if state = "playing"
             m.fullscreenVideoStallCount = 0
+            m.fullscreenSameStreamUnhealthyCount = 0
             m.statusLabel.text = "Stream HLS do painel em reproducao"
         else if state = "buffering"
             m.statusLabel.text = "Bufferizando stream HLS do painel..."
         else if state = "error"
+            ? "[HLS] interaction error => "; buildFullscreenHlsDiag(node, mode)
             m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
         else if state = "finished" or state = "stopped"
+            ? "[HLS] interaction final/transitorio => "; state; " | "; buildFullscreenHlsDiag(node, mode)
             if m.isFullscreen and m.videoUsesStream and m.videoStreamUrl <> ""
                 content = CreateObject("roSGNode", "ContentNode")
                 content.url = appendCacheBust(m.videoStreamUrl)
@@ -2358,9 +2378,10 @@ sub handleFullscreenVideoStateChanged(mode as string)
         m.statusLabel.text = "Bufferizando stream HLS do painel..."
     else if state = "error"
         m.fullscreenVideoPendingRestart = false
+        ? "[HLS] video error => "; buildFullscreenHlsDiag(node, mode)
         m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
     else if state = "finished" or state = "stopped"
-        ? "[HLS] estado final/transitorio em Video => "; state
+        ? "[HLS] estado final/transitorio em Video => "; state; " | "; buildFullscreenHlsDiag(node, mode)
         m.statusLabel.text = "Aguardando retomada do stream HLS..."
     end if
 end sub
@@ -2390,6 +2411,7 @@ sub onFullscreenVideoWatchTimerFire()
         if position > m.fullscreenVideoLastPosition
             m.fullscreenVideoLastPosition = position
             m.fullscreenVideoStallCount = 0
+            m.fullscreenSameStreamUnhealthyCount = 0
         end if
         return
     end if
@@ -2400,6 +2422,9 @@ sub onFullscreenVideoWatchTimerFire()
         else
             m.fullscreenVideoLastPosition = position
             m.fullscreenVideoStallCount = 0
+        end if
+        if m.fullscreenVideoStallCount = 1 or m.fullscreenVideoStallCount >= 4
+            ? "[HLS] buffering watchdog => "; buildFullscreenHlsDiag(node, m.fullscreenStreamingMode)
         end if
     else
         m.fullscreenVideoStallCount = 0
@@ -2430,6 +2455,7 @@ sub restartFullscreenVideoAtLiveEdge(reason as string)
     m.fullscreenVideoPendingRestart = true
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.fullscreenSameStreamUnhealthyCount = 0
     reportVideoDiag("video-restart", "reason=" + reason)
     node.content = content
     node.control = "stop"
@@ -3306,7 +3332,36 @@ sub syncFullscreenStreamState(windowId as string)
 
     if nextStreamingMode = "Interacao"
         if nextStreamUrl = m.videoStreamUrl
-            ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl
+            interactionNode = getFullscreenHlsNodeForMode("Interacao")
+            interactionState = ""
+            interactionNodeUrl = ""
+            if interactionNode <> invalid
+                interactionState = LCase(getString(interactionNode.state, ""))
+                if interactionNode.content <> invalid
+                    interactionNodeUrl = getString(interactionNode.content.url, "")
+                end if
+            end if
+
+            if interactionState = "playing"
+                m.fullscreenSameStreamUnhealthyCount = 0
+                ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl
+                return
+            end if
+
+            if interactionState = "buffering" or interactionState = "error" or interactionState = "finished" or interactionState = "stopped" or interactionState = ""
+                m.fullscreenSameStreamUnhealthyCount = m.fullscreenSameStreamUnhealthyCount + 1
+                if m.fullscreenSameStreamUnhealthyCount <= 2 or m.fullscreenSameStreamUnhealthyCount >= 4
+                    ? "[HLS] same-stream unhealthy => mode=Interacao count="; m.fullscreenSameStreamUnhealthyCount; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " stream="; nextStreamUrl
+                end if
+                if m.fullscreenSameStreamUnhealthyCount >= 3
+                    restartFullscreenVideoAtLiveEdge("same-stream-" + interactionState)
+                    return
+                end if
+            else
+                m.fullscreenSameStreamUnhealthyCount = 0
+            end if
+
+            ? "[MODE] interacao mantendo stream atual => "; nextStreamUrl; " state="; interactionState
             return
         end if
 
@@ -3317,6 +3372,7 @@ sub syncFullscreenStreamState(windowId as string)
         m.fullscreenStreamingMode = nextStreamingMode
         m.fullscreenVideoLastPosition = -1
         m.fullscreenVideoStallCount = 0
+        m.fullscreenSameStreamUnhealthyCount = 0
         m.fullscreenAssignedStreamUrl = nextStreamUrl
 
         content = CreateObject("roSGNode", "ContentNode")
@@ -3344,7 +3400,36 @@ sub syncFullscreenStreamState(windowId as string)
     end if
 
     if nextStreamUrl = m.videoStreamUrl
-        ? "[HLS] sync ignorado: mesmo stream => "; nextStreamUrl
+        videoNode = getFullscreenHlsNodeForMode(nextStreamingMode)
+        videoState = ""
+        videoNodeUrl = ""
+        if videoNode <> invalid
+            videoState = LCase(getString(videoNode.state, ""))
+            if videoNode.content <> invalid
+                videoNodeUrl = getString(videoNode.content.url, "")
+            end if
+        end if
+
+        if videoState = "playing"
+            m.fullscreenSameStreamUnhealthyCount = 0
+            ? "[HLS] sync ignorado: mesmo stream => "; nextStreamUrl
+            return
+        end if
+
+        if videoState = "buffering" or videoState = "error" or videoState = "finished" or videoState = "stopped" or videoState = ""
+            m.fullscreenSameStreamUnhealthyCount = m.fullscreenSameStreamUnhealthyCount + 1
+            if m.fullscreenSameStreamUnhealthyCount <= 2 or m.fullscreenSameStreamUnhealthyCount >= 4
+                ? "[HLS] same-stream unhealthy => mode=Video count="; m.fullscreenSameStreamUnhealthyCount; " state="; videoState; " nodeUrl="; videoNodeUrl; " stream="; nextStreamUrl
+            end if
+            if m.fullscreenSameStreamUnhealthyCount >= 3
+                restartFullscreenVideoAtLiveEdge("same-stream-" + videoState)
+                return
+            end if
+        else
+            m.fullscreenSameStreamUnhealthyCount = 0
+        end if
+
+        ? "[HLS] sync ignorado: mesmo stream => "; nextStreamUrl; " state="; videoState
         return
     end if
 
@@ -3357,6 +3442,7 @@ sub syncFullscreenStreamState(windowId as string)
     m.fullscreenAssignedStreamUrl = nextStreamUrl
     m.fullscreenVideoLastPosition = -1
     m.fullscreenVideoStallCount = 0
+    m.fullscreenSameStreamUnhealthyCount = 0
 
     content = CreateObject("roSGNode", "ContentNode")
     content.url = appendCacheBust(m.videoStreamUrl)
