@@ -1125,6 +1125,9 @@ sub showFullscreen()
             if interactionHlsNode = invalid
                 return
             end if
+            if thumbnailUrl <> ""
+                setFullscreenPoster(thumbnailUrl, entryId, true)
+            end if
             content = CreateObject("roSGNode", "ContentNode")
             content.url = appendCacheBust(m.videoStreamUrl)
             content.streamFormat = "hls"
@@ -1137,7 +1140,7 @@ sub showFullscreen()
             interactionHlsNode.visible = true
             interactionHlsNode.control = "play"
             markFullscreenInteractionAttach("showFullscreen", m.videoStreamUrl)
-            m.activeFullscreenPoster.visible = false
+            m.activeFullscreenPoster.visible = true
             m.bufferFullscreenPoster.visible = false
             m.statusLabel.text = "Iniciando stream HLS do painel..."
             m.cursorMarker.visible = true
@@ -2421,9 +2424,15 @@ sub handleFullscreenVideoStateChanged(mode as string)
             m.fullscreenInteractionBufferingCount = 0
             m.fullscreenInteractionErrorRecoveryCount = 0
             m.fullscreenInteractionRecoveryAttemptCount = 0
+            m.activeFullscreenPoster.visible = false
+            m.bufferFullscreenPoster.visible = false
             m.statusLabel.text = "Stream HLS do painel em reproducao"
         else if state = "buffering"
             m.fullscreenInteractionBufferingCount = m.fullscreenInteractionBufferingCount + 1
+            if m.fullscreenPosterSourceUrl <> ""
+                m.activeFullscreenPoster.visible = true
+                m.bufferFullscreenPoster.visible = false
+            end if
             m.statusLabel.text = "Bufferizando stream HLS do painel..."
             if m.fullscreenInteractionBufferingCount >= 4
                 if tryRecoverFullscreenInteractionStream("interaction-buffering")
@@ -2432,6 +2441,10 @@ sub handleFullscreenVideoStateChanged(mode as string)
             end if
         else if state = "error"
             ? "[HLS] interaction error => "; buildFullscreenHlsDiag(node, mode)
+            if m.fullscreenPosterSourceUrl <> ""
+                m.activeFullscreenPoster.visible = true
+                m.bufferFullscreenPoster.visible = false
+            end if
             m.statusLabel.text = "Falha no stream HLS; mantendo preview por snapshots"
             m.fullscreenInteractionErrorRecoveryCount = m.fullscreenInteractionErrorRecoveryCount + 1
             if m.fullscreenInteractionErrorRecoveryCount <= 2 and tryRecoverFullscreenInteractionStream("interaction-error")
@@ -2439,12 +2452,20 @@ sub handleFullscreenVideoStateChanged(mode as string)
             end if
         else if state = "finished"
             m.fullscreenInteractionBufferingCount = 0
+            if m.fullscreenPosterSourceUrl <> ""
+                m.activeFullscreenPoster.visible = true
+                m.bufferFullscreenPoster.visible = false
+            end if
             ? "[HLS] interaction final/transitorio => "; state; " | "; buildFullscreenHlsDiag(node, mode)
             if tryRecoverFullscreenInteractionStream("interaction-" + state)
                 return
             end if
         else if state = "stopped"
             m.fullscreenInteractionBufferingCount = 0
+            if m.fullscreenPosterSourceUrl <> ""
+                m.activeFullscreenPoster.visible = true
+                m.bufferFullscreenPoster.visible = false
+            end if
             ? "[HLS] interaction stopped => aguardando nova transicao | "; buildFullscreenHlsDiag(node, mode)
         end if
         return
