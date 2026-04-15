@@ -91,7 +91,9 @@ sub init()
     m.fullscreenSameStreamUnhealthyCount = 0
     m.fullscreenInteractionBufferingCount = 0
     m.lastFullscreenInteractionRecoveryAttempt = invalid
-    m.fullscreenInteractionRecoveryCooldownMs = 1500
+    m.fullscreenInteractionRecoveryCooldownMs = 3500
+    m.lastFullscreenInteractionAttachAttempt = invalid
+    m.fullscreenInteractionStartupGraceMs = 6000
     m.fullscreenInteractionErrorRecoveryCount = 0
     m.lastVideoDiagEvent = ""
     m.lastVideoDiagHeartbeat = invalid
@@ -1130,6 +1132,7 @@ sub showFullscreen()
             interactionHlsNode.control = "stop"
             interactionHlsNode.visible = true
             interactionHlsNode.control = "play"
+            markFullscreenInteractionAttach("showFullscreen", m.videoStreamUrl)
             m.activeFullscreenPoster.visible = false
             m.bufferFullscreenPoster.visible = false
             m.statusLabel.text = "Iniciando stream HLS do painel..."
@@ -2336,6 +2339,10 @@ function tryRecoverFullscreenInteractionStream(reason as string) as boolean
         return false
     end if
 
+    if not canRecoverFullscreenInteractionNow(reason)
+        return false
+    end if
+
     if m.lastFullscreenInteractionRecoveryAttempt <> invalid and m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds() < m.fullscreenInteractionRecoveryCooldownMs
         ? "[HLS] recovery throttled => reason="; reason; " elapsedMs="; m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds()
         return false
@@ -2350,6 +2357,34 @@ function tryRecoverFullscreenInteractionStream(reason as string) as boolean
     restartFullscreenVideoAtLiveEdge(reason)
     return true
 end function
+
+function canRecoverFullscreenInteractionNow(reason as string) as boolean
+    lowerReason = LCase(getString(reason, ""))
+    if m.lastFullscreenInteractionAttachAttempt <> invalid
+        elapsedMs = m.lastFullscreenInteractionAttachAttempt.TotalMilliseconds()
+        isHardFailure = Instr(1, lowerReason, "error") > 0 or Instr(1, lowerReason, "finished") > 0
+        if isHardFailure
+            if elapsedMs < 2200
+                ? "[HLS] interaction recovery startup-grace(hard) => reason="; reason; " elapsedMs="; elapsedMs
+                return false
+            end if
+        else if elapsedMs < m.fullscreenInteractionStartupGraceMs
+            ? "[HLS] interaction recovery startup-grace => reason="; reason; " elapsedMs="; elapsedMs
+            return false
+        end if
+    end if
+
+    return true
+end function
+
+sub markFullscreenInteractionAttach(reason as string, streamUrl as string)
+    if m.lastFullscreenInteractionAttachAttempt = invalid
+        m.lastFullscreenInteractionAttachAttempt = CreateObject("roTimespan")
+    end if
+
+    m.lastFullscreenInteractionAttachAttempt.Mark()
+    ? "[HLS] interaction attach => reason="; reason; " stream="; streamUrl
+end sub
 
 sub handleFullscreenVideoStateChanged(mode as string)
     node = getFullscreenHlsNodeForMode(mode)
@@ -2502,6 +2537,9 @@ sub restartFullscreenVideoAtLiveEdge(reason as string)
     node.content = content
     node.visible = true
     node.control = "play"
+    if normalizeStreamingMode(m.fullscreenStreamingMode) = "Interacao"
+        markFullscreenInteractionAttach("restart-live-edge:" + reason, m.videoStreamUrl)
+    end if
     m.statusLabel.text = "Atualizando stream ao vivo..."
 end sub
 
@@ -3394,7 +3432,7 @@ sub syncFullscreenStreamState(windowId as string)
                 if m.fullscreenSameStreamUnhealthyCount <= 3 or m.fullscreenSameStreamUnhealthyCount mod 5 = 0
                     ? "[HLS] same-stream unhealthy => mode=Interacao count="; m.fullscreenSameStreamUnhealthyCount; " state="; interactionState; " nodeUrl="; interactionNodeUrl; " stream="; nextStreamUrl; " assigned="; m.fullscreenAssignedStreamUrl
                 end if
-                if interactionState = "error" or interactionState = "finished" or m.fullscreenSameStreamUnhealthyCount >= 3
+                if interactionState = "error" or interactionState = "finished" or m.fullscreenSameStreamUnhealthyCount >= 10
                     if tryRecoverFullscreenInteractionStream("same-stream-" + interactionState)
                         return
                     end if
@@ -3437,6 +3475,7 @@ sub syncFullscreenStreamState(windowId as string)
         interactionHlsNode.control = "stop"
         interactionHlsNode.visible = true
         interactionHlsNode.control = "play"
+        markFullscreenInteractionAttach("syncFullscreenStreamState", m.videoStreamUrl)
         notifyPendingModeSwitchReady(windowId, nextStreamingMode)
         m.statusLabel.text = "Recarregando stream do painel..."
         ? "[HLS] reload => "; content.url
@@ -3514,10 +3553,10 @@ end sub
 function getFullscreenHlsNodeForMode(mode as string) as object
     normalizedMode = normalizeStreamingMode(mode)
     if normalizedMode = "Interacao"
-        if m.videoUsesStream and m.fullscreenVideoMode <> invalid
-            return m.fullscreenVideoMode
+        if m.fullscreenVideo <> invalid
+            return m.fullscreenVideo
         end if
-        return m.fullscreenVideo
+        return m.fullscreenVideoMode
     end if
 
     return m.fullscreenVideoMode
