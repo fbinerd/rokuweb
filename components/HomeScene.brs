@@ -95,6 +95,8 @@ sub init()
     m.lastFullscreenInteractionAttachAttempt = invalid
     m.fullscreenInteractionStartupGraceMs = 6000
     m.fullscreenInteractionErrorRecoveryCount = 0
+    m.fullscreenInteractionRecoveryAttemptCount = 0
+    m.fullscreenInteractionForceVideoMode = false
     m.lastVideoDiagEvent = ""
     m.lastVideoDiagHeartbeat = invalid
     m.fullscreenPosterWindowId = ""
@@ -1112,6 +1114,8 @@ sub showFullscreen()
     m.fullscreenVideoStallCount = 0
     m.fullscreenSameStreamUnhealthyCount = 0
     m.fullscreenInteractionBufferingCount = 0
+    m.fullscreenInteractionRecoveryAttemptCount = 0
+    m.fullscreenInteractionForceVideoMode = false
     m.pendingInteractionAutoPlayWindowId = ""
     stopStagingFullscreenVideo()
     stopInactiveModePlayback(m.fullscreenStreamingMode, "showFullscreen")
@@ -2343,8 +2347,13 @@ function tryRecoverFullscreenInteractionStream(reason as string) as boolean
         return false
     end if
 
-    if m.lastFullscreenInteractionRecoveryAttempt <> invalid and m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds() < m.fullscreenInteractionRecoveryCooldownMs
-        ? "[HLS] recovery throttled => reason="; reason; " elapsedMs="; m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds()
+    dynamicCooldownMs = m.fullscreenInteractionRecoveryCooldownMs + (m.fullscreenInteractionRecoveryAttemptCount * 450)
+    if dynamicCooldownMs > 12000
+        dynamicCooldownMs = 12000
+    end if
+
+    if m.lastFullscreenInteractionRecoveryAttempt <> invalid and m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds() < dynamicCooldownMs
+        ? "[HLS] recovery throttled => reason="; reason; " elapsedMs="; m.lastFullscreenInteractionRecoveryAttempt.TotalMilliseconds(); " cooldownMs="; dynamicCooldownMs
         return false
     end if
 
@@ -2352,6 +2361,11 @@ function tryRecoverFullscreenInteractionStream(reason as string) as boolean
         m.lastFullscreenInteractionRecoveryAttempt = CreateObject("roTimespan")
     end if
     m.lastFullscreenInteractionRecoveryAttempt.Mark()
+    m.fullscreenInteractionRecoveryAttemptCount = m.fullscreenInteractionRecoveryAttemptCount + 1
+    if m.fullscreenInteractionRecoveryAttemptCount >= 4 and not m.fullscreenInteractionForceVideoMode and m.fullscreenVideoMode <> invalid
+        m.fullscreenInteractionForceVideoMode = true
+        ? "[HLS] interaction fallback => ativando VideoMode apos "; m.fullscreenInteractionRecoveryAttemptCount; " tentativas"
+    end if
     node = getFullscreenHlsNodeForMode("Interacao")
     ? "[HLS] interaction recovery => reason="; reason; " | "; buildFullscreenHlsDiag(node, "Interacao")
     restartFullscreenVideoAtLiveEdge(reason)
@@ -2406,6 +2420,7 @@ sub handleFullscreenVideoStateChanged(mode as string)
             m.fullscreenSameStreamUnhealthyCount = 0
             m.fullscreenInteractionBufferingCount = 0
             m.fullscreenInteractionErrorRecoveryCount = 0
+            m.fullscreenInteractionRecoveryAttemptCount = 0
             m.statusLabel.text = "Stream HLS do painel em reproducao"
         else if state = "buffering"
             m.fullscreenInteractionBufferingCount = m.fullscreenInteractionBufferingCount + 1
@@ -3460,6 +3475,8 @@ sub syncFullscreenStreamState(windowId as string)
         m.fullscreenSameStreamUnhealthyCount = 0
         m.fullscreenInteractionBufferingCount = 0
         m.fullscreenInteractionErrorRecoveryCount = 0
+        m.fullscreenInteractionRecoveryAttemptCount = 0
+        m.fullscreenInteractionForceVideoMode = false
         m.fullscreenAssignedStreamUrl = nextStreamUrl
 
         content = CreateObject("roSGNode", "ContentNode")
@@ -3553,6 +3570,9 @@ end sub
 function getFullscreenHlsNodeForMode(mode as string) as object
     normalizedMode = normalizeStreamingMode(mode)
     if normalizedMode = "Interacao"
+        if m.fullscreenInteractionForceVideoMode and m.fullscreenVideoMode <> invalid
+            return m.fullscreenVideoMode
+        end if
         if m.fullscreenVideo <> invalid
             return m.fullscreenVideo
         end if
