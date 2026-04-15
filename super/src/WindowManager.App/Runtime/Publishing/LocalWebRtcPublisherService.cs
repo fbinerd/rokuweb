@@ -2098,23 +2098,51 @@ public sealed class LocalWebRtcPublisherService
         bool panelHlsReady;
         var publicHost = LinkRtcAddressBuilder.ResolvePublicHost(bindMode, specificIp);
 
-        if (string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase))
+        var isInteractionMode = string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase);
+        var interactionPlaylistReady = false;
+        var interactionWarmupReady = false;
+        var interactionDiagnostics = string.Empty;
+        if (isInteractionMode)
         {
-            var interactionPlaylistReady =
+            interactionPlaylistReady =
                 _browserPanelInteractionHlsService.IsAvailable &&
                 _browserPanelInteractionHlsService.HasPlaylist(window.Id);
-            var interactionWarmupReady =
+            interactionWarmupReady =
                 interactionPlaylistReady &&
                 _browserPanelInteractionHlsService.HasWarmupSegments(window.Id, InteractionFullscreenWarmupSegments);
-            panelHlsReady = interactionWarmupReady;
-            unifiedPanelStreamUrl = interactionWarmupReady
-                ? string.Format("http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}", publicHost, port, window.Id.ToString("N"), streamReloadVersion)
+            interactionDiagnostics = _browserPanelInteractionHlsService.GetDiagnosticStatus(window.Id);
+
+            var interactionUrl = string.Format(
+                "http://{0}:{1}/panel-interaction/{2}/index.m3u8?rv={3}",
+                publicHost,
+                port,
+                window.Id.ToString("N"),
+                streamReloadVersion);
+            var rollingFallbackUrl = _browserPanelRollingHlsService.IsAvailable
+                ? string.Format("http://{0}:{1}/panel-roll/{2}/index.m3u8?rv={3}", publicHost, port, window.Id.ToString("N"), streamReloadVersion)
                 : string.Empty;
+            var rollingFallbackReady =
+                _browserPanelRollingHlsService.IsAvailable &&
+                _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8");
+
+            unifiedPanelStreamUrl = interactionPlaylistReady
+                ? interactionUrl
+                : rollingFallbackReady
+                    ? rollingFallbackUrl
+                    : string.Empty;
+            panelHlsReady = !string.IsNullOrWhiteSpace(unifiedPanelStreamUrl);
+
             if (interactionPlaylistReady && !interactionWarmupReady)
             {
                 AppLog.Write(
                     "PanelInteractionHls",
                     $"Warmup pendente para janela {window.Id:N}: aguardando {InteractionFullscreenWarmupSegments} segmentos antes de expor fullscreen.");
+            }
+            else if (!interactionPlaylistReady && rollingFallbackReady)
+            {
+                AppLog.Write(
+                    "PanelInteractionHls",
+                    $"Fallback para rolling HLS na janela {window.Id:N} (playlist de interacao indisponivel).");
             }
         }
         else
@@ -2128,20 +2156,19 @@ public sealed class LocalWebRtcPublisherService
             unifiedPanelStreamUrl = panelHlsReady ? candidateUnifiedPanelStreamUrl : string.Empty;
         }
 
-        var interactionSuppressionEnabled = string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase);
+        var interactionSuppressionEnabled = isInteractionMode;
         var directVideoOverlay = interactionSuppressionEnabled
             ? ResolveDirectVideoOverlay(window.Id)
             : DirectVideoOverlayBridgeSnapshot.None;
         _browserSnapshotService.SetDirectVideoSuppression(window.Id, interactionSuppressionEnabled);
         MaybeLogDirectOverlay(window.Id, directVideoOverlay);
 
-        var autoOpenFullscreen =
-            string.Equals(streamingMode, InteractionStreamingMode, StringComparison.OrdinalIgnoreCase)
-                ? window.IsPrimaryExclusive
-                : window.IsPrimaryExclusive && !string.IsNullOrWhiteSpace(unifiedPanelStreamUrl);
+        var autoOpenFullscreen = window.IsPrimaryExclusive && !string.IsNullOrWhiteSpace(unifiedPanelStreamUrl);
 
         var videoDiagnostics =
-            !panelHlsReady && string.Equals(streamingMode, VideoStreamingMode, StringComparison.OrdinalIgnoreCase)
+            isInteractionMode
+                ? ", diag=" + interactionDiagnostics
+                : !panelHlsReady && string.Equals(streamingMode, VideoStreamingMode, StringComparison.OrdinalIgnoreCase)
                 ? ", diag=" + _browserPanelRollingHlsService.GetDiagnosticStatus(window.Id)
                 : string.Empty;
 
@@ -2178,7 +2205,10 @@ public sealed class LocalWebRtcPublisherService
             ", IsPrimaryExclusive=" + window.IsPrimaryExclusive +
             ", PanelHlsReady=" + panelHlsReady +
             ", HlsAvailable=" + _browserPanelRollingHlsService.IsAvailable +
-            ", HasMediumM3u8=" + _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8")
+            ", HasMediumM3u8=" + _browserPanelRollingHlsService.HasOutputFile(window.Id, "medium.m3u8") +
+            ", InteractionPlaylistReady=" + interactionPlaylistReady +
+            ", InteractionWarmupReady=" + interactionWarmupReady +
+            videoDiagnostics
         );
 
         return new BridgeWindowSnapshot
